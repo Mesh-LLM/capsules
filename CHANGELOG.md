@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.1.4
+
+### Verified on live hosts, and not
+
+- **Paid exchanges across two nodes: pending.** To be re-run on two nodes built from this release:
+  the requesting node serves no model, and each exchange counts only when the response's
+  `x-mesh-served-by` and the record's `served_by` name the serving node. TODO: replace with the
+  result before this release is merged.
+- **Peers' keys announced by the host:** exercised only against a test build of the host, not on a
+  stock mesh-llm release. `CAPSULES_PEER_KEYS` remains the fallback.
+- **The referee with texts the client supplies:** not yet exercisable on stock hosts. A stock
+  host's event for a request it served for another node over the raw proxy path does not name the
+  node that asked (`requested_by_node_id`), which a real referee call needs. Covered by tests
+  against a stand-in host only. Upstream request: TODO (link).
 
 ### Added
 
@@ -18,6 +31,16 @@
   and the page says that this can happen.
 - **Settlement records carry the wallet's `credited_msat` and `fee_msat`** when the host's event
   does; a record from an event without them is unchanged.
+- **The referee can take a twin pair's texts from the client** (`referee_supply_twin_texts`: the
+  request and both answers), since stock mesh-llm passes no exchange text to plugins. They are
+  kept only when the referee is on, the request and each answer are the bodies this node's own
+  records sealed, and the answers differ.
+- **Peers' keys from the host:** when mesh-llm lists `plugin_keys.v1`, the keys it announces for
+  this plugin (`GET /api/plugin-keys`) are merged with `CAPSULES_PEER_KEYS`, which stays the
+  fallback. A peer the two give different keys verifies nothing until the stale entry is removed.
+- **Twin pairs on Peers:** each peer row states its twin pairs as facts ("Twin pairs: N · answers
+  differed: M · not adjudicated"), so a peer whose twin answers differed no longer reads clean
+  there.
 
 ### Changed
 
@@ -27,6 +50,23 @@
   code-signing status is still asked for every record, because it can change while the process
   runs. Replacing the plugin's executable on disk while it runs is measured only after a restart,
   which is also when the new binary starts running.
+- **A served exchange with no other side reads LOCAL** ("this node only"), not OPEN, and the state
+  filter counts it under "This node only".
+- **Each choice setting lists its default first,** so mesh-llm 0.78's console, which does not
+  receive declared defaults, shows what the plugin actually does for an unset setting.
+- **`capsule-emit-evidence-request` is pinned to `=0.0.3`** from crates.io. An answer to an
+  evidence request this node sent is now refused when a witness receipt it carries is malformed or
+  not bound to its checkpoint, or when an exchange answer's anchor is not the earliest checkpoint
+  covering it. This node holds no witness keys for this check, so no receipt in an answer is
+  counted as witnessed.
+
+### Fixed
+
+- **The console's top navigation stays on the Evidence page.** The page's stylesheet applies only
+  to the page's own elements; a global `.hidden` rule had hidden the console's nav.
+- **An exchange this node served for pay is not shown as local.** With no payer recorded, its row
+  read "Local — no other side"; the host pays only across nodes, so it now reads "Served for pay —
+  payer not recorded" and counts as open.
 
 ## 0.1.3
 
