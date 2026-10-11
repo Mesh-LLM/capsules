@@ -397,7 +397,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
         ),
         case(
             "exchange_citing_the_half",
-            "the record citing the asker's half, proven under the newest checkpoint",
+            "the record citing the asker's half, proven under the earliest checkpoint covering it",
             "peers",
             req(
                 json!({"exchange": foreign_half()}),

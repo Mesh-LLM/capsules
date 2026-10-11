@@ -187,12 +187,14 @@ dependencies = [
 
 [[package]]
 name = "capsule-emit-evidence-request"
-version = "0.0.2"
+version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cda322bc083ae4a861803bf4fce6571407448ccaccc89c0b6faf760a629781e"
+checksum = "c477dacc80cde4d8c6905d5c8bd774ba093ff075e4e42f42f22a09ecdcafbed0"
 dependencies = [
+ "base64 0.22.1",
  "checkpointed-local-log",
  "ciborium",
+ "coset",
  "ed25519-dalek",
  "hex",
  "serde_json",
