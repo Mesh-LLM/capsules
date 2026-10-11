@@ -11,9 +11,10 @@ import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import {
   CLOSED_FROM_FETCH_NOT_SAVED,
   OWN_RECORD_FAILS_WARNING,
-  SEE_IN_LOGS_NOT_ON_THIS_PAGE
+  SEE_IN_LOGS_NOT_ON_THIS_PAGE,
+  SERVED_FOR_PAY_NO_PAYER_TOOLTIP
 } from '@/features/capsules/lib/tooltip-copy'
-import type { ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
+import { buildExchangeLedgerRows, type ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
 import { ASK_FOR_RECORD_AFTER_MS, type RightCellStateKind } from '@/features/capsules/lib/exchange-row-state'
 import { durationText, formatModelIdentity, tokenFlowText } from '@/features/capsules/lib/serving-provenance'
 import type { RailSegment } from '@/features/capsules/lib/exchange-stream'
@@ -209,23 +210,23 @@ describe('ExchangeStreamRow — a served exchange with no other side', () => {
     expect(screen.getByRole('button', { name: /the LOCAL state/i })).toBeInTheDocument()
   })
 
-  it('a row served for pay with no payer recorded is OPEN, never LOCAL or "served this yourself"', () => {
-    const base = makeRow('open_not_asked', { roleTag: 'SERVED', counterparty: null, localOnly: false })
-    const row = {
-      ...base,
-      raw: {
-        ...base.raw,
-        role_tag: 'SERVED',
-        counterparty: null,
-        provider_settlement: {
-          observed_by: 'provider',
-          who_paid: 'requester',
-          state: 'settled',
-          terms_digests: ['t'.repeat(64)],
-          entries: []
-        }
-      } as PaneCRow
-    }
+  /** A served row with no counterparty and no ask target, classified by the
+   *  real `buildExchangeLedgerRows` (never a hand-set `localOnly`). */
+  const classifiedServedRow = (providerSettlement: PaneCRow['provider_settlement']) => {
+    const base = makeRow('open_not_asked')
+    const raw = {
+      ...base.raw,
+      exchange_key: base.exchangeKey,
+      timestamp: base.timestamp,
+      role_tag: 'SERVED',
+      counterparty: null,
+      has_issue: false,
+      provider_settlement: providerSettlement
+    } as PaneCRow
+    const [row] = buildExchangeLedgerRows([raw], new Map(), new Map([['mine-1', RECORD_NAMING_NO_PEER]]))
+    return row
+  }
+  const renderClassified = (row: ExchangeLedgerRow) =>
     render(
       <ExchangeStreamRow
         onAction={vi.fn()}
@@ -235,12 +236,31 @@ describe('ExchangeStreamRow — a served exchange with no other side', () => {
         row={row}
       />
     )
+
+  it('a row served for pay with no payer recorded is OPEN, never LOCAL or "served this yourself"', () => {
+    const row = classifiedServedRow({
+      observed_by: 'provider',
+      who_paid: 'requester',
+      state: 'settled',
+      terms_digests: ['t'.repeat(64)],
+      entries: []
+    })
+    expect(row.rightCellState.kind).toBe('open_not_asked')
+    renderClassified(row)
     expect(screen.getByText('OPEN')).toBeInTheDocument()
     expect(screen.queryByText('LOCAL')).not.toBeInTheDocument()
     expect(screen.queryByText('Local — no other side')).not.toBeInTheDocument()
     expect(screen.getByText('Served for pay — payer not recorded')).toBeInTheDocument()
-    expect(screen.getAllByText(/payer not recorded/).length).toBeGreaterThan(0)
+    // The badge's (i) says it may stay open, and why.
+    expect(screen.getAllByText(SERVED_FOR_PAY_NO_PAYER_TOOLTIP).length).toBeGreaterThan(0)
     expect(document.body).not.toHaveTextContent(/served this yourself/)
+  })
+
+  it('the same row with no provider book is LOCAL, through the same classifier', () => {
+    renderClassified(classifiedServedRow(null))
+    expect(screen.getByText('LOCAL')).toBeInTheDocument()
+    expect(screen.getByText('Local — no other side')).toBeInTheDocument()
+    expect(document.body).not.toHaveTextContent(SERVED_FOR_PAY_NO_PAYER_TOOLTIP)
   })
 
   it('a served row that names its counterparty stays OPEN', () => {

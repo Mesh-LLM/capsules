@@ -188,6 +188,11 @@ export const PEER_TWINS_TOOLTIP =
 export const LOCAL_ONLY_TOOLTIP =
   'This node only. This node served the request and no other side is recorded for it, so there is no record of theirs to wait for. It is not counted as open.'
 
+/** The OPEN badge's (i) on a row served for pay whose payer is not recorded:
+ *  it has no ask target, so it stays open unless the payer's record arrives. */
+export const SERVED_FOR_PAY_NO_PAYER_TOOLTIP =
+  'Open, and it may stay open: another node paid for this exchange, but this node didn’t record which one, so it can’t ask for their record. It closes only if the payer sends theirs.'
+
 /** A row confirmed from a record this page asked for and fetched: honest
  *  that nothing was saved on the node (console copy). */
 export const CLOSED_FROM_FETCH_NOT_SAVED =

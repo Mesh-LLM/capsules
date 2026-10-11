@@ -109,8 +109,10 @@ function pushedHalfCounterparty(row: PaneCRow): string | null {
 }
 
 /** A row this node served for pay: it holds its own book as the provider.
- *  The host pays only across nodes, so another node asked for it, whether or
- *  not that node's id is recorded. */
+ *  This relies on the host sending a provider's payment events only for a
+ *  request another node paid for (a node does not pay itself), so another
+ *  node asked for it, whether or not that node's id is recorded. Nothing on
+ *  this page checks that. */
 export function isServedForPay(row: PaneCRow): boolean {
   return row.role_tag === 'SERVED' && row.provider_settlement != null
 }

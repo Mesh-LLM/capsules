@@ -74,7 +74,8 @@ import { rowCombinationText } from '@/features/capsules/lib/row-combination'
 import {
   CLOSED_FROM_FETCH_NOT_SAVED,
   LOCAL_ONLY_TOOLTIP,
-  OWN_RECORD_FAILS_WARNING
+  OWN_RECORD_FAILS_WARNING,
+  SERVED_FOR_PAY_NO_PAYER_TOOLTIP
 } from '@/features/capsules/lib/tooltip-copy'
 
 /** The gated cell text (Do (2)) when an ask
@@ -458,7 +459,13 @@ export function ExchangeStreamRow({
                 <InfoHover
                   census={localOnly ? 'row_state:local' : `row_state:${state.kind}`}
                   describes={localOnly ? 'the LOCAL state' : `the ${rightCellStatusLabel(state)} state`}
-                  label={localOnly ? LOCAL_ONLY_TOOLTIP : rightCellDetail(state)}
+                  label={
+                    localOnly
+                      ? LOCAL_ONLY_TOOLTIP
+                      : servedForPay && gatedByCounterparty
+                        ? SERVED_FOR_PAY_NO_PAYER_TOOLTIP
+                        : rightCellDetail(state)
+                  }
                   side="left"
                 />
               </span>
