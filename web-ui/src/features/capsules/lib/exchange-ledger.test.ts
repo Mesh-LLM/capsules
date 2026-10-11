@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   buildExchangeCounterpartyIndex,
   buildExchangeLedgerRows,
-  exchangeStateFilterValue
+  exchangeStateFilterValue,
+  isServedForPay
 } from '@/features/capsules/lib/exchange-ledger'
 import type { CapsuleRecord } from '@/features/capsules/api/types'
-import type { PaneBRow, PaneCRow } from '@/features/capsules/api/sidecarTypes'
+import type { PaneBRow, PaneCRow, PayerBook } from '@/features/capsules/api/sidecarTypes'
 import { fixtureMineCell, fixtureTheirsCell } from '@/features/capsules/lib/pushed-half-fixtures'
 
 function paneCRow(overrides: Partial<PaneCRow>): PaneCRow {
@@ -259,6 +260,26 @@ describe('a served exchange with no other side is LOCAL', () => {
     const [row] = buildExchangeLedgerRows([paneRow], index)
     expect(row.localOnly).toBe(false)
     expect(exchangeStateFilterValue(row)).not.toBe('local')
+  })
+
+  it('is not local when it was served for pay, even with no payer recorded', () => {
+    const providerBook: PayerBook = {
+      observed_by: 'provider',
+      who_paid: 'requester',
+      state: 'settled',
+      terms_digests: ['t'.repeat(64)],
+      entries: []
+    }
+    const [row] = buildExchangeLedgerRows([selfServed({ provider_settlement: providerBook })], new Map())
+    expect(isServedForPay(row.raw)).toBe(true)
+    expect(row.localOnly).toBe(false)
+    expect(exchangeStateFilterValue(row)).toBe('open')
+    // No book, or an explicit null one, is not a paid exchange: still local.
+    for (const provider_settlement of [null, undefined]) {
+      const [free] = buildExchangeLedgerRows([selfServed({ provider_settlement })], new Map())
+      expect(isServedForPay(free.raw)).toBe(false)
+      expect(free.localOnly).toBe(true)
+    }
   })
 
   it('is not local when its own record names the node that asked', () => {

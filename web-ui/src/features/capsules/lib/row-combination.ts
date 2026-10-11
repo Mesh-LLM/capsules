@@ -9,6 +9,9 @@ export type RowCombinationInput = {
   state: RightCellStateKind
   /** `SERVED` or `ASKED`. */
   roleTag: string
+  /** A served row that holds this node's book as the provider of a paid
+   *  exchange: another node asked for it. */
+  servedForPay?: boolean
   yoursHeld: boolean
   marks: { content: EntryRowChipMark; sig: EntryRowChipMark; inclusion: EntryRowChipMark; registered: EntryRowChipMark }
   /** The door refused their record for naming another server or model. */
@@ -45,9 +48,10 @@ export function rowCombinationText(input: RowCombinationInput): string {
     case 'open_not_given':
       return 'Your side is sealed and checks out; their record hasn’t arrived, and they didn’t send an id to ask for it by.'
     case 'open_not_asked':
-      return input.roleTag === 'SERVED'
-        ? 'You served this yourself; your record is all there is.'
-        : 'Your record doesn’t name who answered, so there is no one to ask.'
+      if (input.roleTag !== 'SERVED') return 'Your record doesn’t name who answered, so there is no one to ask.'
+      return input.servedForPay
+        ? 'You served this for pay to another node; which node paid isn’t recorded, so there is no one to ask.'
+        : 'You served this yourself; your record is all there is.'
     case 'open_asked':
       return 'You asked for their record and no answer has come back yet.'
     case 'open_refused':

@@ -209,6 +209,40 @@ describe('ExchangeStreamRow — a served exchange with no other side', () => {
     expect(screen.getByRole('button', { name: /the LOCAL state/i })).toBeInTheDocument()
   })
 
+  it('a row served for pay with no payer recorded is OPEN, never LOCAL or "served this yourself"', () => {
+    const base = makeRow('open_not_asked', { roleTag: 'SERVED', counterparty: null, localOnly: false })
+    const row = {
+      ...base,
+      raw: {
+        ...base.raw,
+        role_tag: 'SERVED',
+        counterparty: null,
+        provider_settlement: {
+          observed_by: 'provider',
+          who_paid: 'requester',
+          state: 'settled',
+          terms_digests: ['t'.repeat(64)],
+          entries: []
+        }
+      } as PaneCRow
+    }
+    render(
+      <ExchangeStreamRow
+        onAction={vi.fn()}
+        {...toggleProps()}
+        localRecord={RECORD_NAMING_NO_PEER}
+        rail={NO_RAIL}
+        row={row}
+      />
+    )
+    expect(screen.getByText('OPEN')).toBeInTheDocument()
+    expect(screen.queryByText('LOCAL')).not.toBeInTheDocument()
+    expect(screen.queryByText('Local — no other side')).not.toBeInTheDocument()
+    expect(screen.getByText('Served for pay — payer not recorded')).toBeInTheDocument()
+    expect(screen.getAllByText(/payer not recorded/).length).toBeGreaterThan(0)
+    expect(document.body).not.toHaveTextContent(/served this yourself/)
+  })
+
   it('a served row that names its counterparty stays OPEN', () => {
     render(
       <ExchangeStreamRow

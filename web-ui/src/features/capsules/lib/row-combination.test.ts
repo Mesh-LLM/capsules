@@ -40,6 +40,9 @@ describe('rowCombinationText -- what the badge and the chips say together', () =
       /isn’t loaded on this page/
     )
     expect(rowCombinationText(input({ state: 'open_not_asked', roleTag: 'SERVED' }))).toMatch(/You served this yourself/)
+    const paid = rowCombinationText(input({ state: 'open_not_asked', roleTag: 'SERVED', servedForPay: true }))
+    expect(paid).toMatch(/You served this for pay to another node/)
+    expect(paid).not.toMatch(/yourself/)
     expect(rowCombinationText(input({ state: 'open_not_asked', roleTag: 'ASKED' }))).toMatch(/no one to ask/)
   })
 
