@@ -58,15 +58,17 @@
   evidence request this node sent is now refused when a witness receipt it carries is malformed or
   not bound to its checkpoint, or when an exchange answer's anchor is not the earliest checkpoint
   covering it. This node holds no witness keys for this check, so no receipt in an answer is
-  counted as witnessed.
+  counted as witnessed. 0.0.3 also signs a refusal over a deterministic encoding, so a refusal
+  from a 0.1.3 node may not verify on 0.1.4: upgrade both nodes.
 
 ### Fixed
 
 - **The console's top navigation stays on the Evidence page.** The page's stylesheet applies only
   to the page's own elements; a global `.hidden` rule had hidden the console's nav.
 - **An exchange this node served for pay is not shown as local.** With no payer recorded, its row
-  read "Local — no other side"; the host pays only across nodes, so it now reads "Served for pay —
-  payer not recorded" and counts as open.
+  read "Local — no other side"; it now reads "Served for pay — payer not recorded" and counts as
+  open. With no payer recorded there is no node to ask for its record, so such a row may stay open
+  until the payer sends its own, and its (i) says so.
 
 ## 0.1.3
 
