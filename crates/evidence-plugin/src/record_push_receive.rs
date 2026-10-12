@@ -816,9 +816,10 @@ fn named_server(record: &Value) -> Option<String> {
     (!served_by.is_empty() && served_by != "unknown").then(|| served_by.to_string())
 }
 
-/// Every weights digest a record names for its model: the producer's
-/// `weights_digest.digest`, the host's `serving_provenance.model.weights_digest`,
-/// and a `sha256-<hex>` / `sha256:<hex>` inside `model_attestation.model_id`.
+/// Every weights file digest a record names: the producer's
+/// `weights_digest.digest` and the host's
+/// `serving_provenance.model.weights_digest`. Both are the SHA-256 of the
+/// loaded file.
 pub(crate) fn weights_claims(record: &Value) -> BTreeSet<String> {
     let ca = record.pointer("/model_attestation/compute_attestation");
     let mut candidates: Vec<String> = Vec::new();
@@ -837,22 +838,56 @@ pub(crate) fn weights_claims(record: &Value) -> BTreeSet<String> {
     {
         candidates.push(d.to_string());
     }
-    if let Some(model_id) = record
-        .pointer("/model_attestation/model_id")
-        .and_then(Value::as_str)
-    {
-        let low = model_id.to_lowercase();
-        for marker in ["sha256-", "sha256:"] {
-            if let Some(at) = low.find(marker) {
-                candidates.push(low[at + marker.len()..].chars().take(64).collect());
-            }
-        }
-    }
     candidates
         .into_iter()
         .map(|c| c.trim().to_lowercase())
         .filter(|c| is_lower_hex(c, 64))
         .collect()
+}
+
+/// The `sha256-<hex>` / `sha256:<hex>` inside `model_attestation.model_id`.
+/// mesh-llm names a GGUF model `local-gguf/sha256-<source identity>`. That
+/// digest is the file's own SHA-256 only for a single local file; for a
+/// Hugging Face GGUF it hashes the repository, revision and file list, and
+/// for a split GGUF it hashes the parts. So it names the model, not the
+/// weights file.
+pub(crate) fn model_id_digest(record: &Value) -> Option<String> {
+    let low = record
+        .pointer("/model_attestation/model_id")
+        .and_then(Value::as_str)?
+        .to_lowercase();
+    ["sha256-", "sha256:"].iter().find_map(|marker| {
+        let at = low.find(marker)?;
+        let hex: String = low[at + marker.len()..].chars().take(64).collect();
+        is_lower_hex(&hex, 64).then_some(hex)
+    })
+}
+
+/// Whether a served half names a different model than the requester's own
+/// records of the exchange. Weights are held to weights and model ids to
+/// model ids. Only a half that names no model id is held, by its weights, to
+/// the id the requester asked for: the one thing left to compare.
+pub(crate) fn names_other_model(half: &Value, own: &[&Value]) -> bool {
+    let theirs = weights_claims(half);
+    if theirs.len() > 1 {
+        return true;
+    }
+    let mut asked_weights = BTreeSet::new();
+    let mut asked_ids = BTreeSet::new();
+    for record in own {
+        asked_weights.extend(weights_claims(record));
+        asked_ids.extend(model_id_digest(record));
+    }
+    let disagree = |asked: &BTreeSet<String>, claimed: &BTreeSet<String>| {
+        !asked.is_empty() && !claimed.is_empty() && asked.is_disjoint(claimed)
+    };
+    if disagree(&asked_weights, &theirs) {
+        return true;
+    }
+    match model_id_digest(half) {
+        Some(id) => disagree(&asked_ids, &BTreeSet::from([id])),
+        None => asked_weights.is_empty() && disagree(&asked_ids, &theirs),
+    }
 }
 
 /// This node's own requester records of the exchange `request_digest`.
@@ -907,10 +942,6 @@ fn claims_verdict(
     // No "our own record routed this elsewhere" refusal: the provider's push
     // can arrive before this node seals its own record, and one prompt sent
     // to several peers shares a digest.
-    let theirs = weights_claims(half);
-    if theirs.len() > 1 {
-        return Ok(Some(REASON_MODEL_MISMATCH));
-    }
     let own = match half
         .pointer("/effect/request_digest")
         .and_then(Value::as_str)
@@ -918,16 +949,11 @@ fn claims_verdict(
         Some(digest) => own_requested_records(ledger_dir, digest)?,
         None => Vec::new(),
     };
-    let mut asked = BTreeSet::new();
-    for record in &own {
-        if named_server(record).is_none_or(|named| named == sender) {
-            asked.extend(weights_claims(record));
-        }
-    }
-    if !asked.is_empty() && !theirs.is_empty() && asked.is_disjoint(&theirs) {
-        return Ok(Some(REASON_MODEL_MISMATCH));
-    }
-    Ok(None)
+    let own: Vec<&Value> = own
+        .iter()
+        .filter(|record| named_server(record).is_none_or(|named| named == sender))
+        .collect();
+    Ok(names_other_model(half, &own).then_some(REASON_MODEL_MISMATCH))
 }
 
 // ---------------------------------------------------------------------------
@@ -1329,5 +1355,101 @@ mod tests {
             .expect("signed by this node");
         let logged = std::fs::read_to_string(dir.path().join(REJECTED_PUSHES_FILENAME)).unwrap();
         assert!(logged.contains("\"capsule_id\":null"));
+    }
+
+    // A half and the requester's record of one exchange, with the model id
+    // and weights fields each names. The u844 live run's shape: a Hugging
+    // Face GGUF named `local-gguf/sha256-<identity>`, whose host and
+    // producer both name the file's own SHA-256.
+    const HF_ID: &str =
+        "local-gguf/sha256-cd3f391dbff00e71a7ee53da8deb2510119fc16ab703f310c301c3a60357a7a9";
+    const Q8_FILE: &str = "ca59ca7f13d0e15a8cfa77bd17e65d24f6844b554a7b6c12e07a5f89ff76844e";
+    const OTHER_FILE: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+
+    fn requested(model_id: &str) -> Value {
+        json!({
+            "effect": {"request_digest": "b".repeat(64)},
+            "model_attestation": {
+                "model_id": model_id,
+                "compute_attestation": {"x-mesh-poc-v1": {"role": "requested"}}
+            }
+        })
+    }
+
+    fn served(model_id: Option<&str>, producer: &str, host: &str) -> Value {
+        let mut half = json!({
+            "effect": {"request_digest": "b".repeat(64)},
+            "model_attestation": {"compute_attestation": {
+                "weights_digest": {"digest_alg": "SHA-256", "digest": producer, "scope": "file"},
+                "x-mesh-poc-v1": {
+                    "role": "served",
+                    "serving_provenance": {"served_by_node_id": "node-a", "model": {"weights_digest": host}}
+                }
+            }}
+        });
+        if let Some(id) = model_id {
+            half["model_attestation"]["model_id"] = json!(id);
+        }
+        half
+    }
+
+    /// MUTANT: count the model id's digest as a weights claim again and this
+    /// fails: the half then names two weights and is refused.
+    #[test]
+    fn a_hugging_face_half_naming_the_asked_model_id_is_received() {
+        let half = served(Some(HF_ID), Q8_FILE, Q8_FILE);
+        assert!(!names_other_model(&half, &[&requested(HF_ID)]));
+        assert!(
+            !names_other_model(&half, &[]),
+            "before our record is sealed"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let line = serde_json::to_string(&requested(HF_ID)).unwrap();
+        std::fs::write(dir.path().join("capsules.jsonl"), line + "\n").unwrap();
+        assert_eq!(claims_verdict(dir.path(), &half, "node-a").unwrap(), None);
+    }
+
+    #[test]
+    fn a_half_naming_another_model_id_than_asked_is_refused() {
+        let other_id = format!("local-gguf/sha256-{OTHER_FILE}");
+        let half = served(Some(&other_id), Q8_FILE, Q8_FILE);
+        assert!(names_other_model(&half, &[&requested(HF_ID)]));
+    }
+
+    /// Attack D, case 1: one weights field changed.
+    #[test]
+    fn a_half_whose_weights_fields_disagree_is_refused() {
+        let half = served(Some(HF_ID), Q8_FILE, OTHER_FILE);
+        assert!(names_other_model(&half, &[&requested(HF_ID)]));
+        assert!(names_other_model(&half, &[]));
+    }
+
+    /// A half that names no model id is held by its weights to the digest in
+    /// the id we asked for (a single local GGUF names its file).
+    #[test]
+    fn a_half_naming_no_model_id_is_held_to_the_asked_id_digest() {
+        let local_id = format!("local-gguf/sha256-{Q8_FILE}");
+        assert!(!names_other_model(
+            &served(None, Q8_FILE, Q8_FILE),
+            &[&requested(&local_id)]
+        ));
+        assert!(names_other_model(
+            &served(None, OTHER_FILE, OTHER_FILE),
+            &[&requested(&local_id)]
+        ));
+    }
+
+    #[test]
+    fn a_model_id_without_a_full_digest_names_none() {
+        assert_eq!(
+            model_id_digest(&requested("local-gguf/sha256-4ff195f73917d9c2")),
+            None
+        );
+        assert_eq!(model_id_digest(&requested("qwen2.5-0.5b-instruct")), None);
+        assert_eq!(
+            model_id_digest(&requested(&HF_ID.to_uppercase())).as_deref(),
+            Some(&HF_ID["local-gguf/sha256-".len()..])
+        );
     }
 }

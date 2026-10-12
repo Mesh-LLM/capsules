@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A half from a model served by a Hugging Face reference is no longer refused `model_mismatch`.**
+  The digest inside a `local-gguf/sha256-…` model id is the file's own SHA-256 only for a single
+  local file. For a Hugging Face GGUF it hashes the repository, revision and file list, so it was
+  read as a second, different weights claim. Weights fields are now held to weights fields and
+  model ids to model ids. A half whose two weights fields disagree, or that names another model id
+  than the one asked for, is still refused, and the Evidence page applies the same rule.
+
 ## 0.1.4
 
 ### Verified on live hosts, and not

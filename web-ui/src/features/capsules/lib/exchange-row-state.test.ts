@@ -657,6 +657,13 @@ describe('deriveRightCellState — a swapped model is never CLOSED (attack D)', 
     expect(deriveRightCellState({ ...row, mine: { ...row.mine, record: mine } }).kind).toBe('contradicted')
   })
 
+  it('a Hugging Face id (its digest is not the file digest) naming the model we asked for -> CLOSED', () => {
+    const hfId = `local-gguf/sha256-${'3'.repeat(64)}`
+    const local = withModel(localRecordWithDigests(), { modelId: hfId }) as CapsuleRecord
+    const peer = withModel(citingPeerRecord(), { modelId: hfId, caWeights: W_ASKED, spWeights: W_ASKED })
+    expect(deriveRightCellState(paneCRow(), fetched({ peerRecord: peer }), local).kind).toBe('closed')
+  })
+
   it('a model name alone (an alias, no weights on our side) never contradicts', () => {
     const local = withModel(localRecordWithDigests(), { modelId: 'qwen' }) as CapsuleRecord
     const peer = withModel(citingPeerRecord(), { modelId: `local-gguf/sha256-${W_OTHER}`, caWeights: W_OTHER })
