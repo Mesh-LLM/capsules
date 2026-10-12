@@ -553,6 +553,10 @@ pub fn verify_response(sent: &[u8], response: &Value, key: &ed25519_dalek::Verif
         &digest,
         key,
         &evidence_log::record_digest,
+        // No witness keys: a receipt the answer carries must still be well
+        // formed and bound to its checkpoint, but none is counted as
+        // witnessed, and the result reports none.
+        &|_| None,
     ) {
         Ok(v) => json!({
             "state": "artifact",
