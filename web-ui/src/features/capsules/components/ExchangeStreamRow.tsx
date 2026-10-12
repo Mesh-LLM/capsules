@@ -27,7 +27,7 @@ import {
   theirContentText,
   yourContentFixedText
 } from '@/features/capsules/lib/exchange-content-state'
-import type { ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
+import { isServedForPay, type ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
 import {
   askIsOffered,
   askReplyNote,
@@ -74,7 +74,8 @@ import { rowCombinationText } from '@/features/capsules/lib/row-combination'
 import {
   CLOSED_FROM_FETCH_NOT_SAVED,
   LOCAL_ONLY_TOOLTIP,
-  OWN_RECORD_FAILS_WARNING
+  OWN_RECORD_FAILS_WARNING,
+  SERVED_FOR_PAY_NO_PAYER_TOOLTIP
 } from '@/features/capsules/lib/tooltip-copy'
 
 /** The gated cell text (Do (2)) when an ask
@@ -83,12 +84,15 @@ import {
  *  future action the reader can't take and hid which situation they were in:
  *   - a SERVED row: this node served locally, there is no remote counterparty
  *     on the other side to ask at all -> `Local — no other side`;
+ *   - a SERVED row this node served for pay: another node paid for it, but
+ *     its id is not recorded -> `Served for pay — payer not recorded`;
  *   - an ASKED row: a remote exchange happened but the peer is unknown/
  *     unrecorded (no counterparty identity field exists on the record yet; the
  *     join comes from Pane B, per-peer) -> `Other side: not known`.
  *  Each is a stated fact, never a deficit or a "not yet". */
 const NO_OTHER_SIDE_TEXT = 'Local — no other side'
 const OTHER_SIDE_NOT_KNOWN_TEXT = 'Other side: not known'
+const PAYER_NOT_RECORDED_TEXT = 'Served for pay — payer not recorded'
 
 /** Wall-clock time for the ask timeout, re-read every 30 s so a waiting row
  *  offers the ask once the timeout passes -- never `Date.now()` in render. */
@@ -251,7 +255,9 @@ export function ExchangeStreamRow({
   // nothing of theirs can arrive (`isLocalOnly`). An ask this row sent would
   // name another side, so it ends this.
   const localOnly = row.localOnly && !askOutcome
-  const gatedText = row.roleTag === 'SERVED' ? NO_OTHER_SIDE_TEXT : OTHER_SIDE_NOT_KNOWN_TEXT
+  const servedForPay = isServedForPay(row.raw)
+  const gatedText =
+    row.roleTag !== 'SERVED' ? OTHER_SIDE_NOT_KNOWN_TEXT : servedForPay ? PAYER_NOT_RECORDED_TEXT : NO_OTHER_SIDE_TEXT
   const cellText = gatedByCounterparty ? gatedText : rightCellText(state)
   // UX §3: with push on, their record normally arrives when the exchange
   // finishes -- the ask is offered only once that has had time to happen.
@@ -299,6 +305,7 @@ export function ExchangeStreamRow({
   const combination = rowCombinationText({
     state: state.kind,
     roleTag: row.roleTag,
+    servedForPay,
     yoursHeld: row.raw.mine.state !== 'absent',
     marks: {
       content: entryRowChipMark(checksRows, 'content'),
@@ -452,7 +459,13 @@ export function ExchangeStreamRow({
                 <InfoHover
                   census={localOnly ? 'row_state:local' : `row_state:${state.kind}`}
                   describes={localOnly ? 'the LOCAL state' : `the ${rightCellStatusLabel(state)} state`}
-                  label={localOnly ? LOCAL_ONLY_TOOLTIP : rightCellDetail(state)}
+                  label={
+                    localOnly
+                      ? LOCAL_ONLY_TOOLTIP
+                      : servedForPay && gatedByCounterparty
+                        ? SERVED_FOR_PAY_NO_PAYER_TOOLTIP
+                        : rightCellDetail(state)
+                  }
                   side="left"
                 />
               </span>

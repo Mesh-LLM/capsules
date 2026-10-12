@@ -108,9 +108,19 @@ function pushedHalfCounterparty(row: PaneCRow): string | null {
   return typeof receivedFrom === 'string' && receivedFrom.length > 0 ? receivedFrom : null
 }
 
+/** A row this node served for pay: it holds its own book as the provider.
+ *  This relies on the host sending a provider's payment events only for a
+ *  request another node paid for (a node does not pay itself), so another
+ *  node asked for it, whether or not that node's id is recorded. Nothing on
+ *  this page checks that. */
+export function isServedForPay(row: PaneCRow): boolean {
+  return row.role_tag === 'SERVED' && row.provider_settlement != null
+}
+
 /** A row this node served with no other side anywhere: no counterparty (from
  *  the row, Pane B or a pushed half), no evidence of theirs of any kind
- *  (`open_not_asked`), and its own record names no node to ask. The same
+ *  (`open_not_asked`), its own record names no node to ask, and it was not
+ *  served for pay (a payer is another side, recorded or not). The same
  *  conditions under which the row already reads "Local — no other side". */
 export function isLocalOnly(
   row: PaneCRow,
@@ -119,7 +129,11 @@ export function isLocalOnly(
   ownRecord: CapsuleRecord | Record<string, unknown> | null | undefined
 ): boolean {
   return (
-    row.role_tag === 'SERVED' && counterparty === null && state.kind === 'open_not_asked' && askTarget(ownRecord) === null
+    row.role_tag === 'SERVED' &&
+    counterparty === null &&
+    state.kind === 'open_not_asked' &&
+    askTarget(ownRecord) === null &&
+    !isServedForPay(row)
   )
 }
 
