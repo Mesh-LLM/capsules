@@ -7,6 +7,19 @@ each exchange, and whether this node's log still verifies. It installs and
 runs on an unmodified mesh-llm release (0.77 or newer). No other runtime is
 needed.
 
+## What's new in 0.1.4
+
+- **Paid exchanges on the Evidence page:** what each one charged and who paid, from the records
+  this node sealed, and "outcome not reported" where the host reported none. An exchange this node
+  served for pay shows its own book as the provider.
+- **The referee can take a twin pair's texts from the client,** and **peers' keys from the host**
+  when mesh-llm announces them (`CAPSULES_PEER_KEYS` stays the fallback). Neither has run yet on a
+  stock mesh-llm release: see the CHANGELOG.
+- **The console's navigation stays on the Evidence page,** a served exchange with no other side
+  reads LOCAL, and twin pairs show on Peers.
+
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGELOG.md).
+
 ## What's new in 0.1.3
 
 - **The plugin is now called `capsules`** (it was `capsule-emit-mesh`), and so is its repository,
@@ -103,7 +116,7 @@ glibc 2.35 or newer (x86_64 or arm64).
 and set `VERSION` to the release (without the leading `v`):
 
 ```bash
-VERSION=0.1.3
+VERSION=0.1.4
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  TARGET=aarch64-apple-darwin ;;
   Linux-x86_64)  TARGET=x86_64-unknown-linux-gnu ;;
