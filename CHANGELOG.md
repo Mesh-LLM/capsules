@@ -4,16 +4,14 @@
 
 ### Verified on live hosts, and not
 
-- **Paid exchanges across two nodes: pending.** To be re-run on two nodes built from this release:
-  the requesting node serves no model, and each exchange counts only when the response's
-  `x-mesh-served-by` and the record's `served_by` name the serving node. TODO: replace with the
-  result before this release is merged.
+- **Paid exchanges across two nodes: verified.** Four paid exchanges between two nodes built from
+  this release, the requesting node serving no model. In each, the response's `x-mesh-served-by`
+  and the record's `served_by` named the serving node, and each node sealed its own half.
 - **Peers' keys announced by the host:** exercised only against a test build of the host, not on a
   stock mesh-llm release. `CAPSULES_PEER_KEYS` remains the fallback.
-- **The referee with texts the client supplies:** not yet exercisable on stock hosts. A stock
-  host's event for a request it served for another node over the raw proxy path does not name the
-  node that asked (`requested_by_node_id`), which a real referee call needs. Covered by tests
-  against a stand-in host only. Upstream request: TODO (link).
+- **The referee with texts the client supplies:** stock hosts now name the node that asked
+  (`requested_by_node_id`, from mesh-llm a39211e), so nothing is missing on the host side. A
+  referee verdict on live hosts waits on 0.1.5; until then it is covered by tests only.
 
 ### Added
 
