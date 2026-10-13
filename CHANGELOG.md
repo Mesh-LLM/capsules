@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **A paid exchange's CLOSED row no longer reads "served by: not recorded" on the payer's
+  Evidence page when the payer's own record names the provider.** The row read the node id the
+  page is sent only while the other side's record is still to be fetched, so once that record was
+  held the row lost it. It now reads the payer's own record (`served_by_node_id`, the same rule the
+  plugin uses), and says "not recorded" only when the record names no server.
 - **A half from a model served by a Hugging Face reference is no longer refused `model_mismatch`.**
   The digest inside a `local-gguf/sha256-…` model id is the file's own SHA-256 only for a single
   local file. For a Hugging Face GGUF it hashes the repository, revision and file list, so it was

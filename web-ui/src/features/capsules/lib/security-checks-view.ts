@@ -226,6 +226,21 @@ function recordString(record: Record<string, unknown> | null, path: readonly str
   return typeof cursor === 'string' && cursor.length > 0 ? cursor : null
 }
 
+/** The node a record names as the one that served it
+ *  (`serving_provenance.served_by_node_id`), by the pane's own rule
+ *  (`evidence_panes.rs`, `peer_fetch_join_key`): a non-empty id other than
+ *  the producer's `unknown` placeholder. `null` when the record names none. */
+export function recordServedBy(record: object | null): string | null {
+  const id = recordString(record as Record<string, unknown> | null, [
+    'model_attestation',
+    'compute_attestation',
+    'x-mesh-poc-v1',
+    'serving_provenance',
+    'served_by_node_id'
+  ])
+  return id && id !== 'unknown' ? id : null
+}
+
 export function buildCommitsToRows(
   row: PaneCRow,
   localRecord: CapsuleRecord | null,
@@ -260,13 +275,17 @@ export function buildCommitsToRows(
     responseDigestRaw === null ? 'unavailable' : isDigestShaped(responseDigestRaw) ? responseDigestRaw : 'not a digest'
   const taskBinding = taskBindingCell?.text ?? 'from the record'
   const modelIdentity = modelId ?? 'unavailable'
-  // Finding 3: `served by: counterparty` was a placeholder word, not a
-  // fact, rendered as though it were one and then compared. `theirs.
-  // peer_id` (`theirs_cell`'s `served_by_node_id` forward,
-  // `capsule_panes_native.rs`) is the real node id when this row's peer
-  // join key is known; absent (never the bare word "counterparty") when
-  // it isn't.
-  const servedBy = row.role_tag === 'SERVED' ? 'this node' : (row.theirs.peer_id ?? 'not recorded')
+  // Who served us, as OUR record names it: its `served_by_node_id`
+  // (`recordServedBy`). The pane's `theirs.peer_id` is the same value, but
+  // it is sent only while the other half is still to be fetched, so a
+  // CLOSED row has none; it is the fallback when this view holds no record.
+  // Never the bare word "counterparty"; "not recorded" when neither names one.
+  const servedBy =
+    row.role_tag === 'SERVED'
+      ? 'this node'
+      : (recordServedBy(localRecord ?? (row.mine.record as CapsuleRecord | undefined) ?? null) ??
+        row.theirs.peer_id ??
+        'not recorded')
 
   return [
     {
