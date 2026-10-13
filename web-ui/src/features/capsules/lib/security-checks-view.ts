@@ -241,16 +241,16 @@ export function recordServedBy(record: object | null): string | null {
   return id && id !== 'unknown' ? id : null
 }
 
-/** What a record's TDX quote shows (u229): the binding this node checked, on
- *  its own line, and never "attested". The quote's signatures and the
- *  platform behind it are not checked here, so a quote that names this
- *  record is not yet evidence of a TEE; the second line says so. */
+/** What a record's TDX quote shows (u231): "bound" only when this node
+ *  checked all eight checks, including the quote's signatures and its PCK
+ *  chain to the pinned root; what stays unchecked is on its own line, and
+ *  nothing here says "attested" or "verified". A failed check is shown as
+ *  failed, never softened. */
 export const TEE_COPY = {
-  bound: 'quote bound to this record (checked on this node)',
+  bound: 'Quote signed by a TDX quoting enclave and bound to this exchange (checked here)',
   absent: 'no quote',
-  failed: (check: string) => `quote does not check (${check.replace(/_/g, ' ')}): not counted as measured`,
-  platform:
-    "not checked here: the quote's signatures, the PCK chain to the vendor root, QE identity, TCB status and MRTD/RTMRs; until they are, this is not evidence of a TEE"
+  failed: (check: string) => `Quote failed a check (${check.replace(/_/g, ' ')}): not bound`,
+  platform: 'Platform status, revocation and measurements not checked here'
 } as const
 
 export function teeQuoteText(fact: TeeFact | undefined): string | null {

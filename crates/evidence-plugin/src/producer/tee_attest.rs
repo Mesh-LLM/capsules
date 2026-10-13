@@ -5,13 +5,15 @@
 //! u229 ruling; every name it fixes is in [`names`], so a change to the ruling
 //! is a change there.
 //!
-//! What capsules checks (offline, each failing hard): the quote's SHA-256 is
-//! `digest`; the quote parses as a TDX DCAP v4 quote; its REPORT_DATA is
-//! `report_data` and both equal the recomputation over the record's own
-//! fields; and the key bound in that recomputation is the key that verifies
-//! the record's signature. What it leaves to the reader is
-//! [`names::LEFT_TO_READER`]: no signature in the quote, no certificate and no
-//! measurement is checked here.
+//! What capsules checks (offline, each failing hard; u229 checks 1-4 and
+//! u231 checks 5-8): the quote's SHA-256 is `digest`; the quote parses as a
+//! TDX DCAP v4 quote; its REPORT_DATA is `report_data` and both equal the
+//! recomputation over the record's own fields; the key bound in that
+//! recomputation verifies the record; the quote's signature by its
+//! attestation key; the QE report's signature by the PCK key; the QE report's
+//! binding of the attestation key; and the PCK chain to the root pinned in
+//! [`PINNED_ROOT_CA_SHA256`], at the record's own time. Only all eight make a
+//! quote bound. What it leaves to the reader is [`names::LEFT_TO_READER`].
 //!
 //! A quote is taken through the kernel's configfs-tsm report interface
 //! ([`ConfigfsTsm`]). On a host without it the slot is recorded empty, as
@@ -62,7 +64,7 @@ pub mod names {
         "context",
     ];
     /// What capsules does not check, said in the slot and on the page.
-    pub const LEFT_TO_READER: &str = "Not checked by the producer or by capsules: the PCK certificate chain to the vendor root, QE identity, TCB status and collateral recency, and MRTD and RTMRs against reference values. The quote's own signatures are not checked here either.";
+    pub const LEFT_TO_READER: &str = "Not checked by the producer or by capsules: revocation (PCK CRLs), TCB status and collateral recency (TCB info, QE identity), and MRTD and RTMRs against reference values. capsules checks the quote's signatures and its PCK chain to the pinned root when it shows this record.";
     /// The empty slot's context on a host that took no quote at all.
     pub const NO_TEE: &str = "no TEE quote measured (no TDX hardware on this host, or the producer leg has not run here); recorded absent, never fabricated";
 }
@@ -151,6 +153,15 @@ const CERT_PCK_CHAIN: u16 = 5;
 #[derive(Debug)]
 pub struct TdxQuote {
     pub report_data: [u8; 64],
+    /// Header and TD report body: what the quote signature covers.
+    signed: Vec<u8>,
+    quote_signature: [u8; 64],
+    /// The attestation key, raw `x || y`.
+    attestation_key: [u8; 64],
+    qe_report: [u8; QE_REPORT_LEN],
+    qe_report_signature: [u8; 64],
+    qe_auth_data: Vec<u8>,
+    pck_chain_pem: Vec<u8>,
 }
 
 fn le16(b: &[u8], at: usize) -> Option<u16> {
@@ -208,11 +219,159 @@ impl TdxQuote {
         if !chain.starts_with(b"-----BEGIN CERTIFICATE-----") {
             return Err(header("PCK chain is not PEM"));
         }
+        let fixed = |range: std::ops::Range<usize>| -> &[u8] { &section[range] };
         let report_data = bytes[REPORT_DATA_AT..SIGNED_LEN]
             .try_into()
             .expect("64 bytes inside the checked header and body");
-        Ok(Self { report_data })
+        Ok(Self {
+            report_data,
+            signed: bytes[..SIGNED_LEN].to_vec(),
+            quote_signature: fixed(0..64).try_into().expect("64"),
+            attestation_key: fixed(64..128).try_into().expect("64"),
+            qe_report: outer[..QE_REPORT_LEN]
+                .try_into()
+                .expect("384, inside the checked QE report data"),
+            qe_report_signature: outer[QE_REPORT_LEN..QE_REPORT_LEN + 64]
+                .try_into()
+                .expect("64"),
+            qe_auth_data: outer[auth_at + 2..auth_at + 2 + auth_len].to_vec(),
+            pck_chain_pem: chain.to_vec(),
+        })
     }
+}
+
+/// The SHA-256 of the DER of the root CA every TDX DCAP v4 quote's PCK chain
+/// ends in (Intel SGX Root CA). Checked against the root Intel publishes,
+/// and never taken from the quote.
+pub const PINNED_ROOT_CA_SHA256: [u8; 32] =
+    hex_literal("44a0196b2b99f889b8e149e95b807a350e7424964399e885a7cbb8ccfab674d3");
+
+const fn hex_literal(text: &str) -> [u8; 32] {
+    const fn nibble(c: u8) -> u8 {
+        match c {
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'f' => c - b'a' + 10,
+            _ => panic!("lowercase hex"),
+        }
+    }
+    let b = text.as_bytes();
+    assert!(b.len() == 64);
+    let mut out = [0u8; 32];
+    let mut i = 0;
+    while i < 32 {
+        out[i] = nibble(b[2 * i]) << 4 | nibble(b[2 * i + 1]);
+        i += 1;
+    }
+    out
+}
+
+/// Where the QE report keeps its REPORT_DATA (SGX report body layout).
+const QE_REPORT_DATA_AT: usize = 320;
+
+fn p256_key(sec1: &[u8]) -> Option<p256::ecdsa::VerifyingKey> {
+    p256::ecdsa::VerifyingKey::from_sec1_bytes(sec1).ok()
+}
+
+fn raw_signature_verifies(key: &p256::ecdsa::VerifyingKey, message: &[u8], raw: &[u8; 64]) -> bool {
+    use p256::ecdsa::signature::Verifier;
+    p256::ecdsa::Signature::from_slice(raw).is_ok_and(|sig| key.verify(message, &sig).is_ok())
+}
+
+impl TdxQuote {
+    /// Checks 5 to 8 (u231), in an order where each failure is its own:
+    /// the quote signature, the PCK chain to the pinned root at `at` (seconds
+    /// since the epoch, the record's own time), the QE report signature by
+    /// the PCK key, and the attestation key's binding in the QE report.
+    pub fn check_signatures(&self, at: u64, pinned_root: &[u8; 32]) -> Result<(), CheckFailure> {
+        // 5
+        let mut sec1 = vec![0x04];
+        sec1.extend_from_slice(&self.attestation_key);
+        let attestation_key = p256_key(&sec1).ok_or(CheckFailure::QuoteSignature)?;
+        if !raw_signature_verifies(&attestation_key, &self.signed, &self.quote_signature) {
+            return Err(CheckFailure::QuoteSignature);
+        }
+        // 8
+        let pck =
+            pck_chain_key(&self.pck_chain_pem, at, pinned_root).map_err(CheckFailure::PckChain)?;
+        // 6
+        if !raw_signature_verifies(&pck, &self.qe_report, &self.qe_report_signature) {
+            return Err(CheckFailure::QeReportSignature);
+        }
+        // 7
+        let mut expected = Sha256::new();
+        expected.update(self.attestation_key);
+        expected.update(&self.qe_auth_data);
+        let qe_report_data = &self.qe_report[QE_REPORT_DATA_AT..QE_REPORT_DATA_AT + 64];
+        if qe_report_data[..32] != expected.finalize()[..]
+            || qe_report_data[32..].iter().any(|&b| b != 0)
+        {
+            return Err(CheckFailure::AttestationKeyBinding);
+        }
+        Ok(())
+    }
+}
+
+/// Check 8: the PEM chain, leaf first, ends in the pinned root; every
+/// certificate is signed (ECDSA P-256 with SHA-256) by the next, the root by
+/// itself; and every certificate is valid at `at`. Returns the leaf's (PCK) key.
+fn pck_chain_key(
+    pem: &[u8],
+    at: u64,
+    pinned_root: &[u8; 32],
+) -> Result<p256::ecdsa::VerifyingKey, String> {
+    use x509_cert::der::Encode;
+    const ECDSA_WITH_SHA256: x509_cert::der::oid::ObjectIdentifier =
+        x509_cert::der::oid::ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
+    let certs = x509_cert::Certificate::load_pem_chain(pem)
+        .map_err(|e| format!("PCK chain is not PEM certificates: {e}"))?;
+    if certs.len() < 2 {
+        return Err(format!(
+            "PCK chain has {} certificate(s), not a leaf and a root",
+            certs.len()
+        ));
+    }
+    let root = certs.last().expect("at least two");
+    let root_der = root.to_der().map_err(|e| e.to_string())?;
+    if Sha256::digest(&root_der)[..] != pinned_root[..] {
+        return Err("PCK chain does not end in the pinned root CA".into());
+    }
+    let key_of = |cert: &x509_cert::Certificate| {
+        p256_key(
+            cert.tbs_certificate
+                .subject_public_key_info
+                .subject_public_key
+                .raw_bytes(),
+        )
+        .ok_or_else(|| format!("{} has no P-256 key", cert.tbs_certificate.subject))
+    };
+    for (i, cert) in certs.iter().enumerate() {
+        let issuer = certs.get(i + 1).unwrap_or(root);
+        let name = cert.tbs_certificate.subject.to_string();
+        if cert.signature_algorithm.oid != ECDSA_WITH_SHA256 {
+            return Err(format!("{name} is not signed with ECDSA P-256 / SHA-256"));
+        }
+        let tbs = cert.tbs_certificate.to_der().map_err(|e| e.to_string())?;
+        let signature = cert
+            .signature
+            .as_bytes()
+            .and_then(|der| p256::ecdsa::Signature::from_der(der).ok())
+            .ok_or_else(|| format!("{name}'s signature is not an ECDSA signature"))?;
+        {
+            use p256::ecdsa::signature::Verifier;
+            if key_of(issuer)?.verify(&tbs, &signature).is_err() {
+                return Err(format!("{name}'s signature does not verify"));
+            }
+        }
+        let validity = &cert.tbs_certificate.validity;
+        let (from, to) = (
+            validity.not_before.to_unix_duration().as_secs(),
+            validity.not_after.to_unix_duration().as_secs(),
+        );
+        if at < from || at > to {
+            return Err(format!("{name} is not valid at the record's time"));
+        }
+    }
+    key_of(&certs[0])
 }
 
 /// A `(type u16, size u32, data)` certification data block at `at`.
@@ -459,13 +618,26 @@ pub enum CheckFailure {
     ReportData,
     /// Check 4: the bound key is not the key that verifies the record.
     ProducerKey,
+    /// Check 5: the quote's signature by its attestation key does not verify.
+    QuoteSignature,
+    /// Check 6: the QE report's signature by the PCK key does not verify.
+    QeReportSignature,
+    /// Check 7: the QE report does not bind the attestation key.
+    AttestationKeyBinding,
+    /// Check 8: the PCK chain does not verify to the pinned root at the
+    /// record's time.
+    PckChain(String),
 }
 
 /// What the Evidence page shows for `record`'s slot: `state` is `absent`
 /// (with the slot's own `context`), `bound`, or `failed` (with the failed
 /// check). The page holds the words; this is the outcome of [`check`].
 pub fn page_fact(record: &Value) -> Value {
-    match check(record) {
+    page_fact_pinned(record, &PINNED_ROOT_CA_SHA256)
+}
+
+fn page_fact_pinned(record: &Value, pinned_root: &[u8; 32]) -> Value {
+    match check_pinned(record, pinned_root) {
         Checked::NotFilled => json!({
             "state": "absent",
             "context": poc(record)
@@ -482,6 +654,10 @@ pub fn page_fact(record: &Value) -> Value {
                 CheckFailure::Parse(_) => "parse",
                 CheckFailure::ReportData => "report_data",
                 CheckFailure::ProducerKey => "producer_key",
+                CheckFailure::QuoteSignature => "quote_signature",
+                CheckFailure::QeReportSignature => "qe_report_signature",
+                CheckFailure::AttestationKeyBinding => "attestation_key_binding",
+                CheckFailure::PckChain(_) => "pck_chain",
             },
         }),
     }
@@ -491,21 +667,26 @@ fn poc(record: &Value) -> Option<&Value> {
     record.pointer("/model_attestation/compute_attestation/x-mesh-poc-v1")
 }
 
-/// Run every check on `record`'s `tee_attestation` slot.
+/// Run every check (1 to 8) on `record`'s `tee_attestation` slot, the PCK
+/// chain against [`PINNED_ROOT_CA_SHA256`].
 pub fn check(record: &Value) -> Checked {
+    check_pinned(record, &PINNED_ROOT_CA_SHA256)
+}
+
+fn check_pinned(record: &Value, pinned_root: &[u8; 32]) -> Checked {
     let Some(slot) = poc(record).and_then(|p| p.pointer("/evidence_refs/tee_attestation")) else {
         return Checked::NotFilled;
     };
     if slot.get("quote").is_none() && slot.get("measurement_class").is_none_or(Value::is_null) {
         return Checked::NotFilled;
     }
-    match run_checks(record, slot) {
+    match run_checks(record, slot, pinned_root) {
         Ok(()) => Checked::Bound,
         Err(failure) => Checked::Failed(failure),
     }
 }
 
-fn run_checks(record: &Value, slot: &Value) -> Result<(), CheckFailure> {
+fn run_checks(record: &Value, slot: &Value, pinned_root: &[u8; 32]) -> Result<(), CheckFailure> {
     let members = slot
         .as_object()
         .ok_or(CheckFailure::Shape("not an object"))?;
@@ -570,7 +751,16 @@ fn run_checks(record: &Value, slot: &Value) -> Result<(), CheckFailure> {
     if !bound && !cfg!(feature = "mutant-tee-skips-binding-check") {
         return Err(CheckFailure::ReportData);
     }
-    Ok(())
+    // 5 to 8, at the record's own time.
+    let at = record
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .and_then(|t| u64::try_from(t.timestamp()).ok())
+        .ok_or_else(|| {
+            CheckFailure::PckChain("the record has no time to check the chain at".into())
+        })?;
+    parsed.check_signatures(at, pinned_root)
 }
 
 #[cfg(test)]
@@ -586,12 +776,145 @@ mod tests {
             .expect("vectors/tdx/tdx_quote.bin")
     }
 
-    /// The fixture with `report_data` written over its REPORT_DATA: a real
-    /// quote's structure, whose signatures no longer hold. Nothing here checks
-    /// them (module doc), so it stands in for a quote taken for that value.
-    fn quote_for(report_data: &[u8; 64]) -> Vec<u8> {
+    /// The real fixture with `report_data` written over its REPORT_DATA:
+    /// its fields match whatever record asks, but its signature no longer
+    /// covers them (check 5).
+    fn spliced(report_data: &[u8; 64]) -> Vec<u8> {
         let mut quote = fixture();
         quote[REPORT_DATA_AT..SIGNED_LEN].copy_from_slice(report_data);
+        quote
+    }
+
+    /// A test DCAP chain: a root, a platform CA and a PCK key, and an
+    /// attestation key, from fixed scalars. Certificates are valid from a day
+    /// ago for a year.
+    struct TestChain {
+        pck: p256::ecdsa::SigningKey,
+        attestation: p256::ecdsa::SigningKey,
+        pem: Vec<u8>,
+        root_sha256: [u8; 32],
+    }
+
+    fn test_chain() -> &'static TestChain {
+        use p256::ecdsa::SigningKey;
+        use std::str::FromStr;
+        use x509_cert::builder::{Builder, CertificateBuilder, Profile};
+        use x509_cert::der::{Encode, EncodePem};
+        use x509_cert::name::Name;
+        use x509_cert::serial_number::SerialNumber;
+        use x509_cert::spki::SubjectPublicKeyInfoOwned;
+        use x509_cert::time::{Time, Validity};
+        static CHAIN: std::sync::OnceLock<TestChain> = std::sync::OnceLock::new();
+        CHAIN.get_or_init(|| {
+            let key = |n: u8| SigningKey::from_slice(&[n; 32]).unwrap();
+            let (root, platform, pck) = (key(1), key(2), key(3));
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap();
+            let day = std::time::Duration::from_secs(86_400);
+            let validity = Validity {
+                not_before: Time::try_from(std::time::UNIX_EPOCH + (now - day)).unwrap(),
+                not_after: Time::try_from(std::time::UNIX_EPOCH + now + 365 * day).unwrap(),
+            };
+            let name = |cn: &str| Name::from_str(&format!("CN={cn}")).unwrap();
+            let spki =
+                |k: &SigningKey| SubjectPublicKeyInfoOwned::from_key(*k.verifying_key()).unwrap();
+            let build = |profile, serial: u32, subject: &str, of: &SigningKey, by: &SigningKey| {
+                CertificateBuilder::new(
+                    profile,
+                    SerialNumber::from(serial),
+                    validity,
+                    name(subject),
+                    spki(of),
+                    by,
+                )
+                .unwrap()
+                .build::<p256::ecdsa::DerSignature>()
+                .unwrap()
+            };
+            let root_cert = build(Profile::Root, 1, "test root", &root, &root);
+            let platform_cert = build(
+                Profile::SubCA {
+                    issuer: name("test root"),
+                    path_len_constraint: Some(0),
+                },
+                2,
+                "test platform CA",
+                &platform,
+                &root,
+            );
+            let pck_cert = build(
+                Profile::Leaf {
+                    issuer: name("test platform CA"),
+                    enable_key_agreement: false,
+                    enable_key_encipherment: false,
+                },
+                3,
+                "test PCK",
+                &pck,
+                &platform,
+            );
+            let pem = [&pck_cert, &platform_cert, &root_cert]
+                .iter()
+                .map(|c| c.to_pem(x509_cert::der::pem::LineEnding::LF).unwrap())
+                .collect::<String>()
+                .into_bytes();
+            TestChain {
+                pck,
+                attestation: key(4),
+                pem,
+                root_sha256: Sha256::digest(root_cert.to_der().unwrap()).into(),
+            }
+        })
+    }
+
+    /// A TDX DCAP v4 quote signed through [`test_chain`], carrying
+    /// `report_data`. With `bind_key` false the QE report does not bind the
+    /// attestation key (check 7), though every signature holds.
+    fn signed_quote(report_data: &[u8; 64], bind_key: bool) -> Vec<u8> {
+        use p256::ecdsa::signature::Signer;
+        let chain = test_chain();
+        let mut signed = Vec::new();
+        signed.extend_from_slice(&4u16.to_le_bytes());
+        signed.extend_from_slice(&ECDSA_P256.to_le_bytes());
+        signed.extend_from_slice(&TEE_TYPE_TDX.to_le_bytes());
+        signed.resize(HEADER_LEN, 0);
+        signed.resize(REPORT_DATA_AT, 0);
+        signed.extend_from_slice(report_data);
+        let sign = |key: &p256::ecdsa::SigningKey, message: &[u8]| -> Vec<u8> {
+            let signature: p256::ecdsa::Signature = key.sign(message);
+            signature.to_bytes().to_vec()
+        };
+        let attestation_key = &chain
+            .attestation
+            .verifying_key()
+            .to_encoded_point(false)
+            .as_bytes()[1..]
+            .to_vec();
+        let auth = [0xaa; 32];
+        let mut qe_report = vec![0u8; QE_REPORT_LEN];
+        if bind_key {
+            let mut binding = Sha256::new();
+            binding.update(attestation_key);
+            binding.update(auth);
+            qe_report[QE_REPORT_DATA_AT..QE_REPORT_DATA_AT + 32]
+                .copy_from_slice(&binding.finalize());
+        }
+        let mut outer = qe_report.clone();
+        outer.extend(sign(&chain.pck, &qe_report));
+        outer.extend_from_slice(&(auth.len() as u16).to_le_bytes());
+        outer.extend_from_slice(&auth);
+        outer.extend_from_slice(&CERT_PCK_CHAIN.to_le_bytes());
+        outer.extend_from_slice(&(chain.pem.len() as u32).to_le_bytes());
+        outer.extend_from_slice(&chain.pem);
+        let mut section = sign(&chain.attestation, &signed);
+        section.extend_from_slice(attestation_key);
+        section.extend_from_slice(&CERT_QE_REPORT.to_le_bytes());
+        section.extend_from_slice(&(outer.len() as u32).to_le_bytes());
+        section.extend(outer);
+        let mut quote = signed;
+        quote.extend_from_slice(&(section.len() as u32).to_le_bytes());
+        quote.extend(section);
         quote
     }
 
@@ -609,8 +932,147 @@ mod tests {
         }
         fn quote(&self, report_data: &[u8; 64]) -> Result<Vec<u8>, NoQuote> {
             self.asked.fetch_add(1, Ordering::SeqCst);
-            Ok(quote_for(if self.wrong { &[7; 64] } else { report_data }))
+            Ok(signed_quote(
+                if self.wrong { &[7; 64] } else { report_data },
+                true,
+            ))
         }
+    }
+
+    /// Every check, the chain pinned to [`test_chain`]'s root.
+    fn checked(record: &Value) -> Checked {
+        check_pinned(record, &test_chain().root_sha256)
+    }
+
+    fn unix(time: &str) -> u64 {
+        chrono::DateTime::parse_from_rfc3339(time)
+            .unwrap()
+            .timestamp() as u64
+    }
+
+    /// When the fixture quote was taken.
+    const TAKEN: &str = "2026-10-12T15:04:16Z";
+
+    #[test]
+    fn checks_5_to_8_pass_on_a_real_quote_at_its_time_against_the_pinned_root() {
+        let quote = TdxQuote::parse(&fixture()).unwrap();
+        assert_eq!(
+            quote.check_signatures(unix(TAKEN), &PINNED_ROOT_CA_SHA256),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn check_5_a_quote_whose_signed_bytes_changed_fails() {
+        let mut bytes = fixture();
+        bytes[REPORT_DATA_AT] ^= 1;
+        let quote = TdxQuote::parse(&bytes).unwrap();
+        assert_eq!(
+            quote.check_signatures(unix(TAKEN), &PINNED_ROOT_CA_SHA256),
+            Err(CheckFailure::QuoteSignature)
+        );
+    }
+
+    #[test]
+    fn check_6_a_qe_report_the_pck_key_did_not_sign_fails() {
+        let mut bytes = fixture();
+        bytes[SIGNED_LEN + 4 + SIG_AND_KEY_LEN + 6] ^= 1; // the QE report's first byte
+        let quote = TdxQuote::parse(&bytes).unwrap();
+        assert_eq!(
+            quote.check_signatures(unix(TAKEN), &PINNED_ROOT_CA_SHA256),
+            Err(CheckFailure::QeReportSignature)
+        );
+    }
+
+    #[test]
+    fn check_7_a_qe_report_that_does_not_bind_the_attestation_key_fails() {
+        let chain = test_chain();
+        let now = unix(&chrono::Utc::now().to_rfc3339());
+        let bound = TdxQuote::parse(&signed_quote(&[1; 64], true)).unwrap();
+        assert_eq!(bound.check_signatures(now, &chain.root_sha256), Ok(()));
+        let unbound = TdxQuote::parse(&signed_quote(&[1; 64], false)).unwrap();
+        assert_eq!(
+            unbound.check_signatures(now, &chain.root_sha256),
+            Err(CheckFailure::AttestationKeyBinding)
+        );
+    }
+
+    #[test]
+    fn check_8_a_chain_to_another_root_or_outside_its_validity_fails() {
+        let real = TdxQuote::parse(&fixture()).unwrap();
+        let chain_failure = |quote: &TdxQuote, at: u64, root: &[u8; 32]| {
+            matches!(
+                quote.check_signatures(at, root),
+                Err(CheckFailure::PckChain(_))
+            )
+        };
+        assert!(
+            chain_failure(&real, unix(TAKEN), &[0; 32]),
+            "another pinned root"
+        );
+        assert!(
+            chain_failure(&real, unix("2034-01-01T00:00:00Z"), &PINNED_ROOT_CA_SHA256),
+            "after the PCK certificate expires"
+        );
+        assert!(
+            chain_failure(&real, unix("2026-08-01T00:00:00Z"), &PINNED_ROOT_CA_SHA256),
+            "before the PCK certificate starts"
+        );
+        for at in [0, 1] {
+            use x509_cert::der::EncodePem;
+            let mut certs = x509_cert::Certificate::load_pem_chain(&real.pck_chain_pem).unwrap();
+            certs[at].tbs_certificate.serial_number =
+                x509_cert::serial_number::SerialNumber::from(42u32);
+            let pem: String = certs
+                .iter()
+                .map(|c| c.to_pem(x509_cert::der::pem::LineEnding::LF).unwrap())
+                .collect();
+            assert!(
+                pck_chain_key(pem.as_bytes(), unix(TAKEN), &PINNED_ROOT_CA_SHA256).is_err(),
+                "certificate {at} changed after it was signed"
+            );
+        }
+        let test_signed = TdxQuote::parse(&signed_quote(&[1; 64], true)).unwrap();
+        let now = unix(&chrono::Utc::now().to_rfc3339());
+        assert!(
+            chain_failure(&test_signed, now, &PINNED_ROOT_CA_SHA256),
+            "a self-made root is not the pinned one"
+        );
+    }
+
+    #[test]
+    fn a_record_carrying_a_spliced_quote_is_not_bound() {
+        // Its fields all match the record (checks 1 to 4); only its
+        // signature (check 5) shows it was not made for this record.
+        struct Splicer;
+        impl QuoteSource for Splicer {
+            fn available(&self) -> bool {
+                true
+            }
+            fn quote(&self, report_data: &[u8; 64]) -> Result<Vec<u8>, NoQuote> {
+                Ok(spliced(report_data))
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = CapsuleState::open(dir.path(), "splice-node").unwrap();
+        state.set_quote_source(Box::new(Splicer));
+        let record = state
+            .emit_for_exchange(&ExchangeRecord {
+                model: "m",
+                client_nonce: Some(NONCE),
+                request_bytes: b"{}",
+                response_bytes: b"{}",
+                latency_ms: 1.0,
+                exchange_id: None,
+                requesting_party: None,
+                host_provenance: None,
+            })
+            .unwrap()
+            .capsule;
+        assert_eq!(
+            check(&record),
+            Checked::Failed(CheckFailure::QuoteSignature)
+        );
     }
 
     struct NoTeeHost;
@@ -953,7 +1415,7 @@ mod tests {
     fn a_record_sealed_on_a_tee_host_carries_a_quote_bound_to_it() {
         let dir = tempfile::tempdir().unwrap();
         let (record, _) = sealed(dir.path(), "hi");
-        assert_eq!(check(&record), Checked::Bound);
+        assert_eq!(checked(&record), Checked::Bound);
     }
 
     #[test]
@@ -974,7 +1436,7 @@ mod tests {
             })
             .unwrap()
             .capsule;
-        assert_eq!(check(&record), Checked::NotFilled);
+        assert_eq!(checked(&record), Checked::NotFilled);
     }
 
     #[test]
@@ -983,7 +1445,7 @@ mod tests {
         let (mut record, key) = sealed(dir.path(), "hi");
         slot_mut(&mut record)["digest"] = json!(hex64("00"));
         reseal(&mut record, &key);
-        assert_eq!(check(&record), Checked::Failed(CheckFailure::Digest));
+        assert_eq!(checked(&record), Checked::Failed(CheckFailure::Digest));
     }
 
     #[test]
@@ -997,7 +1459,7 @@ mod tests {
         slot["digest"] = json!(hex::encode(Sha256::digest(&quote)));
         reseal(&mut record, &key);
         assert!(matches!(
-            check(&record),
+            checked(&record),
             Checked::Failed(CheckFailure::Parse(_))
         ));
     }
@@ -1012,7 +1474,7 @@ mod tests {
             .unwrap()
             .clone();
         reseal(&mut record, &key);
-        assert_eq!(check(&record), Checked::Failed(CheckFailure::ReportData));
+        assert_eq!(checked(&record), Checked::Failed(CheckFailure::ReportData));
     }
 
     #[test]
@@ -1021,7 +1483,7 @@ mod tests {
         let (mut record, key) = sealed(dir.path(), "hi");
         slot_mut(&mut record)["report_data"] = json!("00".repeat(64));
         reseal(&mut record, &key);
-        assert_eq!(check(&record), Checked::Failed(CheckFailure::ReportData));
+        assert_eq!(checked(&record), Checked::Failed(CheckFailure::ReportData));
     }
 
     #[test]
@@ -1033,31 +1495,37 @@ mod tests {
         // The key named is not the key that signed.
         let mut named = record.clone();
         named["key_id"] = json!(hex::encode(outsider.verifying_key().to_bytes()));
-        assert_eq!(check(&named), Checked::Failed(CheckFailure::ProducerKey));
+        assert_eq!(checked(&named), Checked::Failed(CheckFailure::ProducerKey));
 
         // Signed again outside the TD with another key: the quote binds the
         // TD's key, so the recomputation over the new key does not match.
         let mut resigned = record.clone();
         reseal(&mut resigned, &outsider);
-        assert_eq!(check(&resigned), Checked::Failed(CheckFailure::ReportData));
+        assert_eq!(
+            checked(&resigned),
+            Checked::Failed(CheckFailure::ReportData)
+        );
     }
 
     #[test]
     fn the_page_is_told_the_outcome_of_the_checks_never_more() {
         let dir = tempfile::tempdir().unwrap();
         let (record, key) = sealed(dir.path(), "hi");
-        assert_eq!(page_fact(&record), json!({"state": "bound"}));
+        assert_eq!(
+            page_fact_pinned(&record, &test_chain().root_sha256),
+            json!({"state": "bound"})
+        );
         let mut broken = record.clone();
         slot_mut(&mut broken)["report_data"] = json!("00".repeat(64));
         reseal(&mut broken, &key);
         assert_eq!(
-            page_fact(&broken),
+            page_fact_pinned(&broken, &test_chain().root_sha256),
             json!({"state": "failed", "check": "report_data"})
         );
         let mut empty_slot = record.clone();
         *slot_mut(&mut empty_slot) = empty(names::NO_CLIENT_NONCE);
         assert_eq!(
-            page_fact(&empty_slot),
+            page_fact_pinned(&empty_slot, &test_chain().root_sha256),
             json!({"state": "absent", "context": names::NO_CLIENT_NONCE})
         );
     }
@@ -1069,7 +1537,7 @@ mod tests {
         slot_mut(&mut record)["mrtd"] = json!("00");
         reseal(&mut record, &key);
         assert!(matches!(
-            check(&record),
+            checked(&record),
             Checked::Failed(CheckFailure::Shape(_))
         ));
     }

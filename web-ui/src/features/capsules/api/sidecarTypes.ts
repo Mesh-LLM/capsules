@@ -405,7 +405,19 @@ export type TwinComparison = {
 export type TeeFact =
   | { state: 'absent'; context?: string | null }
   | { state: 'bound' }
-  | { state: 'failed'; check: 'shape' | 'digest' | 'parse' | 'report_data' | 'producer_key' }
+  | {
+      state: 'failed'
+      check:
+        | 'shape'
+        | 'digest'
+        | 'parse'
+        | 'report_data'
+        | 'producer_key'
+        | 'quote_signature'
+        | 'qe_report_signature'
+        | 'attestation_key_binding'
+        | 'pck_chain'
+    }
 
 export type PaneCRow = {
   exchange_key: string

@@ -45,12 +45,14 @@
   client nonce". The context says the quote is bound to the exchange's nonce, and fresh against
   the client's challenge only when the record shows the client chose that nonce. A host whose report interface is not TDX, or not usable by the
   plugin's user, records the slot empty exactly as before (the latter is said once in the log).
-- **What the node checks, and what it does not:** it checks the quote's SHA-256, that it parses
-  as a TDX DCAP v4 quote, that its REPORT_DATA is the one recomputed from the record, and that the
-  bound key signs the record. It does not check the quote's signatures, the PCK chain, QE
-  identity, TCB status or the measurements, so a quote that names the record is not by itself
-  evidence of a TEE. The Evidence page shows "quote bound to this record" on one line and what is
-  not checked on another.
+- **What the node checks before it calls a quote bound, all offline:** the quote's SHA-256; that
+  it parses as a TDX DCAP v4 quote; that its REPORT_DATA is the one recomputed from the record; that
+  the bound key signs the record; the quote's signature by its attestation key; the QE report's
+  signature by the PCK key; that the QE report binds the attestation key; and the PCK certificate
+  chain to the Intel SGX Root CA, pinned in the code by its SHA-256, at the record's own time. Any
+  failure shows as failed. The Evidence page then says "Quote signed by a TDX quoting enclave and
+  bound to this exchange (checked here)", and on its own line that platform status, revocation and
+  measurements are not checked here. The checks use `p256` 0.13 (ECDSA P-256) and `x509-cert` 0.2.
 
 ### Fixed
 

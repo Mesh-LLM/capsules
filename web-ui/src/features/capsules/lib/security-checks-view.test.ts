@@ -915,6 +915,7 @@ describe('buildCommitsToRows — the TDX quote (u229)', () => {
     expect(rows.map((r) => r.label)).toEqual(['TEE quote'])
     expect(rows[0].yours).toBe(TEE_COPY.failed('report_data'))
     expect(rows[0].yours).toContain('report data')
+    expect(rows[0].yours).toContain('not bound')
     expect(rows[0].yours).not.toBe(TEE_COPY.bound)
   })
 
@@ -926,6 +927,7 @@ describe('buildCommitsToRows — the TDX quote (u229)', () => {
     const shown = rows.flatMap((r) => [r.label, r.yours, r.theirs?.value ?? '', r.theirs?.note ?? ''])
     const words = [...shown, TEE_COPY.absent].join(' ').toLowerCase()
     expect(words).not.toMatch(/attest|verif/)
-    expect(TEE_COPY.platform).toContain("quote's signatures")
+    expect(TEE_COPY.bound).toContain('signed by a TDX quoting enclave')
+    expect(TEE_COPY.platform).toBe('Platform status, revocation and measurements not checked here')
   })
 })
