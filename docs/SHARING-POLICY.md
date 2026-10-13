@@ -103,18 +103,21 @@ the key its host announces for it (mesh-llm `plugin_keys.v1`), in a
 `requester_auth` member: `{"key_id", "sig"}`, where `sig` is Ed25519 over
 `evidence-request/1/requester-auth`, a zero byte, and the canonical JSON (RFC
 8785, as the `capsule-emit-evidence-request` crate encodes it) of the rest of
-the request. A signed request also carries a `nonce` and a `deadline`.
+the request. A signed request also carries an `audience` (the mesh id of the
+node it is sent to), a `nonce` and a `deadline`.
 
 Before it looks anything up, the answering node checks, in order:
 
 - the deadline is no more than 5 minutes ahead;
 - the signature verifies;
+- the `audience` is this node, so a request one node received cannot be
+  forwarded to another;
+- the nonce has not been used before its deadline;
 - a host announced the key for a node. If several nodes announced it, the
   request's `requester_id` must be one of them. If only one did, the request's
   `requester_id`, when given, must be that node. An entry in
   `CAPSULES_PEER_KEYS` alone does not count, and one that disagrees with the
-  host's vetoes it;
-- the nonce has not been used before its deadline.
+  host's vetoes it.
 
 That node is the asker. Under `counterparties`:
 
@@ -125,15 +128,16 @@ That node is the asker. Under `counterparties`:
   gets tells it nothing about the log's size.
 
 Under `peers` an unsigned request is answered, as before. A signed one is
-checked all the same.
+checked all the same. A valid signature under a key no host announced is the
+one failure answered as an unsigned request would be, and only where an
+unsigned request is answered. Every other failed check is refused.
 
-A signed request does not yet name the node it is for. A node it was sent to
-can forward it to another node before its deadline and read the answer, and
-the replay check (per node, in memory) does not stop that. Each request's digest is recorded in the "asked of you"
-log, with the key and node it was proven to come from. The checkpoint list, the
-`history_card/1` derivation and the `served_summary/1` derivation carry no
-record bodies: `share_history_segments` does not govern them, and
-`share_standard_history` does (below). The golden answers are in
+Each request's digest is recorded in the "asked of you" log, with the key and
+node it was proven to come from (or `unbound`) and the audience it named.
+
+The checkpoint list, the `history_card/1` derivation and the `served_summary/1`
+derivation carry no record bodies: `share_history_segments` does not govern
+them, and `share_standard_history` does (below). The golden answers are in
 `vectors/parity/evidence_request/`.
 
 ## Standard History (`share_standard_history`)

@@ -5,7 +5,9 @@
 //! The same file and line shape the Python reference wrote: `received_log.jsonl`, one
 //! `{ts, path, requester_id, subject_kind, status, reason}` object per line,
 //! plus who proved they asked, for an evidence request: `{request_digest,
-//! principal_key_id, principal_node_id}` (null where nothing was proven),
+//! principal_key_id, principal_node_id, principal_binding, audience}` (null
+//! where nothing was proven; `principal_binding` is `unbound` for a key that
+//! verified but no host binds, which is never a principal),
 //! in the directory `evidence_routes::EvidenceSource::received_log_dir`
 //! resolves. **Opt-in, as before:** nothing is written unless that directory
 //! existed when the plugin started and this process holds a lock covering it
@@ -64,6 +66,10 @@ pub struct Entry<'a> {
     pub principal_key_id: Option<&'a str>,
     /// The node that key is bound to, if the binding verified.
     pub principal_node_id: Option<&'a str>,
+    /// `bound`, or `unbound` for a key that verified but no host binds.
+    pub principal_binding: Option<&'a str>,
+    /// The node a signed request named as its audience, as checked.
+    pub audience: Option<&'a str>,
 }
 
 impl Entry<'_> {
@@ -78,6 +84,8 @@ impl Entry<'_> {
             "request_digest": self.request_digest,
             "principal_key_id": self.principal_key_id,
             "principal_node_id": self.principal_node_id,
+            "principal_binding": self.principal_binding,
+            "audience": self.audience,
         })
     }
 }
@@ -176,6 +184,8 @@ mod tests {
             request_digest: Some("ab"),
             principal_key_id: Some("cd"),
             principal_node_id: Some("node-a"),
+            principal_binding: Some("bound"),
+            audience: Some("node-r"),
         }
     }
 

@@ -1258,6 +1258,7 @@ async fn main() -> anyhow::Result<()> {
     // citing-record seal writes to the SAME single-writer ledger -- one
     // `CapsuleState`, shared by Arc, never a second writer.
     let capsules_for_stream = capsules.clone();
+    let self_peer_for_stream = self_peer.clone();
     let admission_address = match admission {
         Some((listener, address)) => {
             let app_state = AppState {
@@ -1426,6 +1427,7 @@ async fn main() -> anyhow::Result<()> {
         let capsules_for_stream = capsules_for_stream.clone();
         plugin.on_open_stream(move |request, context| {
             let capsules = capsules_for_stream.clone();
+            let self_peer = self_peer_for_stream.clone();
             let collector = splits_for_stream.collector.clone();
             Box::pin(async move {
                 // Seam A1: `OpenStreamRequest`
@@ -1440,7 +1442,7 @@ async fn main() -> anyhow::Result<()> {
                     // `metadata_json` is its dispatch key.
                     ledger_fetch_bridge::handle_open_stream(request, context, capsules.clone()).await
                 } else {
-                    mesh_evidence_bridge::handle_open_stream(request, context, capsules.clone()).await
+                    mesh_evidence_bridge::handle_open_stream(request, context, capsules.clone(), self_peer).await
                 };
                 // A verdict delivered over a stream lands here: the rule
                 // (when on) is evaluated with this handler's context.

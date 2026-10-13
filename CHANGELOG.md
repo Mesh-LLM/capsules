@@ -5,32 +5,43 @@
 ### Changed
 
 - **Who asks for evidence is now proven, not stated. Upgrade both nodes.** Each evidence request
-  this node sends is signed with the key its host announces for it: the request carries
-  `requester_auth` (`key_id`, `sig`), a `nonce` and a `deadline`. A node answering checks that
-  signature, and that a host announced the key for the node the request comes from, before it
-  looks anything up. A node that announces another node's key does not stop that node: the
-  request's own id picks between them. Records and Standard History are then answered only to a request the node the
-  signature proves has signed. The id a request states is no longer trusted. A request stating one node's id while signed by
-  another is refused, and so is a replayed nonce, a deadline more than 5 minutes ahead, or a key
-  no host announced.
+  this node sends is signed with the key its host announces for it. The request carries
+  `requester_auth` (`key_id`, `sig`), an `audience` (the node it is sent to), a `nonce` and a
+  `deadline`.
+  - **Before it looks anything up, a node answering checks:**
+    - the signature;
+    - that the request is addressed to it;
+    - that the nonce is new;
+    - that a host announced the key for the node the request comes from.
+  - Records and Standard History are then answered only to that node. The id a request states is
+    no longer trusted; if several nodes announced the same key, it picks between them.
+  - **Refused:**
+    - a request stating one node's id while signed by another;
+    - a request addressed to another node, so a node cannot forward a request it received and
+      read the answer;
+    - a replayed nonce;
+    - a deadline more than 5 minutes ahead.
   - **An unsigned request now gets a signed refusal wherever the answer depends on who asks:**
     `not_authorized` for a record, `policy_declined` for Standard History. It never gets
     silence.
-  - Two settings still answer unsigned requests: `share_history_segments = peers` for records,
-    and `share_standard_history = on` for Standard History.
+  - **Two settings still answer unsigned requests:** `share_history_segments = peers` for records,
+    and `share_standard_history = on` for Standard History. Under them, a valid signature under a
+    key no host announced is answered as an unsigned request, and nothing more. Any other failed
+    check is still refused.
   - **A node on 0.1.5 or older sends unsigned requests,** so after you upgrade, its requests for
     your records or Standard History are refused until it upgrades too.
-  - A node signs only once its host has taken its key. On a host without `plugin_keys.v1` its
+  - **A node signs only once its host has taken its key.** On a host without `plugin_keys.v1` its
     requests go out unsigned, so an upgraded node with the default settings no longer answers it
     any record or Standard History.
-  - A node that no record names is refused a record before the subject is looked up, with the
+  - **A node that no record names is refused a record before the subject is looked up,** with the
     same refusal for any subject, so the refusal no longer shows how large the log is.
-  - **Not yet covered:** a signed request does not name the node it is for, so a node it was sent
-    to can forward it to another node before its deadline (2 minutes) and read that node's
-    answer. The replay check is per node and held in memory, so it does not stop that forward,
-    and a restart forgets it.
-  - The "asked of you" log records each request's digest, plus the key and node it was proven to
-    come from.
+  - **The replay check is held in memory,** so a restart forgets it: a request can be repeated to
+    the same node, before its deadline, across a restart.
+  - **Keys no host announced share one replay pool** of 16,384 live nonces. While it is full,
+    their signed requests are refused even where an unsigned request is answered. Keys a host
+    announced each have their own room.
+  - **The "asked of you" log records each request's digest,** the key and node it was proven to
+    come from (or `unbound`), and the audience it named.
 - **Standard History is no longer answered to every node that asks.** A node's checkpoint list,
   `history_card/1` and `served_summary/1` now go only to a counterparty (a node one of its records
   names as the other side of an exchange). Every other node gets a signed `policy_declined` that

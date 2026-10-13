@@ -16,21 +16,24 @@
 //! `key_id` is the key this node's records are signed with, the one it
 //! announces through its host (`peer_keys::own`). The domain tag keeps a
 //! request signature from ever verifying as a record or anything else that
-//! key signs. Every other member is covered, and a signed request carries a
-//! `nonce` and a `deadline`: a responder refuses it once that deadline has
-//! passed, and refuses it a second time before then while it runs (the
-//! replay cache is in memory). It does not name the responder it is for, so
-//! one node it was sent to can still forward it to another.
+//! key signs. Every other member is covered. A signed request carries an
+//! `audience`, the node it is addressed to, so a node it was sent to cannot
+//! forward it to another; and a `nonce` and a `deadline`, so a responder
+//! refuses it once that deadline has passed, and a second time before then
+//! while it runs (the replay cache is in memory). The spec ruling is
+//! `svc-ev-m1-request-signing-ruling` with its u289 addendum.
 //!
 //! **The asker** ([`sign_outgoing`]) signs only once its host took its key
-//! ([`set_announced`]): a key no host announced is bound to no node, and a
-//! signature under it would only get the request refused.
+//! ([`set_announced`]): a key no host announced is bound to no node.
 //!
-//! **The responder** ([`check`]) runs before anything is looked up:
-//! window, signature, binding, the stated id against the bound one, replay.
-//! It yields the verified principal, the node the host's announced key is
-//! bound to ([`bound_node`]), or why there is none. `evidence_answer` decides what that means
-//! for the subject asked.
+//! **The responder** ([`check`]) runs before anything is looked up: window,
+//! signature, audience, replay, then the key's binding and the stated id
+//! against it. It yields the verified principal, the node the host's
+//! announced key is bound to ([`bound_node`]), or why there is none.
+//! `evidence_answer` decides what that means for the subject asked: a valid
+//! signature under a key no host binds ([`Failure::Unbound`]) reads as an
+//! unsigned request where the answer needs no identity; every other failure
+//! is refused.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -42,6 +45,11 @@ use serde_json::{json, Map, Value};
 
 /// The request member the signature travels in.
 pub const MEMBER: &str = "requester_auth";
+
+/// The request member naming the node a signed request is addressed to:
+/// its mesh node id, as the asker addressed the stream. Required whenever
+/// [`MEMBER`] is present.
+pub const AUDIENCE: &str = "audience";
 
 /// The domain tag: the carrier's own identifier, then the profile member.
 pub const DOMAIN_TAG: &[u8] = b"evidence-request/1/requester-auth";
@@ -58,11 +66,16 @@ pub const ASKER_DEADLINE_SECS: i64 = 120;
 /// The longest nonce a signed request may carry, in bytes.
 pub const MAX_NONCE_BYTES: usize = 256;
 
-/// The most nonces held for one key at once. Each is held at most
+/// The most nonces held for one bound key at once. Each is held at most
 /// [`MAX_WINDOW_SECS`]; past it, that key's next request is refused rather
-/// than a nonce forgotten. Only a key that verified and is bound reaches the
-/// cache, and one key filling its share refuses no other key.
+/// than a nonce forgotten, and one key filling its share refuses no other.
 pub const MAX_NONCES_PER_KEY: usize = 4096;
+
+/// The most nonces held, all together, for keys no host binds. Anyone can
+/// make such a key, so they share one pool: when it is full their signed
+/// requests are refused (sent unsigned they are answered as before), and no
+/// bound key is affected.
+pub const MAX_UNBOUND_NONCES: usize = 16_384;
 
 /// The signing input for `map`: the domain tag, a zero byte, and the map
 /// without [`MEMBER`] in the protocol crate's canonical JSON (RFC 8785 for
@@ -79,11 +92,17 @@ pub fn signing_input(map: &Map<String, Value>) -> Option<Vec<u8>> {
     Some(input)
 }
 
-/// Sign `request` as `key`: add a fresh `nonce` and a `deadline`
-/// [`ASKER_DEADLINE_SECS`] after `now` unless it carries them, then
-/// [`MEMBER`] over the rest. A request that already carries [`MEMBER`], is
-/// not a map, or has no JSON form to sign is left exactly as it is.
-pub fn sign(request: &mut Value, key: &SigningKey, now: chrono::DateTime<chrono::Utc>) {
+/// Sign `request` as `key`, addressed to the node `audience`: set
+/// [`AUDIENCE`], add a fresh `nonce` and a `deadline` [`ASKER_DEADLINE_SECS`]
+/// after `now` unless it carries them, then [`MEMBER`] over the rest. A
+/// request that already carries [`MEMBER`], is not a map, or has no JSON
+/// form to sign is left exactly as it is.
+pub fn sign(
+    request: &mut Value,
+    key: &SigningKey,
+    now: chrono::DateTime<chrono::Utc>,
+    audience: &str,
+) {
     let Some(given) = request.as_object() else {
         return;
     };
@@ -91,6 +110,7 @@ pub fn sign(request: &mut Value, key: &SigningKey, now: chrono::DateTime<chrono:
         return;
     }
     let mut map = given.clone();
+    map.insert(AUDIENCE.into(), json!(audience));
     map.entry("nonce")
         .or_insert_with(|| json!(crate::producer::capsule::fresh_store_nonce()));
     map.entry("deadline").or_insert_with(|| {
@@ -122,11 +142,11 @@ pub fn set_announced(key: SigningKey) {
     let _ = signer().set(key);
 }
 
-/// Sign an outgoing request ([`sign`]) when this node's key is announced;
-/// otherwise leave it unsigned, as before.
-pub fn sign_outgoing(request: &mut Value) {
+/// Sign an outgoing request to the node `audience` ([`sign`]) when this
+/// node's key is announced; otherwise leave it unsigned, as before.
+pub fn sign_outgoing(request: &mut Value, audience: &str) {
     if let Some(key) = signer().get() {
-        sign(request, key, chrono::Utc::now());
+        sign(request, key, chrono::Utc::now(), audience);
     }
 }
 
@@ -135,12 +155,12 @@ pub fn sign_outgoing(request: &mut Value) {
 pub enum Form {
     /// No [`MEMBER`].
     Unsigned,
-    /// A well-formed [`MEMBER`], with the `nonce` and `deadline` a signed
-    /// request carries.
+    /// A well-formed [`MEMBER`], with the [`AUDIENCE`], `nonce` and
+    /// `deadline` a signed request carries.
     Signed { key_id: String, sig: String },
     /// [`MEMBER`] is there but is not `{key_id, sig}` in lowercase hex of the
-    /// right lengths, or the request lacks a `nonce` of 1 to
-    /// [`MAX_NONCE_BYTES`] bytes or a `deadline`: `request_malformed`.
+    /// right lengths, or the request lacks a text [`AUDIENCE`], a `nonce` of
+    /// 1 to [`MAX_NONCE_BYTES`] bytes or a `deadline`: `request_malformed`.
     Malformed,
 }
 
@@ -167,7 +187,10 @@ pub fn form(map: &Map<String, Value>) -> Form {
         .get("nonce")
         .and_then(Value::as_str)
         .is_some_and(|n| (1..=MAX_NONCE_BYTES).contains(&n.len()));
-    if !nonce_ok || !map.get("deadline").is_some_and(Value::is_string) {
+    if !nonce_ok
+        || !map.get("deadline").is_some_and(Value::is_string)
+        || !map.get(AUDIENCE).is_some_and(Value::is_string)
+    {
         return Form::Malformed;
     }
     Form::Signed {
@@ -206,37 +229,71 @@ pub fn claimants(
         .collect()
 }
 
-/// The node a request signed under `key_id` comes from, given the id it
-/// states: that id when it is one of the key's [`claimants`] (the signature
-/// proves the asker holds the key, and that node announced it); with no id
-/// stated, the key's one claimant. `Err` with the key's one claimant when
-/// the stated id is another node; `Err(None)` when the key is bound to no
-/// node, or to several and the request names none of them.
-pub fn bound_node(claimants: &[String], stated: Option<&str>) -> Result<String, Option<String>> {
-    if let Some(id) = stated {
-        if claimants.iter().any(|node| node == id) {
-            return Ok(id.to_string());
-        }
-    }
+/// What a key's [`claimants`] and a request's stated id make of who asks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Binding {
+    /// The node the request comes from: the stated id when it is one of the
+    /// claimants (the signature proves the asker holds the key, and that
+    /// node announced it), or the key's one claimant when none is stated.
+    Node(String),
+    /// The key is bound, but the stated id is none of its nodes: a false
+    /// claim. Carries the key's node when it has exactly one.
+    Mismatch(Option<String>),
+    /// No host binds the key, or several nodes announced it and the request
+    /// states no id to pick between them.
+    Unbound,
+}
+
+/// The [`Binding`] of a request signed under a key with these
+/// `claimants`, stating `stated`.
+pub fn bound_node(claimants: &[String], stated: Option<&str>) -> Binding {
     match (claimants, stated) {
-        ([one], None) => Ok(one.clone()),
-        ([one], Some(_)) => Err(Some(one.clone())),
-        _ => Err(None),
+        ([], _) => Binding::Unbound,
+        (_, Some(id)) if claimants.iter().any(|node| node == id) => Binding::Node(id.to_string()),
+        ([one], Some(_)) => Binding::Mismatch(Some(one.clone())),
+        (_, Some(_)) => Binding::Mismatch(None),
+        ([one], None) => Binding::Node(one.clone()),
+        (_, None) => Binding::Unbound,
     }
 }
 
-/// The nonces seen, per key, each held until its deadline.
+/// The nonces seen, each held until its deadline: per key for bound keys,
+/// and in one shared pool for keys no host binds.
 #[derive(Default)]
 pub struct ReplayCache {
-    seen: Mutex<HashMap<String, HashMap<String, i64>>>,
+    bound: Mutex<HashMap<String, HashMap<String, i64>>>,
+    unbound: Mutex<HashMap<(String, String), i64>>,
 }
 
 impl ReplayCache {
     /// Record `nonce` for `key_id` until `deadline` (Unix seconds). `false`
-    /// when it is already held, or when that key already holds
-    /// [`MAX_NONCES_PER_KEY`] nonces whose deadline has not passed.
-    pub fn first_use(&self, key_id: &str, nonce: &str, deadline: i64, now: i64) -> bool {
-        let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
+    /// when it is already held, or when there is no room for it: a bound key
+    /// already holding [`MAX_NONCES_PER_KEY`] live nonces, or unbound keys
+    /// together holding [`MAX_UNBOUND_NONCES`].
+    pub fn first_use(
+        &self,
+        key_id: &str,
+        nonce: &str,
+        deadline: i64,
+        now: i64,
+        bound: bool,
+    ) -> bool {
+        if !bound {
+            let mut seen = self.unbound.lock().unwrap_or_else(PoisonError::into_inner);
+            let pair = (key_id.to_string(), nonce.to_string());
+            if seen.get(&pair).is_some_and(|&until| until >= now) {
+                return false;
+            }
+            if seen.len() >= MAX_UNBOUND_NONCES {
+                seen.retain(|_, &mut until| until >= now);
+            }
+            if seen.len() >= MAX_UNBOUND_NONCES {
+                return false;
+            }
+            seen.insert(pair, deadline);
+            return true;
+        }
+        let mut seen = self.bound.lock().unwrap_or_else(PoisonError::into_inner);
         seen.retain(|_, nonces| {
             nonces.retain(|_, &mut until| until >= now);
             !nonces.is_empty()
@@ -274,20 +331,29 @@ pub struct Principal {
     pub node_id: String,
 }
 
-/// Why a signed request names no principal. Each is refused.
+/// Why a signed request names no principal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Failure {
     /// The deadline is more than [`MAX_WINDOW_SECS`] ahead.
     OutsideWindow,
     /// The signature does not verify over the signing input.
     BadSignature,
-    /// The key is bound to no node, or to several and the request names
-    /// none of them.
+    /// The request is addressed to another node than this one (or this node
+    /// does not know its own id yet).
+    AudienceMismatch { key_id: String },
+    /// This (key_id, nonce) was already seen within its deadline, or there
+    /// is no room to hold it.
+    Replayed { key_id: String },
+    /// The key is bound to no node, or to several and the request states
+    /// no id. The only failure that may read as unsigned
+    /// ([`Failure::reads_as_unsigned`]).
     Unbound { key_id: String },
-    /// The request states a `requester_id` other than the bound node.
-    ClaimMismatch { key_id: String, node_id: String },
-    /// This (key_id, nonce) was already answered within its deadline.
-    Replayed { key_id: String, node_id: String },
+    /// The key is bound, and the request states a `requester_id` that is
+    /// none of its nodes (`node_id`: its node, when it has one).
+    ClaimMismatch {
+        key_id: String,
+        node_id: Option<String>,
+    },
 }
 
 impl Failure {
@@ -295,26 +361,36 @@ impl Failure {
     pub fn verified_key(&self) -> Option<&str> {
         match self {
             Failure::OutsideWindow | Failure::BadSignature => None,
-            Failure::Unbound { key_id }
-            | Failure::ClaimMismatch { key_id, .. }
-            | Failure::Replayed { key_id, .. } => Some(key_id),
+            Failure::AudienceMismatch { key_id }
+            | Failure::Replayed { key_id }
+            | Failure::Unbound { key_id }
+            | Failure::ClaimMismatch { key_id, .. } => Some(key_id),
         }
     }
 
     /// The node that key is bound to, if the binding verified.
     pub fn verified_node(&self) -> Option<&str> {
         match self {
-            Failure::ClaimMismatch { node_id, .. } | Failure::Replayed { node_id, .. } => {
-                Some(node_id)
-            }
+            Failure::ClaimMismatch { node_id, .. } => node_id.as_deref(),
             _ => None,
         }
     }
+
+    /// Whether a request that failed this way is answered as an unsigned
+    /// one would be, where the answer needs no identity: only a valid
+    /// signature under a key the host cannot bind (ruling addendum §2).
+    /// Every other failure is refused.
+    pub fn reads_as_unsigned(&self) -> bool {
+        matches!(self, Failure::Unbound { .. })
+            || cfg!(feature = "mutant-requester-auth-downgrades-all")
+    }
 }
 
-/// Check a [`Form::Signed`] request: its window, its signature, its key's
-/// binding, its stated id against the bound one, and its nonce, in that
-/// order, before anything else is read. `deadline` is the parsed request's.
+/// Check a [`Form::Signed`] request, before anything else is read: its
+/// window, its signature, its [`AUDIENCE`] against `own_node` (this node's
+/// id), its nonce, then its key's binding and its stated id against the
+/// bound one. `deadline` is the parsed request's.
+#[allow(clippy::too_many_arguments)]
 pub fn check(
     map: &Map<String, Value>,
     key_id: &str,
@@ -323,6 +399,7 @@ pub fn check(
     now: UtcTime,
     keys: Keys<'_>,
     replay: &ReplayCache,
+    own_node: Option<&str>,
 ) -> Result<Principal, Failure> {
     if deadline.seconds > now.seconds.saturating_add(MAX_WINDOW_SECS) {
         return Err(Failure::OutsideWindow);
@@ -330,37 +407,52 @@ pub fn check(
     if !verifies(map, key_id, sig) {
         return Err(Failure::BadSignature);
     }
+    let audience = map.get(AUDIENCE).and_then(Value::as_str);
+    if !audience_matches(audience, own_node) {
+        return Err(Failure::AudienceMismatch {
+            key_id: key_id.to_string(),
+        });
+    }
     let stated = map
         .get("requester_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|id| !id.is_empty());
     let claimants = claimants(keys.announced, keys.configured, key_id);
+    let nonce = map.get("nonce").and_then(Value::as_str).unwrap_or_default();
+    let bound = !claimants.is_empty();
+    if !replay.first_use(key_id, nonce, deadline.seconds, now.seconds, bound) {
+        return Err(Failure::Replayed {
+            key_id: key_id.to_string(),
+        });
+    }
     let node_id = match bound_node(&claimants, stated) {
-        Ok(node_id) => node_id,
-        Err(Some(node_id)) => {
+        Binding::Node(node_id) => node_id,
+        Binding::Mismatch(node_id) => {
             return Err(Failure::ClaimMismatch {
                 key_id: key_id.to_string(),
                 node_id,
             })
         }
-        Err(None) => {
+        Binding::Unbound => {
             return Err(Failure::Unbound {
                 key_id: key_id.to_string(),
             })
         }
     };
-    let nonce = map.get("nonce").and_then(Value::as_str).unwrap_or_default();
-    if !replay.first_use(key_id, nonce, deadline.seconds, now.seconds) {
-        return Err(Failure::Replayed {
-            key_id: key_id.to_string(),
-            node_id,
-        });
-    }
     Ok(Principal {
         key_id: key_id.to_string(),
         node_id,
     })
+}
+
+/// Whether a signed request's [`AUDIENCE`] is this node, compared as exact
+/// strings. A node that does not know its own id yet matches nothing.
+fn audience_matches(audience: Option<&str>, own_node: Option<&str>) -> bool {
+    if cfg!(feature = "mutant-requester-auth-skips-audience") {
+        return true;
+    }
+    matches!((audience, own_node), (Some(a), Some(own)) if a == own)
 }
 
 /// Whether `sig` verifies over [`signing_input`] of `map` under `key_id`,
@@ -398,7 +490,12 @@ mod tests {
 
     fn signed(seed: u8) -> Map<String, Value> {
         let mut request = json!({"subject": {"checkpoints": null}, "coverage": {"min_freshness": 60}, "nonce": "n-1"});
-        sign(&mut request, &key(seed), at("2026-10-13T00:00:00Z"));
+        sign(
+            &mut request,
+            &key(seed),
+            at("2026-10-13T00:00:00Z"),
+            "node-r",
+        );
         request.as_object().unwrap().clone()
     }
 
@@ -411,8 +508,9 @@ mod tests {
         assert_eq!(key_id, hex::encode(key(1).verifying_key().to_bytes()));
         assert_eq!(map["nonce"], json!("n-1"), "a caller's nonce is kept");
         assert_eq!(map["deadline"], json!("2026-10-13T00:02:00Z"));
+        assert_eq!(map[AUDIENCE], json!("node-r"));
         let mut fresh = json!({"subject": {"checkpoints": null}});
-        sign(&mut fresh, &key(1), at("2026-10-13T00:00:00Z"));
+        sign(&mut fresh, &key(1), at("2026-10-13T00:00:00Z"), "node-r");
         assert!(is_lower_hex(fresh["nonce"].as_str().unwrap(), 64));
     }
 
@@ -467,6 +565,12 @@ mod tests {
         let mut no_deadline = base.clone();
         no_deadline.remove("deadline");
         assert_eq!(form(&no_deadline), Form::Malformed);
+        let mut no_audience = base.clone();
+        no_audience.remove(AUDIENCE);
+        assert_eq!(form(&no_audience), Form::Malformed);
+        let mut audience_not_text = base.clone();
+        audience_not_text.insert(AUDIENCE.into(), json!(["node-r"]));
+        assert_eq!(form(&audience_not_text), Form::Malformed);
     }
 
     #[test]
@@ -487,41 +591,80 @@ mod tests {
     /// naming another node than a key's one claimant is a false claim.
     #[test]
     fn the_stated_id_picks_among_the_nodes_that_announced_the_key() {
+        let node = |id: &str| Binding::Node(id.to_string());
         let both = ["node-a".to_string(), "node-m".to_string()];
-        assert_eq!(bound_node(&both, Some("node-a")), Ok("node-a".into()));
-        assert_eq!(bound_node(&both, None), Err(None));
-        assert_eq!(bound_node(&both, Some("node-z")), Err(None));
+        assert_eq!(bound_node(&both, Some("node-a")), node("node-a"));
+        assert_eq!(bound_node(&both, None), Binding::Unbound);
+        assert_eq!(bound_node(&both, Some("node-z")), Binding::Mismatch(None));
         let one = ["node-a".to_string()];
-        assert_eq!(bound_node(&one, None), Ok("node-a".into()));
-        assert_eq!(bound_node(&one, Some("node-a")), Ok("node-a".into()));
-        assert_eq!(bound_node(&one, Some("node-z")), Err(Some("node-a".into())));
-        assert_eq!(bound_node(&[], Some("node-a")), Err(None));
+        assert_eq!(bound_node(&one, None), node("node-a"));
+        assert_eq!(bound_node(&one, Some("node-a")), node("node-a"));
+        assert_eq!(
+            bound_node(&one, Some("node-z")),
+            Binding::Mismatch(Some("node-a".into()))
+        );
+        assert_eq!(bound_node(&[], Some("node-a")), Binding::Unbound);
     }
 
     #[test]
     fn a_nonce_is_used_once_until_its_deadline() {
         let cache = ReplayCache::default();
-        assert!(cache.first_use("k", "n", 100, 0));
-        assert!(!cache.first_use("k", "n", 100, 50));
-        assert!(cache.first_use("k2", "n", 100, 50), "per key");
-        assert!(cache.first_use("k", "n", 300, 101), "after its deadline");
+        assert!(cache.first_use("k", "n", 100, 0, true));
+        assert!(!cache.first_use("k", "n", 100, 50, true));
+        assert!(cache.first_use("k2", "n", 100, 50, true), "per key");
+        assert!(
+            cache.first_use("k", "n", 300, 101, true),
+            "after its deadline"
+        );
+        assert!(cache.first_use("u", "n", 100, 0, false));
+        assert!(
+            !cache.first_use("u", "n", 100, 50, false),
+            "an unbound key's nonce too"
+        );
     }
 
     #[test]
     fn a_key_that_fills_its_share_refuses_only_itself_until_its_nonces_expire() {
         let cache = ReplayCache::default();
         for i in 0..MAX_NONCES_PER_KEY {
-            assert!(cache.first_use("noisy", &i.to_string(), 100, 0));
+            assert!(cache.first_use("noisy", &i.to_string(), 100, 0, true));
         }
-        assert!(!cache.first_use("noisy", "one-more", 100, 1));
+        assert!(!cache.first_use("noisy", "one-more", 100, 1, true));
         assert!(
-            cache.first_use("quiet", "n", 100, 1),
+            cache.first_use("quiet", "n", 100, 1, true),
             "another key is unaffected"
         );
         assert!(
-            cache.first_use("noisy", "one-more", 200, 101),
+            cache.first_use("noisy", "one-more", 200, 101, true),
             "after they expire"
         );
+    }
+
+    /// Keys no host binds share one pool: filling it refuses only them.
+    #[test]
+    fn unbound_keys_share_one_pool_and_cannot_crowd_out_a_bound_key() {
+        let cache = ReplayCache::default();
+        for i in 0..MAX_UNBOUND_NONCES {
+            assert!(cache.first_use(&format!("k{i}"), "n", 100, 0, false));
+        }
+        assert!(!cache.first_use("fresh", "n", 100, 1, false));
+        assert!(cache.first_use("bound", "n", 100, 1, true));
+        assert!(!cache.first_use("k0", "n", 100, 1, false), "still a replay");
+        assert!(
+            cache.first_use("fresh", "n", 200, 101, false),
+            "after they expire"
+        );
+    }
+
+    /// The audience is this node's id, exactly; a node that does not know
+    /// its id matches nothing.
+    #[test]
+    fn the_audience_must_be_exactly_this_node() {
+        assert!(audience_matches(Some("node-r"), Some("node-r")));
+        assert!(!audience_matches(Some("node-x"), Some("node-r")));
+        assert!(!audience_matches(Some("node-r "), Some("node-r")));
+        assert!(!audience_matches(Some("node-r"), None));
+        assert!(!audience_matches(None, Some("node-r")));
     }
 
     #[test]
@@ -529,7 +672,7 @@ mod tests {
         let mut request =
             json!({"subject": {"checkpoints": null}, "coverage": {"min_freshness": 1.5}});
         let given = request.clone();
-        sign(&mut request, &key(1), at("2026-10-13T00:00:00Z"));
+        sign(&mut request, &key(1), at("2026-10-13T00:00:00Z"), "node-r");
         assert_eq!(
             request, given,
             "no nonce or deadline added to an unsigned request"
@@ -541,10 +684,15 @@ mod tests {
     #[test]
     fn an_asker_signs_only_once_its_key_is_announced() {
         let mut request = json!({"subject": {"checkpoints": null}});
-        sign_outgoing(&mut request);
+        sign_outgoing(&mut request, "node-r");
         assert_eq!(form(request.as_object().unwrap()), Form::Unsigned);
         set_announced(key(3));
-        sign_outgoing(&mut request);
+        sign_outgoing(&mut request, "node-r");
+        assert_eq!(
+            request[AUDIENCE],
+            json!("node-r"),
+            "addressed to the node it goes to"
+        );
         let Form::Signed { key_id, sig } = form(request.as_object().unwrap()) else {
             panic!("not signed: {request}");
         };

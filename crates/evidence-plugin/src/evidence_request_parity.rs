@@ -41,6 +41,10 @@ const NOW: &str = "2026-09-29T00:00:00Z";
 /// A throwaway test key, public by design: it signs only this corpus.
 pub(crate) const NODE_KEY_SEED: [u8; 32] = [0x5e; 32];
 
+/// The answering node's own mesh id, which a signed request's `audience`
+/// names.
+pub(crate) const RESPONDER_NODE: &str = "node-r";
+
 /// The nodes that ask. node-a and node-b are the corpus's counterparties;
 /// node-y and node-z are named by no record.
 pub(crate) const ASKERS: [&str; 4] = ["node-a", "node-b", "node-y", "node-z"];
@@ -67,7 +71,7 @@ pub(crate) fn announced_keys() -> BTreeMap<String, String> {
 fn signed_as(key: &SigningKey, name: &str, mut request: Value) -> Value {
     request["nonce"] = json!(hex::encode(Sha256::digest(name.as_bytes())));
     let now = chrono::DateTime::parse_from_rfc3339(NOW).unwrap().into();
-    crate::requester_auth::sign(&mut request, key, now);
+    crate::requester_auth::sign(&mut request, key, now, RESPONDER_NODE);
     request
 }
 
@@ -367,13 +371,49 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
         ),
         case(
             "record_signed_by_an_unannounced_key",
-            "a key no host announced binds no node",
+            "a valid signature under a key no host binds reads as unsigned where no identity is needed",
             "peers",
             signed_as(
                 &SigningKey::from_bytes(&[0x77; 32]),
                 "record_signed_by_an_unannounced_key",
                 req(json!({"record": id(0)}), &latest),
             ),
+        ),
+        case(
+            "record_signed_by_an_unannounced_key_needing_identity",
+            "a key no host binds proves no node, where the answer needs one",
+            "counterparties",
+            signed_as(
+                &SigningKey::from_bytes(&[0x77; 32]),
+                "record_signed_by_an_unannounced_key_needing_identity",
+                req(json!({"record": id(0)}), &latest),
+            ),
+        ),
+        case(
+            "record_signed_without_an_audience",
+            "a signed request must name the node it is addressed to",
+            "peers",
+            {
+                let mut r = signed_as(
+                    &asker_key("node-a"),
+                    "record_signed_without_an_audience",
+                    req(json!({"record": id(0)}), &latest),
+                );
+                r.as_object_mut().unwrap().remove(crate::requester_auth::AUDIENCE);
+                r
+            },
+        ),
+        case(
+            "record_relayed_from_another_audience",
+            "a request signed for another node is refused before lookup, even under peers",
+            "peers",
+            {
+                let mut r = req(json!({"record": id(0)}), &latest);
+                r["nonce"] = json!(hex::encode(Sha256::digest(b"record_relayed_from_another_audience")));
+                let now = chrono::DateTime::parse_from_rfc3339(NOW).unwrap().into();
+                crate::requester_auth::sign(&mut r, &asker_key("node-a"), now, "node-x");
+                r
+            },
         ),
         case(
             "requester_auth_short_key",
@@ -791,6 +831,7 @@ fn build_corpus() -> Value {
         "path": "evidence-request",
         "now": NOW,
         "announced_keys": announced_keys(),
+        "node_id": RESPONDER_NODE,
         "ledger": ledger,
         "checkpoints": cps,
         "cases": cases,
@@ -895,6 +936,7 @@ fn run(corpus: &Value) -> BTreeMap<String, Value> {
                 configured: None,
             },
             replay: &replay,
+            node_id: corpus["node_id"].as_str(),
         };
         let busy = case.get("busy").and_then(Value::as_bool).unwrap_or(false);
         let outcome = evidence_answer::answer_and_log(&bytes, busy, &responder, Some(&log_dir));

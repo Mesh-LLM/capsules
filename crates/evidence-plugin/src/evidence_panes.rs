@@ -200,6 +200,8 @@ pub(crate) fn read_received_log(dir: &Path) -> Vec<Value> {
                 "request_digest": entry.get("request_digest").cloned().unwrap_or(Value::Null),
                 "principal_key_id": entry.get("principal_key_id").cloned().unwrap_or(Value::Null),
                 "principal_node_id": entry.get("principal_node_id").cloned().unwrap_or(Value::Null),
+                "principal_binding": entry.get("principal_binding").cloned().unwrap_or(Value::Null),
+                "audience": entry.get("audience").cloned().unwrap_or(Value::Null),
             })
         })
         .collect();

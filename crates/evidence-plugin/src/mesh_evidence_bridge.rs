@@ -149,14 +149,26 @@ pub async fn handle_open_stream(
     request: OpenStreamRequest,
     _context: &mut PluginContext<'_>,
     capsules: std::sync::Arc<crate::capsule_emit::CapsuleState>,
+    self_peer: crate::self_peer::SelfPeer,
 ) -> PluginResult<Option<OpenStreamResponse>> {
     let listener = bind_side_stream(crate::PLUGIN_ID, &request.stream_id)
         .await
         .map_err(|error| PluginError::internal(error.to_string()))?;
     let response = listener.open_stream_response(&request);
+    // The id askers address this node by: what the host reports, the id a
+    // peer opens the stream to. Never the operator's override, which names
+    // this node to pushes, not to the mesh. Until the host reports it, no
+    // signed request is addressed to this node and each is refused.
+    let own_node = self_peer.learned();
+    if own_node.is_none() {
+        tracing::warn!(
+            "this node's own mesh id is not known yet: signed evidence requests are refused \
+             until the host reports it"
+        );
+    }
 
     tokio::spawn(async move {
-        if let Err(error) = bridge_inbound_evidence_stream(listener, capsules).await {
+        if let Err(error) = bridge_inbound_evidence_stream(listener, capsules, own_node).await {
             tracing::warn!(%error, "mesh evidence-request responder bridge failed");
         }
     });
@@ -172,6 +184,7 @@ static IN_FLIGHT: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceL
 async fn bridge_inbound_evidence_stream(
     listener: mesh_llm_plugin::LocalListener,
     capsules: std::sync::Arc<crate::capsule_emit::CapsuleState>,
+    own_node: Option<String>,
 ) -> anyhow::Result<()> {
     let bound = responder_http_timeout();
     let local = tokio::time::timeout(bound, listener.accept()).await??;
@@ -189,7 +202,7 @@ async fn bridge_inbound_evidence_stream(
     )
     .await??;
 
-    let response_bytes = match answer_in_process(capsules, request_bytes).await {
+    let response_bytes = match answer_in_process(capsules, request_bytes, own_node).await {
         Some(bytes) => bytes,
         // Nothing this node can sign: send nothing, never an unsigned
         // stand-in. The requester records an absence.
@@ -209,6 +222,7 @@ async fn bridge_inbound_evidence_stream(
 async fn answer_in_process(
     capsules: std::sync::Arc<crate::capsule_emit::CapsuleState>,
     request_bytes: Vec<u8>,
+    own_node: Option<String>,
 ) -> Option<Vec<u8>> {
     let permit = IN_FLIGHT
         .get_or_init(|| tokio::sync::Semaphore::new(MAX_IN_FLIGHT_ANSWERS))
@@ -241,6 +255,7 @@ async fn answer_in_process(
                 configured: configured.as_deref(),
             },
             replay: crate::requester_auth::replay_cache(),
+            node_id: own_node.as_deref(),
         };
         let log_dir = capsules
             .ledger_dir()
@@ -287,9 +302,17 @@ pub(crate) async fn send_evidence_request(
     peer_id: &str,
     request: &serde_json::Value,
 ) -> Result<(Vec<u8>, serde_json::Value), SendError> {
+    // The host reads a hex id in either case; a node's own id is lowercase.
+    // One form, for the stream and for the audience it is signed for.
+    let peer_id = peer_id.trim();
+    let peer_id = if peer_id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        peer_id.to_ascii_lowercase()
+    } else {
+        peer_id.to_string()
+    };
     let open_request = OpenMeshStreamRequest {
         stream_id: next_stream_id("evidence-request"),
-        target_peer_id: peer_id.to_string(),
+        target_peer_id: peer_id.clone(),
         plugin_id: String::new(), // host fills this in from the connection.
         channel: EVIDENCE_REQUEST_CHANNEL.to_string(),
         purpose: mesh_llm_plugin::proto::StreamPurpose::Generic as i32,
@@ -307,7 +330,7 @@ pub(crate) async fn send_evidence_request(
         .map_err(|error| SendError::NotOpened(error.to_string()))?;
     let (mut read_half, mut write_half) = stream.into_split();
     let mut request = request.clone();
-    crate::requester_auth::sign_outgoing(&mut request);
+    crate::requester_auth::sign_outgoing(&mut request, &peer_id);
     let request_bytes =
         serde_json::to_vec(&request).map_err(|error| SendError::Malformed(error.to_string()))?;
     let write_and_read = async {
@@ -423,9 +446,10 @@ pub struct MeshEvidenceRequestArgs {
     /// The request map (draft-mih-agent-evidence-request-00), sent as given.
     /// When it names no `requester_id`, this node's own mesh id is added (it
     /// is this node's word). Once this node's key is announced, the request
-    /// is also signed (`requester_auth`): a `nonce` and a `deadline` are added
-    /// unless it carries them, then `requester_auth` over the whole map. The
-    /// responder answers what depends on who asks only to a signed request.
+    /// is also signed (`requester_auth`): its `audience` is set to `peer_id`,
+    /// a `nonce` and a `deadline` are added unless it carries them, then
+    /// `requester_auth` over the whole map. The responder answers what
+    /// depends on who asks only to a signed request addressed to it.
     pub request: serde_json::Value,
     /// Check what comes back against the peer's announced key
     /// (`CAPSULES_PEER_KEYS`). **On unless the caller turns it off**

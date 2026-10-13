@@ -43,6 +43,12 @@ mutant-own-key-not-announced = []
 # it and requires the requester-auth tests to FAIL on PRD T3, a node signing
 # under another node's key id.
 mutant-requester-auth-skips-verify = []
+# Deliberately-broken responder: accepts a signed request addressed to any
+# node. CI requires the relay test to FAIL.
+mutant-requester-auth-skips-audience = []
+# Deliberately-broken responder: answers every failed signature as an
+# unsigned request would be. CI requires the never-downgraded tests to FAIL.
+mutant-requester-auth-downgrades-all = []
 
 # The referee's implementation mutants: each builds the referee with one
 # deliberate fault (vectors/parity/referee/mutants.json names the fault and

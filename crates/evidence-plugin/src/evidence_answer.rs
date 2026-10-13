@@ -15,15 +15,17 @@
 //! 1. the request's size ([`MAX_REQUEST_BYTES`]) → `policy_declined`, before
 //!    it is parsed;
 //! 2. parsing → `request_malformed` / `coverage_unsatisfiable`, and a
-//!    malformed `requester_auth` → `request_malformed`;
+//!    malformed `requester_auth` (or a signed request with no `audience`)
+//!    → `request_malformed`;
 //! 3. a deadline already past → `deadline_unmet`;
 //! 4. the sharing policy switched `off` for any request that carries record
 //!    bodies → `not_authorized`, before anything is looked up;
 //! 5. who asks (`requester_auth`), before the ledger is read: a signature
-//!    that fails its
-//!    window, its key, its binding, its stated id or its nonce → refused; an
-//!    unsigned request whose answer depends on who asks → refused (see
-//!    below);
+//!    that fails its window, its key, its `audience` (this node), its nonce
+//!    or its stated id → refused; a valid signature under a key no host
+//!    binds → read as unsigned where the answer needs no identity, refused
+//!    otherwise; an unsigned request whose answer depends on who asks →
+//!    refused (see below);
 //! 6. an answer that depends on who asks, to a node no record of this one
 //!    names → refused, before the subject is looked up;
 //! 7. resolution against the index → the crate's reason;
@@ -49,11 +51,11 @@
 //! record bodies and are not gated by it.
 //!
 //! **Who asks** is the node a signed request proved it came from: the
-//! `requester_auth` signature verifies under a key the host announced for
-//! exactly one peer, and that peer is the principal (`requester_auth`). A
-//! request's `requester_id` is only the asker's word: one that names any
-//! other node than the principal is refused, and an unsigned request has no
-//! principal at all. So an answer that depends on who asks (record bodies
+//! `requester_auth` signature verifies under a key a host announced for that
+//! node, and the request names this node as its `audience`
+//! (`requester_auth`). A request's `requester_id` is only the asker's word:
+//! it picks among nodes that announced the same key, one that names any
+//! other node is refused, and an unsigned request has no principal at all. So an answer that depends on who asks (record bodies
 //! unless they go to any peer, Standard History unless it is shared) is
 //! refused to an unsigned request, before the ledger is read. Under `peers`,
 //! or with Standard History shared, an unsigned request is answered as
@@ -138,6 +140,10 @@ pub struct Responder<'a> {
     /// The (key_id, nonce) pairs already answered
     /// (`requester_auth::replay_cache()`).
     pub replay: &'a requester_auth::ReplayCache,
+    /// This node's own mesh node id, which a signed request's `audience`
+    /// must name. `None` until the host has reported it: then no signed
+    /// request is addressed to this node.
+    pub node_id: Option<&'a str>,
 }
 
 /// The one outcome of a request.
@@ -206,6 +212,11 @@ pub fn requester_id(request_bytes: &[u8]) -> Option<String> {
 pub struct Asker {
     pub key_id: Option<String>,
     pub node_id: Option<String>,
+    /// `bound` when the key is bound to `node_id`; `unbound` when the
+    /// signature verified under a key no host binds (never a principal).
+    pub binding: Option<&'static str>,
+    /// The `audience` a signed request named, as checked.
+    pub audience: Option<String>,
 }
 
 /// Answer `request_bytes`, exactly as received.
@@ -339,7 +350,11 @@ fn requester(
         Form::Unsigned => Ok(None),
         Form::Signed { key_id, sig } => {
             let deadline = req.deadline.ok_or(Reason::RequestMalformed)?;
-            match requester_auth::check(
+            let audience = map
+                .get(requester_auth::AUDIENCE)
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let checked = requester_auth::check(
                 map,
                 &key_id,
                 &sig,
@@ -347,15 +362,39 @@ fn requester(
                 now,
                 responder.keys,
                 responder.replay,
-            ) {
+                responder.node_id,
+            );
+            // The audience is recorded as checked: once the signature
+            // verified.
+            if checked
+                .as_ref()
+                .map_or_else(|f| f.verified_key().is_some(), |_| true)
+            {
+                asker.audience = audience;
+            }
+            match checked {
                 Ok(principal) => {
                     asker.key_id = Some(principal.key_id.clone());
                     asker.node_id = Some(principal.node_id.clone());
+                    asker.binding = Some("bound");
                     Ok(Some(principal))
                 }
                 Err(failure) => {
                     asker.key_id = failure.verified_key().map(str::to_string);
                     asker.node_id = failure.verified_node().map(str::to_string);
+                    if matches!(failure, requester_auth::Failure::ClaimMismatch { .. }) {
+                        asker.binding = Some("bound");
+                    }
+                    // A valid signature under a key no host binds reads as
+                    // an unsigned request where the answer needs no
+                    // identity, and gets nothing more (ruling addendum §2).
+                    if failure.reads_as_unsigned() && !needed {
+                        asker.binding = Some("unbound");
+                        return Ok(None);
+                    }
+                    if matches!(failure, requester_auth::Failure::Unbound { .. }) {
+                        asker.binding = Some("unbound");
+                    }
                     Err(if needed {
                         refused
                     } else {
@@ -657,6 +696,8 @@ pub fn answer_and_log(
             request_digest: Some(&digest),
             principal_key_id: asker.key_id.as_deref(),
             principal_node_id: asker.node_id.as_deref(),
+            principal_binding: asker.binding,
+            audience: asker.audience.as_deref(),
         },
     );
     outcome
@@ -909,6 +950,9 @@ mod tests {
 
     const NOW: &str = "2026-09-29T00:00:00Z";
 
+    /// This node's own mesh id, which a signed request's audience names.
+    const RESPONDER: &str = crate::evidence_request_parity::RESPONDER_NODE;
+
     fn key() -> SigningKey {
         SigningKey::from_bytes(&NODE_KEY_SEED)
     }
@@ -924,7 +968,7 @@ mod tests {
     /// `request` signed with `key` at [`NOW`] (`requester_auth::sign`).
     fn signed_with(key: &SigningKey, request: &Value) -> Vec<u8> {
         let mut request = request.clone();
-        requester_auth::sign(&mut request, key, now());
+        requester_auth::sign(&mut request, key, now(), RESPONDER);
         serde_json::to_vec(&request).unwrap()
     }
 
@@ -966,6 +1010,7 @@ mod tests {
                     configured: None,
                 },
                 replay,
+                node_id: Some(RESPONDER),
             },
         )
     }
@@ -1177,6 +1222,7 @@ mod tests {
                 configured: None,
             },
             replay: &replay,
+            node_id: Some(RESPONDER),
         };
         let bytes = br#"{"subject":{"checkpoints":null},"coverage":{"min_freshness":1}}"#;
         let Outcome::Refused { wire, reason, .. } = decline_busy(bytes, &responder) else {
@@ -1202,6 +1248,7 @@ mod tests {
                 configured: None,
             },
             replay: &replay,
+            node_id: Some(RESPONDER),
         };
         assert!(matches!(
             answer(b"{}", &responder),
@@ -1737,35 +1784,242 @@ mod tests {
         ));
     }
 
-    /// A key no host announced binds no node: `not_authorized`, even for a
-    /// request the operator's `peers` setting answers unsigned.
+    /// A valid signature under a key no host announced (ruling addendum §2):
+    /// where an unsigned request would be answered, it is answered exactly as
+    /// one, the same artifact and nothing more, and the log says `unbound`
+    /// with no node. Where the answer needs an identity it is refused, before
+    /// the ledger is read.
     #[test]
-    fn an_unbound_key_is_not_authorized() {
+    fn an_unbound_key_reads_as_unsigned_only_where_no_identity_is_needed() {
         let ledger = corpus_ledger();
         let dir = node(&ledger);
         let stranger = SigningKey::from_bytes(&[0x77; 32]);
-        let request = node_a_record(&ledger);
+        let record = node_a_record(&ledger);
+        let unsigned = serde_json::to_vec(&record).unwrap();
+        let unbound = signed_with(&stranger, &record);
+        let artifact = |outcome: Outcome| match outcome {
+            Outcome::Answered { wire, .. } => wire["artifact"].clone(),
+            other => panic!("{other:?}"),
+        };
         assert_eq!(
-            refused(&ask_by_default(
-                dir.path(),
-                &signed_with(&stranger, &request)
-            )),
-            Some(Reason::NotAuthorized)
+            artifact(ask_with(dir.path(), &unbound, "peers", false)),
+            artifact(ask_with(dir.path(), &unsigned, "peers", false)),
+            "under peers: the unsigned answer"
+        );
+        for request in standard_history_requests() {
+            let unbound = signed_with(&stranger, &request);
+            let unsigned = serde_json::to_vec(&request).unwrap();
+            assert_eq!(
+                artifact(ask_with(dir.path(), &unbound, "counterparties", true)),
+                artifact(ask_with(dir.path(), &unsigned, "counterparties", true)),
+                "Standard History shared: the unsigned answer, {request}"
+            );
+            let reads = evidence_log::index_reads();
+            assert_eq!(
+                refused(&ask_by_default(dir.path(), &unbound)),
+                Some(Reason::PolicyDeclined),
+                "Standard History not shared: {request}"
+            );
+            assert_eq!(
+                evidence_log::index_reads(),
+                reads,
+                "refused before the ledger is read"
+            );
+        }
+        let reads = evidence_log::index_reads();
+        assert_eq!(
+            refused(&ask_by_default(dir.path(), &unbound)),
+            Some(Reason::NotAuthorized),
+            "a record under counterparties"
         );
         assert_eq!(
-            refused(&ask_with(
-                dir.path(),
-                &signed_with(&stranger, &request),
-                "peers",
-                true
-            )),
+            evidence_log::index_reads(),
+            reads,
+            "refused before the ledger is read"
+        );
+
+        let log = tempfile::tempdir().unwrap();
+        let key = key();
+        let (announced, replay) = (announced(), ReplayCache::default());
+        let responder = Responder {
+            ledger_dir: dir.path(),
+            signing_key: &key,
+            now: NOW,
+            history_segments: "peers",
+            share_standard_history: false,
+            keys: Keys {
+                announced: &announced,
+                configured: None,
+            },
+            replay: &replay,
+            node_id: Some(RESPONDER),
+        };
+        let outcome = answer_and_log(&unbound, false, &responder, Some(log.path()));
+        assert!(matches!(outcome, Outcome::Answered { .. }));
+        let text = std::fs::read_to_string(log.path().join(crate::received_log::RECEIVED_LOG_FILE))
+            .unwrap();
+        let line: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(line["principal_key_id"], json!(key_id_of(&stranger)));
+        assert_eq!(line["principal_binding"], json!("unbound"));
+        assert_eq!(line["principal_node_id"], Value::Null);
+        assert_eq!(line["audience"], json!(RESPONDER));
+    }
+
+    /// A signed request with no `audience` is `request_malformed`, before
+    /// anything else, whatever the settings.
+    #[test]
+    fn a_signed_request_without_an_audience_is_malformed() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let mut signed: Value =
+            serde_json::from_slice(&signed_by("node-a", &node_a_record(&ledger))).unwrap();
+        signed.as_object_mut().unwrap().remove("audience");
+        let bytes = serde_json::to_vec(&signed).unwrap();
+        for segments in ["counterparties", "peers", "off"] {
+            assert_eq!(
+                refused(&ask_with(dir.path(), &bytes, segments, true)),
+                Some(Reason::RequestMalformed),
+                "{segments}"
+            );
+        }
+    }
+
+    /// The relay (ruling addendum §1): node-a's request to node-x, forwarded
+    /// by node-x to this node, names node-x as its audience. It is refused
+    /// `not_authorized` before the ledger is read, even where an unsigned
+    /// request would be answered. Addressed to this node, it is answered.
+    #[test]
+    fn a_request_addressed_to_another_node_is_refused_before_the_ledger_is_read() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let record = node_a_record(&ledger);
+        let mut to_x = record.clone();
+        to_x["nonce"] = json!("relayed");
+        requester_auth::sign(&mut to_x, &asker_key("node-a"), now(), "node-x");
+        let to_x = serde_json::to_vec(&to_x).unwrap();
+        for segments in ["counterparties", "peers"] {
+            let reads = evidence_log::index_reads();
+            let outcome = ask_with(dir.path(), &to_x, segments, false);
+            assert_eq!(evidence_log::index_reads(), reads, "the ledger was read");
+            assert_eq!(
+                outcome.wire_bytes(),
+                Some(refusal_of(&to_x, Reason::NotAuthorized)),
+                "{segments}"
+            );
+        }
+        assert!(matches!(
+            ask_by_default(dir.path(), &signed_by("node-a", &record)),
+            Outcome::Answered { .. }
+        ));
+        // A node that does not know its own id yet is no signed request's
+        // audience.
+        let key = key();
+        let (announced, replay) = (announced(), ReplayCache::default());
+        let responder = Responder {
+            ledger_dir: dir.path(),
+            signing_key: &key,
+            now: NOW,
+            history_segments: "peers",
+            share_standard_history: true,
+            keys: Keys {
+                announced: &announced,
+                configured: None,
+            },
+            replay: &replay,
+            node_id: None,
+        };
+        assert_eq!(
+            refused(&answer(&signed_by("node-a", &record), &responder)),
             Some(Reason::NotAuthorized)
         );
     }
 
+    /// What is never read as unsigned (ruling addendum §2): under `peers`,
+    /// where an unsigned request is answered, each of these is still refused,
+    /// signed by a bound key and by an unbound one alike. (A malformed
+    /// `requester_auth`, a missing audience and a passed deadline are refused
+    /// before the signature is looked at; the u289 hand mutants N1 and N2
+    /// show those two rules bite.)
+    #[test]
+    fn a_failed_request_is_never_answered_as_unsigned() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let record = record_request(&ledger, 0);
+        let stranger = SigningKey::from_bytes(&[0x77; 32]);
+        for key in [asker_key("node-z"), stranger] {
+            let signed: Value = serde_json::from_slice(&signed_with(&key, &record)).unwrap();
+            let with = |member: &str, value: Value| {
+                let mut r = signed.clone();
+                r[member] = value;
+                serde_json::to_vec(&r).unwrap()
+            };
+            let resign = |member: &str, value: Value| {
+                let mut r = record.clone();
+                r[member] = value;
+                signed_with(&key, &r)
+            };
+            let mut no_audience = signed.clone();
+            no_audience.as_object_mut().unwrap().remove("audience");
+            let mut to_x = record.clone();
+            requester_auth::sign(&mut to_x, &key, now(), "node-x");
+            let cases: Vec<(&str, Vec<u8>, Reason)> = vec![
+                (
+                    "malformed requester_auth",
+                    with("requester_auth", json!({"key_id": "ab"})),
+                    Reason::RequestMalformed,
+                ),
+                (
+                    "no audience",
+                    serde_json::to_vec(&no_audience).unwrap(),
+                    Reason::RequestMalformed,
+                ),
+                (
+                    "deadline passed",
+                    resign("deadline", json!("2026-09-28T23:59:59Z")),
+                    Reason::DeadlineUnmet,
+                ),
+                (
+                    "deadline outside the window",
+                    resign("deadline", json!("2026-09-29T00:05:01Z")),
+                    Reason::NotAuthorized,
+                ),
+                (
+                    "bad signature",
+                    with("nonce", json!("not-the-signed-one")),
+                    Reason::NotAuthorized,
+                ),
+                (
+                    "audience mismatch",
+                    serde_json::to_vec(&to_x).unwrap(),
+                    Reason::NotAuthorized,
+                ),
+            ];
+            for (what, bytes, reason) in cases {
+                assert_eq!(
+                    refused(&ask_with(dir.path(), &bytes, "peers", true)),
+                    Some(reason),
+                    "{what}"
+                );
+            }
+            // A replay: the first is answered, the second refused.
+            let bytes = serde_json::to_vec(&signed).unwrap();
+            let replay = ReplayCache::default();
+            assert!(matches!(
+                ask_cached(dir.path(), &bytes, "peers", true, &replay),
+                Outcome::Answered { .. }
+            ));
+            assert_eq!(
+                refused(&ask_cached(dir.path(), &bytes, "peers", true, &replay)),
+                Some(Reason::NotAuthorized),
+                "replay"
+            );
+        }
+    }
+
     /// A node announcing node-a's public key as its own does not shut node-a
     /// out: node-a's request, signed and naming node-a, is still node-a's.
-    /// The same signature naming no node is bound to neither.
+    /// The same signature naming no node is bound to neither, and naming a
+    /// third node is a false claim, refused even under `peers`.
     #[test]
     fn a_node_announcing_another_nodes_key_does_not_unbind_it() {
         let ledger = corpus_ledger();
@@ -1773,27 +2027,78 @@ mod tests {
         let mut announced = announced();
         announced.insert("node-m".into(), key_id_of(&asker_key("node-a")));
         let key = key();
-        let replay = ReplayCache::default();
-        let responder = Responder {
-            ledger_dir: dir.path(),
-            signing_key: &key,
-            now: NOW,
-            history_segments: "counterparties",
-            share_standard_history: false,
-            keys: Keys {
-                announced: &announced,
-                configured: None,
-            },
-            replay: &replay,
+        let ask = |bytes: &[u8], segments: &str| {
+            let replay = ReplayCache::default();
+            answer(
+                bytes,
+                &Responder {
+                    ledger_dir: dir.path(),
+                    signing_key: &key,
+                    now: NOW,
+                    history_segments: segments,
+                    share_standard_history: false,
+                    keys: Keys {
+                        announced: &announced,
+                        configured: None,
+                    },
+                    replay: &replay,
+                    node_id: Some(RESPONDER),
+                },
+            )
         };
         let mut request = node_a_record(&ledger);
         assert_eq!(
-            refused(&answer(&signed_by("node-a", &request), &responder)),
-            Some(Reason::NotAuthorized)
+            refused(&ask(&signed_by("node-a", &request), "counterparties")),
+            Some(Reason::NotAuthorized),
+            "naming no node: bound to neither"
         );
         request["requester_id"] = json!("node-a");
         assert!(matches!(
-            answer(&signed_by("node-a", &request), &responder),
+            ask(&signed_by("node-a", &request), "counterparties"),
+            Outcome::Answered { .. }
+        ));
+        request["requester_id"] = json!("node-z");
+        assert_eq!(
+            refused(&ask(&signed_by("node-a", &request), "peers")),
+            Some(Reason::NotAuthorized),
+            "naming neither node: a false claim, never read as unsigned"
+        );
+    }
+
+    /// A node stating another node's id under its own bound key is refused
+    /// under `peers` too: a false claim is never read as unsigned.
+    #[test]
+    fn a_false_claim_is_refused_even_where_unsigned_is_answered() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let mut request = record_request(&ledger, 0);
+        request["requester_id"] = json!("node-a");
+        assert_eq!(
+            refused(&ask_with(
+                dir.path(),
+                &signed_by("node-z", &request),
+                "peers",
+                true
+            )),
+            Some(Reason::NotAuthorized)
+        );
+    }
+
+    /// An unsigned request may carry an `audience`; it is ignored there, as
+    /// any member an unsigned request carries that no check reads.
+    #[test]
+    fn an_unsigned_request_naming_another_audience_is_answered_as_unsigned() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let mut request = record_request(&ledger, 0);
+        request["audience"] = json!("node-x");
+        assert!(matches!(
+            ask_with(
+                dir.path(),
+                &serde_json::to_vec(&request).unwrap(),
+                "peers",
+                false
+            ),
             Outcome::Answered { .. }
         ));
     }
@@ -1834,6 +2139,7 @@ mod tests {
         let mut request = node_a_record(&ledger);
         request["nonce"] = json!("nonce-1");
         request["deadline"] = json!("2026-09-29T00:02:00Z");
+        request["audience"] = json!(RESPONDER);
         let body = jcs::to_string(&request).unwrap();
         let a = asker_key("node-a");
         request["requester_auth"] = json!({
@@ -2017,6 +2323,7 @@ mod tests {
                 configured: None,
             },
             replay: &replay,
+            node_id: Some(RESPONDER),
         };
         let request = node_a_record(&ledger);
         let mut claims_a = request.clone();
