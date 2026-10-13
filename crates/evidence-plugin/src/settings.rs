@@ -226,6 +226,8 @@ fn narrowest() -> std::collections::BTreeMap<String, String> {
     [
         "share_record_at_completion",
         "share_history_segments",
+        "share_standard_history",
+        "advertise_evidence_requests",
         "share_adjudications",
         "adjudicate_differing_twins",
     ]
@@ -656,6 +658,8 @@ witness = [
         for key in [
             "share_record_at_completion",
             "share_history_segments",
+            "share_standard_history",
+            "advertise_evidence_requests",
             "share_adjudications",
             "adjudicate_differing_twins",
         ] {

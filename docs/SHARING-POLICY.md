@@ -1,31 +1,40 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Sharing policy
 
-Every sharing decision the plugin makes is one of four switches, and every
+Every sharing decision the plugin makes is one of six switches, and every
 default keys on **relationship** (whether this node has exchanged with the
 other node), never on proximity, latency, or any computed standing. Nothing
 here is a score, and nothing here ranks anyone.
 
 ```
-share_record_at_completion: counterparty | off                           # default: off
-share_history_segments:     counterparties | prospective | peers | off   # default: prospective
-share_adjudications:        deliver_to_subjects | off                    # default: off
-witness:                    [] | [{endpoint, public_key?}, ...]          # default: [] (off)
+share_record_at_completion:  counterparty | off                    # default: off
+share_history_segments:      counterparties | peers | off          # default: counterparties
+share_standard_history:      on | off                              # default: off
+advertise_evidence_requests: on | off                              # default: off
+share_adjudications:         deliver_to_subjects | off             # default: off
+witness:                     [] | [{endpoint, public_key?}, ...]   # default: [] (off)
 ```
 
 With these defaults a node sends nothing to a peer on its own: it pushes no
-record and delivers no verdict, and it only answers a peer that asks for one
-of its records (`share_history_segments`). The referee
+record, delivers no verdict and advertises nothing, and it answers only a
+counterparty that asks: for one of its records (`share_history_segments`) or
+for its Standard History (`share_standard_history`). The referee
 (`adjudicate_differing_twins`) is off by default too.
 
-The plugin declares the four switches in its `config_schema`
+`share_history_segments` also accepts `prospective`, its default before
+0.1.6. It is deprecated: it always served exactly whom `counterparties`
+serves, so it is now read as `counterparties`, and a log line says so. Set
+`counterparties` instead.
+
+The plugin declares the six switches in its `config_schema`
 (`crates/evidence-plugin/src/share_policy.rs`), so the console shows them under
 Configuration › Plugins › Sharing policy. mesh-llm keeps what you save there in
 its config file and does not pass it to the plugin, so the plugin reads it
 there (`~/.mesh-llm/config.toml`, or the file `MESH_LLM_CONFIG` names). The
 same settings can be set in the plugin's environment, which wins over the
 console: `CAPSULES_SHARE_RECORD_AT_COMPLETION`,
-`CAPSULES_SHARE_HISTORY_SEGMENTS`, `CAPSULES_SHARE_ADJUDICATIONS` and
+`CAPSULES_SHARE_HISTORY_SEGMENTS`, `CAPSULES_SHARE_STANDARD_HISTORY`,
+`CAPSULES_ADVERTISE_EVIDENCE_REQUESTS`, `CAPSULES_SHARE_ADJUDICATIONS` and
 `CAPSULES_CHECKPOINT_WITNESS_URLS` (a comma list of witness URLs) with
 `CAPSULES_CHECKPOINT_WITNESS_KEYS` (a JSON object from witness URL to its key
 in hex). An unset or unknown value means the default.
@@ -67,8 +76,7 @@ A peer can ask this node for one of its records by id, over the plugin's
 | value | counterparty (a node this record names as the other side) | any other peer |
 | --- | :---: | :---: |
 | `off` | | |
-| `counterparties` | ✓ | |
-| `prospective` (default) | ✓ | |
+| `counterparties` (default) | ✓ | |
 | `peers` | ✓ | ✓ |
 
 A local block and an owner-maintenance record are never served. A declined
@@ -78,8 +86,7 @@ peer opened a stream. This is a scope filter against casual reads, not access
 control: a record id is not guessable, and `peers` hands out the same records
 anyway.
 
-**This trusts the id the request states.** Under `prospective` and
-`counterparties` a peer that lies about its id receives the records the peer
+**This trusts the id the request states.** Under `counterparties` a peer that lies about its id receives the records the peer
 it names would receive: the switch scopes what this node discloses, it is not
 access control.
 
@@ -92,8 +99,44 @@ request's own optional `requester_id` member, as it states it. An answer is
 served whole or refused `not_authorized` whole, never filtered per asker,
 because an artifact is the same for every requester. The checkpoint list, the
 `history_card/1` derivation and the `served_summary/1` derivation carry no
-record bodies and are answered under every tier. The golden answers are in
+record bodies: `share_history_segments` does not govern them, and
+`share_standard_history` does (below). The golden answers are in
 `vectors/parity/evidence_request/`.
+
+## Standard History (`share_standard_history`)
+
+Off by default. Standard History is what an evidence request can get that
+carries no record bodies: the checkpoint list, `history_card/1` and
+`served_summary/1` (and any other derivation). It carries no records, but it
+shows how much and how often this node serves, so with this switch off it goes
+only to a counterparty: a node that some record of this node names as the
+other side of an exchange. Any other node is refused `policy_declined`.
+
+The refusal carries nothing about who asked. It is decided before the subject
+is resolved, so it is the same whether or not what was asked for exists, and
+it is signed over the request's digest, the reason and the time alone. Two
+nodes sending the same request in the same second get the same bytes back;
+two refusals differ only in the digest of the request each refuses (which
+covers the id each states), the time, and the signature over them.
+
+With it on (`on`), every node that asks is answered, as before 0.1.6. It
+never releases a record: record bodies stay under `share_history_segments`.
+
+**Who counts as a counterparty is the id the request states**, as above, and
+this version does not authenticate it. A node that states another node's id
+is answered as that node, and by trying ids it can learn which nodes this one
+has exchanged with. Requests signed under the requester's announced key close
+both; until then this switch narrows who is answered, and is not access
+control.
+
+## Advertising evidence requests (`advertise_evidence_requests`)
+
+Off by default: this node does not tell other nodes that it answers evidence
+requests. It still answers a node that asks, under the switches above. This
+version advertises nothing, so nothing reads the switch yet: the plugin's
+`evidence-request/1` channel is declared only to its own host, so that a
+request can reach it, and mesh-llm does not pass a plugin's channels on to
+other nodes.
 
 ## Verdicts (`share_adjudications`)
 

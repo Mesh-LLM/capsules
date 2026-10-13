@@ -18,12 +18,15 @@
 //! 3. a deadline already past → `deadline_unmet`;
 //! 4. the sharing policy switched `off` for any request that carries record
 //!    bodies → `not_authorized`, before anything is looked up;
-//! 5. resolution against the index → the crate's reason;
-//! 6. the number of records (or checkpoints) the answer would carry, counted
+//! 5. Standard History to a requester that is not this node's counterparty,
+//!    with `share_standard_history` off → `policy_declined`, before the
+//!    subject is looked up (see below);
+//! 6. resolution against the index → the crate's reason;
+//! 7. the number of records (or checkpoints) the answer would carry, counted
 //!    from the index without reading one → `policy_declined` over
 //!    [`MAX_ANSWER_RECORDS`] / [`MAX_ANSWER_CHECKPOINTS`];
-//! 7. the sharing-policy gate on each of those records → `not_authorized`;
-//! 8. building and signing; an answer larger than [`MAX_ANSWER_BYTES`] on
+//! 8. the sharing-policy gate on each of those records → `not_authorized`;
+//! 9. building and signing; an answer larger than [`MAX_ANSWER_BYTES`] on
 //!    the wire → `policy_declined`.
 //!
 //! Every refusal is signed by this node's key and binds the digest of the
@@ -40,7 +43,23 @@
 //! per asker. The requester's id is the request's own optional
 //! `requester_id` member: its word, which narrows who is answered and is not
 //! access control. Checkpoints, the history card and the served summary
-//! carry no record bodies and are not gated.
+//! carry no record bodies and are not gated by it.
+//!
+//! **Standard History** is every answer that carries no record bodies:
+//! `checkpoints`, `history_card/1`, `served_summary/1`, and any other
+//! derivation. It shows how much and how often this node serves, so with
+//! `share_standard_history` off (the default) it goes only to a requester
+//! that some record of this node names as the other side of an exchange.
+//! Every other requester gets `policy_declined`, decided before the subject
+//! is resolved, so the refusal is the same whether or not what was asked for
+//! exists. It is `refusal::sign` of the request digest, the reason and
+//! `issued_at` alone: no member names or depends on the asker, so two askers
+//! sending the same bytes in the same second get the same bytes back. What
+//! differs between two refusals is only what differs between the requests
+//! (their digest, which covers the `requester_id` each states) and when they
+//! were answered (`issued_at`), and the signature over those. A counterparty
+//! is still known by its stated `requester_id`, which is not authenticated:
+//! stating another node's id is answered as that node.
 //!
 //! **The wire.** An artifact answer is `{"artifact", "material", "envelope"}`:
 //! the artifact and the verification material as the exact RFC 8785 text the
@@ -91,6 +110,8 @@ pub struct Responder<'a> {
     pub now: &'a str,
     /// `share_policy::history_segments()`.
     pub history_segments: &'a str,
+    /// `share_policy::shares_standard_history()`.
+    pub share_standard_history: bool,
 }
 
 /// The one outcome of a request.
@@ -225,7 +246,7 @@ fn policy_gate_applies() -> bool {
     !cfg!(feature = "mutant-evidence-skips-policy-gate")
 }
 
-/// Steps 5 to 8, over the index.
+/// Steps 5 to 9, over the index.
 fn answer_from(
     req: &Request,
     digest: &str,
@@ -233,18 +254,26 @@ fn answer_from(
     responder: &Responder<'_>,
     view: &LogView<'_>,
 ) -> Result<Value, Reason> {
-    // 5. Resolve.
+    let index = view.index;
+    // 5. Standard History, only to a counterparty unless shared.
+    if !carries_records(req)
+        && !responder.share_standard_history
+        && policy_gate_applies()
+        && !is_counterparty(index, requester_id)
+    {
+        return Err(Reason::PolicyDeclined);
+    }
+    // 6. Resolve.
     let anchor = match resolve::resolve(req, view) {
         Resolution::Artifact(anchor) => anchor,
         Resolution::Refuse(reason) => return Err(reason),
     };
-    let index = view.index;
     if matches!(&req.derivation, Some(Derivation::Token(t)) if t == SERVED_SUMMARY_DERIVATION_TOKEN)
     {
         return served_summary_answer(req, digest, &anchor, responder, index);
     }
 
-    // 6. Size, from the index.
+    // 7. Size, from the index.
     let anchor_position = anchor_position(index, &anchor).ok_or(Reason::CoverageUnsatisfiable)?;
     let covered = leaf_count(index.chain[anchor_position].mmr_size)
         .map_err(|_| Reason::CoverageUnsatisfiable)?;
@@ -282,14 +311,14 @@ fn answer_from(
         Vec::new()
     };
 
-    // 7. Who may have these records.
+    // 8. Who may have these records.
     if policy_gate_applies()
         && !may_serve_all(index, &records, requester_id, responder.history_segments)
     {
         return Err(Reason::NotAuthorized);
     }
 
-    // 8. Build and sign.
+    // 9. Build and sign.
     let limit = if carries_records(req) {
         MAX_ANSWER_RECORDS
     } else {
@@ -333,6 +362,18 @@ fn anchor_position(index: &LedgerIndex, anchor: &ResolvedAnchor) -> Option<usize
         ResolvedAnchor::Anchor(a) => index.chain.iter().position(|cp| cp.digest() == a.digest),
         ResolvedAnchor::ExchangeHalf(_) => index.chain.len().checked_sub(1),
     }
+}
+
+/// Whether some record of this node names `requester_id` as the other side
+/// of its exchange (a local block or an owner-maintenance record names no
+/// counterparty it was exchanged with, and padding names none).
+fn is_counterparty(index: &LedgerIndex, requester_id: Option<&str>) -> bool {
+    let Some(asker) = requester_id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return false;
+    };
+    index.leaves.iter().any(|leaf| {
+        !leaf.padding && !leaf.never_leaves && leaf.counterparty.as_deref() == Some(asker)
+    })
 }
 
 /// Whether every record in `records` may go to `requester_id` under
@@ -743,6 +784,8 @@ mod tests {
         dir
     }
 
+    /// Asked with Standard History shared, as every node answered before it
+    /// had the switch: these tests are about everything else.
     fn ask(dir: &Path, bytes: &[u8], segments: &str) -> Outcome {
         let key = key();
         answer(
@@ -753,6 +796,7 @@ mod tests {
                 signing_key: &key,
                 now: NOW,
                 history_segments: segments,
+                share_standard_history: true,
             },
         )
     }
@@ -938,6 +982,7 @@ mod tests {
             signing_key: &key,
             now: NOW,
             history_segments: "peers",
+            share_standard_history: true,
         };
         let bytes = br#"{"subject":{"checkpoints":null},"coverage":{"min_freshness":1}}"#;
         let Outcome::Refused { wire, reason, .. } = decline_busy(bytes, &responder) else {
@@ -956,6 +1001,7 @@ mod tests {
             signing_key: &key,
             now: "yesterday",
             history_segments: "peers",
+            share_standard_history: true,
         };
         assert!(matches!(
             answer(b"{}", None, &responder),
@@ -1180,5 +1226,207 @@ mod tests {
         );
         assert_eq!(v["state"], json!("artifact"), "{v}");
         assert!(v["witnessed"].as_u64().unwrap() > 0);
+    }
+
+    /// Asked by `asker` (its stated id, beside the bytes) of a node with the
+    /// default settings, read the way the plugin reads them (no test sets
+    /// these two): records to counterparties, Standard History not shared.
+    fn ask_by_default(dir: &Path, bytes: &[u8], asker: Option<&str>) -> Outcome {
+        let key = key();
+        answer(
+            bytes,
+            asker,
+            &Responder {
+                ledger_dir: dir,
+                signing_key: &key,
+                now: NOW,
+                history_segments: crate::share_policy::history_segments(),
+                share_standard_history: crate::share_policy::shares_standard_history(),
+            },
+        )
+    }
+
+    /// The three Standard History requests, each pinned to the corpus's
+    /// newest checkpoint.
+    fn standard_history_requests() -> Vec<String> {
+        let ledger = corpus_ledger();
+        let pin = corpus_checkpoints(&ledger, &key())[1].digest();
+        let coverage = json!({"expected_pin": pin});
+        vec![
+            json!({"subject": {"checkpoints": null}, "coverage": coverage}).to_string(),
+            json!({"subject": {"full_history": null}, "coverage": coverage, "derivation": "history_card/1"}).to_string(),
+            json!({"subject": {"full_history": null}, "coverage": coverage, "derivation": "served_summary/1"}).to_string(),
+        ]
+    }
+
+    /// PRD T7, the default half (R-8): checkpoints, `history_card/1` and
+    /// `served_summary/1` asked by a node that is no counterparty of this one
+    /// are refused `policy_declined`, signed, and the refusal is the same
+    /// bytes whoever asks: two different non-counterparties and an asker
+    /// naming no id. It is the same bytes, too, from a node that holds
+    /// nothing at all, so it says nothing about what this node holds.
+    #[test]
+    fn standard_history_to_a_non_counterparty_is_one_signed_refusal_whoever_asks() {
+        let dir = node(&corpus_ledger());
+        let empty = node(&[]);
+        for request in standard_history_requests() {
+            let bytes = request.as_bytes();
+            let mut seen = Vec::new();
+            for (ledger, asker) in [
+                (dir.path(), Some("node-y")),
+                (dir.path(), Some("node-z")),
+                (dir.path(), None),
+                (empty.path(), Some("node-y")),
+            ] {
+                let outcome = ask_by_default(ledger, bytes, asker);
+                let Outcome::Refused { wire, reason, .. } = &outcome else {
+                    panic!("{request} by {asker:?}: {outcome:?}");
+                };
+                assert_eq!(*reason, Reason::PolicyDeclined, "{request}");
+                assert_eq!(
+                    refusal::verify_for(wire, &key().verifying_key(), &request_digest(bytes)),
+                    Ok(Reason::PolicyDeclined),
+                    "signed and bound to the request"
+                );
+                seen.push(outcome.wire_bytes().unwrap());
+            }
+            assert!(
+                seen.windows(2).all(|pair| pair[0] == pair[1]),
+                "{request}: the refusal differs by asker"
+            );
+            // Nothing beside the request's digest, the reason and the time
+            // goes into it: it is exactly the refusal of these bytes, now.
+            let expected =
+                refusal::sign(&request_digest(bytes), Reason::PolicyDeclined, NOW, &key())
+                    .unwrap()
+                    .to_json();
+            assert_eq!(seen[0], serde_json::to_vec(&expected).unwrap());
+        }
+    }
+
+    /// Two askers whose requests differ only in the id they state get
+    /// refusals that differ only where their requests do: the request digest,
+    /// and the signature over it.
+    #[test]
+    fn two_askers_refusals_differ_only_by_their_own_request() {
+        let dir = node(&corpus_ledger());
+        for base in standard_history_requests() {
+            let request = |asker: &str| {
+                let mut r: Value = serde_json::from_str(&base).unwrap();
+                r["requester_id"] = json!(asker);
+                r.to_string()
+            };
+            let (y, z) = (request("node-y"), request("node-z"));
+            let refusal_of = |bytes: &str| match ask_by_default(
+                dir.path(),
+                bytes.as_bytes(),
+                requester_id(bytes.as_bytes()).as_deref(),
+            ) {
+                Outcome::Refused { wire, .. } => wire,
+                other => panic!("{other:?}"),
+            };
+            let (mut a, mut b) = (refusal_of(&y), refusal_of(&z));
+            for wire in [&mut a, &mut b] {
+                let members = wire.as_object_mut().unwrap();
+                members.remove("request_digest").expect("binds its request");
+                members.remove("sig").expect("signed");
+            }
+            assert_eq!(a, b, "{base}");
+        }
+    }
+
+    /// The default half's other side: a node some record names as the other
+    /// side of an exchange is still answered all three.
+    #[test]
+    fn a_counterparty_is_still_answered_standard_history() {
+        let dir = node(&corpus_ledger());
+        for request in standard_history_requests() {
+            let bytes = request.as_bytes();
+            let outcome = ask_by_default(dir.path(), bytes, Some("node-a"));
+            let Outcome::Answered { wire, .. } = &outcome else {
+                panic!("{request}: {outcome:?}");
+            };
+            let verified =
+                verify_response(bytes, wire, &key().verifying_key(), &Default::default());
+            assert_eq!(
+                verified["state"],
+                json!("artifact"),
+                "{request}: {verified}"
+            );
+        }
+    }
+
+    /// A counterparty is a node some record names as the other side, by
+    /// its whole id; an empty or absent id is nobody's.
+    #[test]
+    fn a_counterparty_is_named_by_a_record() {
+        let dir = node(&corpus_ledger());
+        let key_id = hex::encode(key().verifying_key().to_bytes());
+        evidence_log::with_index(dir.path(), &key_id, |index| {
+            assert!(is_counterparty(index, Some("node-a")));
+            assert!(is_counterparty(index, Some(" node-b ")));
+            assert!(!is_counterparty(index, Some("node")));
+            assert!(!is_counterparty(index, Some("node-z")));
+            assert!(!is_counterparty(index, Some(" ")));
+            assert!(!is_counterparty(index, None));
+            Ok::<_, std::io::Error>(())
+        })
+        .unwrap()
+        .unwrap();
+    }
+
+    /// `share_standard_history` on restores what every node did before:
+    /// Standard History to anyone, named or not.
+    #[test]
+    fn sharing_standard_history_answers_anyone_as_before() {
+        let dir = node(&corpus_ledger());
+        for request in standard_history_requests() {
+            for asker in [Some("node-z"), None] {
+                let key = key();
+                let outcome = answer(
+                    request.as_bytes(),
+                    asker,
+                    &Responder {
+                        ledger_dir: dir.path(),
+                        signing_key: &key,
+                        now: NOW,
+                        history_segments: "counterparties",
+                        share_standard_history: true,
+                    },
+                );
+                assert!(
+                    matches!(outcome, Outcome::Answered { .. }),
+                    "{request} by {asker:?}: {outcome:?}"
+                );
+            }
+        }
+    }
+
+    /// The switch governs Standard History only: record bodies stay under
+    /// `share_history_segments`, whichever way it is set.
+    #[test]
+    fn sharing_standard_history_never_releases_a_record() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let pin = corpus_checkpoints(&ledger, &key())[1].digest();
+        let record = json!({
+            "subject": {"record": ledger[0]["capsule_id"]},
+            "coverage": {"expected_pin": pin},
+            "requester_id": "node-b",
+        })
+        .to_string();
+        let key = key();
+        let outcome = answer(
+            record.as_bytes(),
+            Some("node-b"),
+            &Responder {
+                ledger_dir: dir.path(),
+                signing_key: &key,
+                now: NOW,
+                history_segments: "counterparties",
+                share_standard_history: true,
+            },
+        );
+        assert_eq!(refused(&outcome), Some(Reason::NotAuthorized));
     }
 }

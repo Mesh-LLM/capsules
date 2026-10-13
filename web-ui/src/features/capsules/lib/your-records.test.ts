@@ -25,7 +25,7 @@ function status(overrides: Partial<RecordsStatus> = {}): RecordsStatus {
     new_history_pending: null,
     sharing: {
       record_at_completion: { value: 'counterparty', source: 'default' },
-      history_segments: { value: 'prospective', source: 'default' },
+      history_segments: { value: 'counterparties', source: 'default' },
       adjudications: { value: 'deliver_to_subjects', source: 'default' },
       witness: { value: null, source: 'default' }
     },
@@ -65,12 +65,19 @@ describe('What you share', () => {
     expect(rows.map((r) => r.key)).toEqual(['record_at_completion', 'history_segments', 'adjudications', 'witness'])
     expect(rows.map((r) => r.state)).toEqual([
       'to the other side',
-      'to nodes you’ve dealt with or are about to',
+      'to nodes you’ve dealt with',
       'to the node it’s about',
       'off'
     ])
     expect(rows.every((r) => r.source === 'default')).toBe(true)
     expect(rows[3].whatLeaves).toBe('Nothing is sent: witness off — your choice.')
+  })
+
+  it('reads a saved prospective as counterparties, which it always behaved as', () => {
+    const row = (value: string) =>
+      sharingRows(status({ sharing: { ...status().sharing, history_segments: { value, source: 'set' } } }))[1]
+    expect(row('prospective').state).toBe(row('counterparties').state)
+    expect(row('prospective').whatLeaves).toBe(row('counterparties').whatLeaves)
   })
 
   it('a set witness names where checkpoints go, and never records or text', () => {

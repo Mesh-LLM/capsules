@@ -233,6 +233,7 @@ async fn answer_in_process(
             signing_key: capsules.signing_key(),
             now: &now,
             history_segments: crate::share_policy::history_segments(),
+            share_standard_history: crate::share_policy::shares_standard_history(),
         };
         let log_dir = capsules
             .ledger_dir()
