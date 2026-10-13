@@ -130,10 +130,9 @@ function digestsDisagree(
   })
 }
 
-/** Every weights digest a record names for the model: the producer's
- *  `compute_attestation.weights_digest.digest`, the host's
- *  `serving_provenance.model.weights_digest`, and a `sha256-<hex>` inside
- *  `model_attestation.model_id` (a local GGUF is named by its weights). */
+/** Every weights file digest a record names: the producer's
+ *  `compute_attestation.weights_digest.digest` and the host's
+ *  `serving_provenance.model.weights_digest`. Both are the loaded file's SHA-256. */
 export function weightsClaims(record: Record<string, unknown> | null | undefined): Set<string> {
   const claims = new Set<string>()
   const add = (value: string | null) => {
@@ -142,19 +141,36 @@ export function weightsClaims(record: Record<string, unknown> | null | undefined
   }
   add(recordString(record, ['model_attestation', 'compute_attestation', 'weights_digest', 'digest']))
   add(recordString(record, ['model_attestation', 'compute_attestation', 'x-mesh-poc-v1', 'serving_provenance', 'model', 'weights_digest']))
-  const modelId = recordString(record, ['model_attestation', 'model_id'])
-  add(modelId?.toLowerCase().match(/sha256[-:]([0-9a-f]{64})/)?.[1] ?? null)
   return claims
 }
 
+/** The `sha256-<hex>` inside `model_attestation.model_id`. mesh-llm's
+ *  `local-gguf/sha256-<source identity>` is the file's own SHA-256 only for a
+ *  single local file (a Hugging Face GGUF hashes its repository, revision and
+ *  files), so it names the model, not the weights file. */
+export function modelIdDigest(record: Record<string, unknown> | null | undefined): string | null {
+  const modelId = recordString(record, ['model_attestation', 'model_id'])
+  return modelId?.toLowerCase().match(/sha256[-:]([0-9a-f]{64})/)?.[1] ?? null
+}
+
 /** The provider's half names a different model than the one it served us
- *  under: its own weights claims disagree with each other, or none of them
- *  is the weights our record names. Names alone never count (aliases). */
+ *  under: its own weights claims disagree with each other, or they or its
+ *  model id disagree with our record's. Weights are held to weights and ids
+ *  to ids; only a half naming no model id is held, by its weights, to the id
+ *  we asked for. Names alone never count (aliases). */
 function modelSwapped(localRecord: CapsuleRecord | null | undefined, peerRecord: Record<string, unknown> | null): boolean {
+  const local = localRecord as Record<string, unknown> | null | undefined
   const theirs = weightsClaims(peerRecord)
   if (theirs.size > 1) return true
-  const ours = weightsClaims(localRecord as Record<string, unknown> | null | undefined)
-  return ours.size > 0 && theirs.size > 0 && ![...theirs].some((w) => ours.has(w))
+  const disagree = (asked: Set<string>, claimed: Set<string>) =>
+    asked.size > 0 && claimed.size > 0 && ![...claimed].some((w) => asked.has(w))
+  const askedWeights = weightsClaims(local)
+  if (disagree(askedWeights, theirs)) return true
+  const askedId = modelIdDigest(local)
+  const askedIds = new Set(askedId ? [askedId] : [])
+  const theirId = modelIdDigest(peerRecord)
+  if (theirId) return disagree(askedIds, new Set([theirId]))
+  return askedWeights.size === 0 && disagree(askedIds, theirs)
 }
 
 const SERVED_BY_PATH = ['model_attestation', 'compute_attestation', 'x-mesh-poc-v1', 'serving_provenance', 'served_by_node_id'] as const

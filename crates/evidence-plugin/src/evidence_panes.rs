@@ -716,57 +716,13 @@ fn digest_match_state(mine: &Value, theirs: &Value) -> &'static str {
     }
 }
 
-/// Every weights digest a record names for its model: the producer's
-/// `compute_attestation.weights_digest.digest`, the host's
-/// `serving_provenance.model.weights_digest`, and a `sha256-<hex>` inside
-/// `model_attestation.model_id` (a local GGUF is named by its weights).
-/// Mirrors the page's `weightsClaims`.
-fn weights_claims(record: &Value) -> BTreeSet<String> {
-    let is_digest = |v: &str| v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit());
-    let mut claims = BTreeSet::new();
-    for pointer in [
-        "/model_attestation/compute_attestation/weights_digest/digest",
-        "/model_attestation/compute_attestation/x-mesh-poc-v1/serving_provenance/model/weights_digest",
-    ] {
-        if let Some(v) = record.pointer(pointer).and_then(Value::as_str) {
-            let v = v.trim().to_ascii_lowercase();
-            if is_digest(&v) {
-                claims.insert(v);
-            }
-        }
-    }
-    if let Some(model_id) = record
-        .pointer("/model_attestation/model_id")
-        .and_then(Value::as_str)
-    {
-        let model_id = model_id.to_ascii_lowercase();
-        for marker in ["sha256-", "sha256:"] {
-            if let Some(hex) = model_id
-                .split(marker)
-                .nth(1)
-                .and_then(|rest| rest.get(..64))
-            {
-                if is_digest(hex) {
-                    claims.insert(hex.to_string());
-                }
-            }
-        }
-    }
-    claims
-}
-
 /// The other side's half names a different model than this exchange ran
-/// under: its own weights claims disagree with each other, or none of them is
-/// the weights our record names. Matching request/response digests prove the
-/// two sides saw the same bytes, not which model made them. Names alone never
-/// count (aliases).
+/// under: its own weights claims disagree with each other, or they or its
+/// model id disagree with our record's. Matching request/response digests
+/// prove the two sides saw the same bytes, not which model made them. Names
+/// alone never count (aliases). Mirrors the page's `modelSwapped`.
 fn model_swapped(mine: &Value, theirs: &Value) -> bool {
-    let their_claims = weights_claims(theirs);
-    if their_claims.len() > 1 {
-        return true;
-    }
-    let our_claims = weights_claims(mine);
-    !our_claims.is_empty() && !their_claims.is_empty() && our_claims.is_disjoint(&their_claims)
+    crate::record_push_receive::names_other_model(theirs, &[mine])
 }
 
 /// One exchange-key group's records paired ONE-TO-ONE.
@@ -4833,6 +4789,15 @@ mod tests {
             digest_match_state(&alias, &theirs(&other_id, &other, &other)),
             STATE_VERIFIED,
             "a name alone never counts"
+        );
+        // A Hugging Face GGUF's id digest hashes the repository, revision and
+        // files, so it is not the file digest both weights fields name.
+        let hf_id = format!("local-gguf/sha256-{}", "3".repeat(64));
+        let hf_mine = with_weights(mine.clone(), Some(&hf_id), None, None);
+        assert_eq!(
+            digest_match_state(&hf_mine, &theirs(&hf_id, &asked, &asked)),
+            STATE_VERIFIED,
+            "hugging face id"
         );
     }
 
