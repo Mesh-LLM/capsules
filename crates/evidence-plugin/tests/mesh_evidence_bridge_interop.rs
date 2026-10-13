@@ -54,6 +54,9 @@ impl Harness {
             .env("CAPSULES_DATA_DIR", &data_dir)
             // Nor the operator's mesh config: no console setting reaches it.
             .env("MESH_LLM_CONFIG", data_dir.join("no-mesh-config.toml"))
+            // Nor its sharing switches: a test that wants one sets it.
+            .env_remove("CAPSULES_SHARE_HISTORY_SEGMENTS")
+            .env_remove("CAPSULES_SHARE_STANDARD_HISTORY")
             .env("CAPSULES_BLOCKED_MODELS", "blocked-test-model")
             .env("CAPSULES_MESH_REQUEST_TIMEOUT_MS", "1500")
             // `bind_side_stream` (mesh-llm-plugin's own `io.rs`) derives the

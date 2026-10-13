@@ -82,7 +82,7 @@ until you turn it on:
 | A verdict a referee signed, delivered to the nodes it judges | those nodes | **off** | `share_adjudications = "deliver_to_subjects"` |
 | Asking a referee when two twins of a client-marked pair answered differently. **This sends the twins' request (the prompt's `messages`) and both twins' answers to the referee peer**, which answers the request with its own inference | one eligible peer | **off** | `adjudicate_differing_twins = "on"` |
 | Stopping routing to a peer after N contradictions | (a request to your own host) | **off** | set `stop_routing_after_contradictions`, and `allow_peer_blocks = true` for this plugin in mesh-llm's config |
-| One of this node's records, when a peer asks for it by id | the peer that record names as the other side (or one about to be) | on: an answer, never a push | `share_history_segments = "off"` |
+| One of this node's records, when a peer asks for it by id | the peer that record names as the other side | on: an answer, never a push | `share_history_segments = "off"` |
 | A signed checkpoint of the log | the witness services you name | **off**: none by default | add witnesses under **Witnesses** |
 
 The referee also needs the pair's text on this node. Stock mesh-llm passes no

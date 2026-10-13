@@ -116,7 +116,11 @@ pub const ENV_STANDARD_HISTORY: &str = "CAPSULES_SHARE_STANDARD_HISTORY";
 /// node's counterparty: only when the operator turned it on. Off by default;
 /// a counterparty is answered either way.
 pub fn shares_standard_history() -> bool {
-    switched_on(crate::settings::var(ENV_STANDARD_HISTORY).ok().as_deref())
+    shares_standard_history_for(crate::settings::var(ENV_STANDARD_HISTORY).ok().as_deref())
+}
+
+pub(crate) fn shares_standard_history_for(raw: Option<&str>) -> bool {
+    switched_on(raw)
 }
 
 /// This process's own env var for `advertise_evidence_requests`: off unless
