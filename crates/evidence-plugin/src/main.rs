@@ -34,6 +34,7 @@ mod record_push_bridge;
 mod record_push_parity;
 mod record_push_receive;
 mod referee;
+mod requester_auth;
 mod routing_choice_bridge;
 mod routing_rule;
 mod self_peer;
@@ -1211,6 +1212,7 @@ async fn main() -> anyhow::Result<()> {
     let capsules = Arc::new(CapsuleState::open(&data_dir, PLUGIN_ID)?);
     let evidence_pub_key_pem = capsules.public_key_pem();
     let own_public_key = capsules.public_key();
+    let own_signing_key = capsules.signing_key().clone();
     owner_maintenance::finish_pending_after_open(&data_dir, &capsules, &log_id)?;
     tracing::info!(
         chain_head = ?capsules.chain_head(),
@@ -1462,15 +1464,20 @@ async fn main() -> anyhow::Result<()> {
         // This node's own key, announced through the host
         // (`peer_keys::own`), and peers' keys for this plugin, when the host
         // announces them (`peer_keys::announced`); CAPSULES_PEER_KEYS stays
-        // the fallback.
+        // the fallback. Once the host took this node's key, every evidence
+        // request it sends is signed with it (`requester_auth`).
         plugin.on_initialized(move |context| {
             let announces = context.host_supports(peer_keys::announced::CAPABILITY);
+            let own_signing_key = own_signing_key.clone();
             Box::pin(async move {
                 peer_keys::announced::start(announces, PLUGIN_ID);
-                peer_keys::own::announce(announces, own_public_key, |key| {
+                let announced = peer_keys::own::announce(announces, own_public_key, |key| {
                     context.announce_plugin_key(key)
                 })
                 .await;
+                if announced == peer_keys::own::Announced::Sent {
+                    requester_auth::set_announced(own_signing_key);
+                }
                 Ok(())
             })
         })

@@ -381,6 +381,18 @@ impl LedgerIndex {
 /// One process-wide index per ledger directory, kept current across answers.
 static INDEXES: Mutex<Option<HashMap<PathBuf, LedgerIndex>>> = Mutex::new(None);
 
+#[cfg(test)]
+thread_local! {
+    static INDEX_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has read an index ([`with_index`]): a test
+/// shows a refusal came before the ledger was read.
+#[cfg(test)]
+pub fn index_reads() -> u64 {
+    INDEX_READS.with(std::cell::Cell::get)
+}
+
 /// Run `f` over the up-to-date index of `ledger_dir`. Answers are serialized
 /// per process by this lock: the work under it is bounded by the answer
 /// limits, and the index is shared state.
@@ -389,6 +401,8 @@ pub fn with_index<T>(
     node_key_id: &str,
     f: impl FnOnce(&LedgerIndex) -> T,
 ) -> std::io::Result<T> {
+    #[cfg(test)]
+    INDEX_READS.with(|n| n.set(n.get() + 1));
     let mut guard = INDEXES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

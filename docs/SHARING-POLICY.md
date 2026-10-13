@@ -86,18 +86,51 @@ peer opened a stream. This is a scope filter against casual reads, not access
 control: a record id is not guessable, and `peers` hands out the same records
 anyway.
 
-**This trusts the id the request states.** Under `counterparties` a peer that lies about its id receives the records the peer
+**On `ledger-fetch/1` this trusts the id the request states.** Under `counterparties` a peer that lies about its id receives the records the peer
 it names would receive: the switch scopes what this node discloses, it is not
-access control.
+access control. Evidence requests (below) do not trust it.
 
 **Evidence requests** (`evidence-request/1`, draft-mih-agent-evidence-request-00)
 are answered in-process by `evidence_answer.rs`, with the protocol from the
 `capsule-emit-evidence-request` crate. The same rule applies to every record
 an answer would carry, for every subject that carries record bodies (`record`,
-`range`, `full_history`, `correlation`, `exchange`). The asker's id is the
-request's own optional `requester_id` member, as it states it. An answer is
-served whole or refused `not_authorized` whole, never filtered per asker,
-because an artifact is the same for every requester. The checkpoint list, the
+`range`, `full_history`, `correlation`, `exchange`). An answer is served whole
+or refused `not_authorized` whole, never filtered per asker, because an
+artifact is the same for every requester.
+
+**Who asks is proven, not stated.** The asking node signs its request with
+the key its host announces for it (mesh-llm `plugin_keys.v1`), in a
+`requester_auth` member: `{"key_id", "sig"}`, where `sig` is Ed25519 over
+`evidence-request/1/requester-auth`, a zero byte, and the canonical JSON (RFC
+8785, as the `capsule-emit-evidence-request` crate encodes it) of the rest of
+the request. A signed request also carries a `nonce` and a `deadline`.
+
+Before it looks anything up, the answering node checks, in order:
+
+- the deadline is no more than 5 minutes ahead;
+- the signature verifies;
+- a host announced the key for a node. If several nodes announced it, the
+  request's `requester_id` must be one of them. If only one did, the request's
+  `requester_id`, when given, must be that node. An entry in
+  `CAPSULES_PEER_KEYS` alone does not count, and one that disagrees with the
+  host's vetoes it;
+- the nonce has not been used before its deadline.
+
+That node is the asker. Under `counterparties`:
+
+- a record goes only to the node it names, as proven this way;
+- an unsigned request is refused `not_authorized`;
+- a proven node that no record names is refused `not_authorized` before the
+  subject is resolved, the same refusal for any subject, so which refusal it
+  gets tells it nothing about the log's size.
+
+Under `peers` an unsigned request is answered, as before. A signed one is
+checked all the same.
+
+A signed request does not yet name the node it is for. A node it was sent to
+can forward it to another node before its deadline and read the answer, and
+the replay check (per node, in memory) does not stop that. Each request's digest is recorded in the "asked of you"
+log, with the key and node it was proven to come from. The checkpoint list, the
 `history_card/1` derivation and the `served_summary/1` derivation carry no
 record bodies: `share_history_segments` does not govern them, and
 `share_standard_history` does (below). The golden answers are in
@@ -117,17 +150,18 @@ is resolved, so it is the same whether or not what was asked for exists, and
 it is signed over the request's digest, the reason and the time alone. Two
 nodes sending the same request in the same second get the same bytes back;
 two refusals differ only in the digest of the request each refuses (which
-covers the id each states), the time, and the signature over them.
+covers every member each carries), the time, and the signature over them.
 
 With it on (`on`), every node that asks is answered, as before 0.1.6. It
 never releases a record: record bodies stay under `share_history_segments`.
 
-**Who counts as a counterparty is the id the request states**, as above, and
-this version does not authenticate it. A node that states another node's id
-is answered as that node, and by trying ids it can learn which nodes this one
-has exchanged with. Requests signed under the requester's announced key close
-both; until then this switch narrows who is answered, and is not access
-control.
+**A counterparty is the node a signed request proves it is**, as above.
+These all get the same `policy_declined`, so trying ids teaches a node
+nothing about who this one has exchanged with:
+
+- an unsigned request, whatever id it states;
+- a request stating another node's id;
+- a proven node no record names.
 
 ## Advertising evidence requests (`advertise_evidence_requests`)
 

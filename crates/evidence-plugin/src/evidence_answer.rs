@@ -14,20 +14,25 @@
 //!
 //! 1. the request's size ([`MAX_REQUEST_BYTES`]) → `policy_declined`, before
 //!    it is parsed;
-//! 2. parsing → `request_malformed` / `coverage_unsatisfiable`;
+//! 2. parsing → `request_malformed` / `coverage_unsatisfiable`, and a
+//!    malformed `requester_auth` → `request_malformed`;
 //! 3. a deadline already past → `deadline_unmet`;
 //! 4. the sharing policy switched `off` for any request that carries record
 //!    bodies → `not_authorized`, before anything is looked up;
-//! 5. Standard History to a requester that is not this node's counterparty,
-//!    with `share_standard_history` off → `policy_declined`, before the
-//!    subject is looked up (see below);
-//! 6. resolution against the index → the crate's reason;
-//! 7. the number of records (or checkpoints) the answer would carry, counted
+//! 5. who asks (`requester_auth`), before the ledger is read: a signature
+//!    that fails its
+//!    window, its key, its binding, its stated id or its nonce → refused; an
+//!    unsigned request whose answer depends on who asks → refused (see
+//!    below);
+//! 6. an answer that depends on who asks, to a node no record of this one
+//!    names → refused, before the subject is looked up;
+//! 7. resolution against the index → the crate's reason;
+//! 8. the number of records (or checkpoints) the answer would carry, counted
 //!    from the index without reading one → `policy_declined` over
 //!    [`MAX_ANSWER_RECORDS`] / [`MAX_ANSWER_CHECKPOINTS`];
-//! 8. the sharing-policy gate on each of those records → `not_authorized`;
-//! 9. building and signing; an answer larger than [`MAX_ANSWER_BYTES`] on
-//!    the wire → `policy_declined`.
+//! 9. the sharing-policy gate on each of those records → `not_authorized`;
+//! 10. building and signing; an answer larger than [`MAX_ANSWER_BYTES`] on
+//!     the wire → `policy_declined`.
 //!
 //! Every refusal is signed by this node's key and binds the digest of the
 //! request bytes as received (`refusal::sign`). Nothing here unwraps or
@@ -40,26 +45,40 @@
 //! record goes only to the node it names as the other side of its exchange.
 //! An answer is served whole or refused whole (`not_authorized`): an
 //! artifact is the same for every requester (§5), so it is never filtered
-//! per asker. The requester's id is the request's own optional
-//! `requester_id` member: its word, which narrows who is answered and is not
-//! access control. Checkpoints, the history card and the served summary
-//! carry no record bodies and are not gated by it.
+//! per asker. Checkpoints, the history card and the served summary carry no
+//! record bodies and are not gated by it.
+//!
+//! **Who asks** is the node a signed request proved it came from: the
+//! `requester_auth` signature verifies under a key the host announced for
+//! exactly one peer, and that peer is the principal (`requester_auth`). A
+//! request's `requester_id` is only the asker's word: one that names any
+//! other node than the principal is refused, and an unsigned request has no
+//! principal at all. So an answer that depends on who asks (record bodies
+//! unless they go to any peer, Standard History unless it is shared) is
+//! refused to an unsigned request, before the ledger is read. Under `peers`,
+//! or with Standard History shared, an unsigned request is answered as
+//! before.
 //!
 //! **Standard History** is every answer that carries no record bodies:
 //! `checkpoints`, `history_card/1`, `served_summary/1`, and any other
 //! derivation. It shows how much and how often this node serves, so with
 //! `share_standard_history` off (the default) it goes only to a requester
-//! that some record of this node names as the other side of an exchange.
-//! Every other requester gets `policy_declined`, decided before the subject
-//! is resolved, so the refusal is the same whether or not what was asked for
-//! exists. It is `refusal::sign` of the request digest, the reason and
-//! `issued_at` alone: no member names or depends on the asker, so two askers
-//! sending the same bytes in the same second get the same bytes back. What
-//! differs between two refusals is only what differs between the requests
-//! (their digest, which covers the `requester_id` each states) and when they
-//! were answered (`issued_at`), and the signature over those. A counterparty
-//! is still known by its stated `requester_id`, which is not authenticated:
-//! stating another node's id is answered as that node.
+//! that has proven it is a node some record of this one names as the other
+//! side of an exchange. Every other requester (unsigned, a signature that
+//! fails, or a proven node no record names) gets `policy_declined`, decided
+//! before the subject is resolved, so the refusal is the same whether or not
+//! what was asked for exists. It is `refusal::sign` of the request digest,
+//! the reason and `issued_at` alone: no member names or depends on the
+//! asker, so two askers sending the same bytes in the same second get the
+//! same bytes back. What differs between two refusals is only what differs
+//! between the requests (their digest, which covers every member each
+//! carries) and when they were answered (`issued_at`), and the signature
+//! over those.
+//!
+//! A record request from a proven node that no record names is refused
+//! `not_authorized` before the subject is resolved too, so a stranger cannot
+//! read this log's size or cadence from which refusal it gets. A real
+//! counterparty asking for more than its own records still can.
 //!
 //! **The wire.** An artifact answer is `{"artifact", "material", "envelope"}`:
 //! the artifact and the verification material as the exact RFC 8785 text the
@@ -82,6 +101,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 use crate::evidence_log::{self, LedgerIndex, LogView};
+use crate::requester_auth::{self, Form, Principal};
 use crate::served_summary::{self, SERVED_SUMMARY_DERIVATION_TOKEN};
 
 /// The largest request answered. A -00 request is a few hundred bytes; this
@@ -112,6 +132,12 @@ pub struct Responder<'a> {
     pub history_segments: &'a str,
     /// `share_policy::shares_standard_history()`.
     pub share_standard_history: bool,
+    /// The keys a requester's signature is bound through
+    /// (`requester_auth::bound_node`).
+    pub keys: requester_auth::Keys<'a>,
+    /// The (key_id, nonce) pairs already answered
+    /// (`requester_auth::replay_cache()`).
+    pub replay: &'a requester_auth::ReplayCache,
 }
 
 /// The one outcome of a request.
@@ -174,12 +200,28 @@ pub fn requester_id(request_bytes: &[u8]) -> Option<String> {
     value.get("requester_id")?.as_str().map(str::to_string)
 }
 
-/// Answer `request_bytes` (exactly as received) from `requester_id`.
-pub fn answer(
-    request_bytes: &[u8],
-    requester_id: Option<&str>,
-    responder: &Responder<'_>,
-) -> Outcome {
+/// Who a request proved it came from, as far as it got: the key its
+/// signature verified under, and the node that key is bound to.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Asker {
+    pub key_id: Option<String>,
+    pub node_id: Option<String>,
+}
+
+/// Answer `request_bytes`, exactly as received.
+#[cfg(test)]
+pub fn answer(request_bytes: &[u8], responder: &Responder<'_>) -> Outcome {
+    answer_as(request_bytes, responder).0
+}
+
+/// [`answer`], with who asked.
+fn answer_as(request_bytes: &[u8], responder: &Responder<'_>) -> (Outcome, Asker) {
+    let mut asker = Asker::default();
+    let outcome = answer_inner(request_bytes, responder, &mut asker);
+    (outcome, asker)
+}
+
+fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Asker) -> Outcome {
     let digest = request_digest(request_bytes);
     let refuse = |reason: Reason, subject_kind: Option<&'static str>| match refusal::sign(
         &digest,
@@ -205,6 +247,16 @@ pub fn answer(
         Err(e) => return refuse(e.reason(), None),
     };
     let kind = Some(req.subject.form().token());
+    let (map, form) = match serde_json::from_slice::<Value>(request_bytes) {
+        Ok(Value::Object(map)) => {
+            let form = requester_auth::form(&map);
+            (map, form)
+        }
+        _ => return refuse(Reason::RequestMalformed, kind),
+    };
+    if form == Form::Malformed {
+        return refuse(Reason::RequestMalformed, kind);
+    }
     // 3. Deadline.
     let Some(now) = parse_utc(responder.now) else {
         return Outcome::Unanswerable("this node's clock is not an RFC 3339 UTC time".into());
@@ -216,11 +268,17 @@ pub fn answer(
     if carries_records(&req) && responder.history_segments == "off" && policy_gate_applies() {
         return refuse(Reason::NotAuthorized, kind);
     }
+    // 5. Who asks: the requester's signature, before anything is looked up.
+    let principal = match requester(&map, form, &req, now, responder, asker) {
+        Ok(principal) => principal,
+        Err(reason) => return refuse(reason, kind),
+    };
+    let principal_node = principal.as_ref().map(|p| p.node_id.as_str());
 
     let key_id = hex::encode(responder.signing_key.verifying_key().to_bytes());
     let built = evidence_log::with_index(responder.ledger_dir, &key_id, |index| {
         let view = index.view()?;
-        Ok::<_, std::io::Error>(answer_from(&req, &digest, requester_id, responder, &view))
+        Ok::<_, std::io::Error>(answer_from(&req, &digest, principal_node, responder, &view))
     });
     match built {
         Ok(Ok(Ok(wire))) => match serde_json::to_vec(&wire) {
@@ -240,30 +298,106 @@ fn carries_records(req: &Request) -> bool {
     req.derivation.is_none() && !matches!(req.subject, Subject::Checkpoints)
 }
 
+/// Whether the answer to `req` depends on who asks: record bodies, unless
+/// the operator serves them to any peer (`peers`); Standard History, unless
+/// the operator shares it.
+fn needs_requester(req: &Request, responder: &Responder<'_>) -> bool {
+    if carries_records(req) {
+        responder.history_segments != "peers"
+    } else {
+        !responder.share_standard_history
+    }
+}
+
+/// Step 5: the principal a signed request proves (`requester_auth::check`),
+/// `None` for an unsigned one this answer does not need, or the refusal.
+///
+/// A malformed `requester_auth` is `request_malformed`. A signature that
+/// fails any check is refused whatever was asked. An unsigned request is
+/// refused when the answer depends on who asks. The refusal for a record is
+/// `not_authorized`; for Standard History it is `policy_declined`, the one
+/// refusal every requester that is not a proven counterparty gets (R-8).
+/// None of these reads the ledger, so each is the same whether or not what
+/// was asked for exists.
+fn requester(
+    map: &Map<String, Value>,
+    form: Form,
+    req: &Request,
+    now: capsule_emit_evidence_request::time::UtcTime,
+    responder: &Responder<'_>,
+    asker: &mut Asker,
+) -> Result<Option<Principal>, Reason> {
+    let needed = needs_requester(req, responder);
+    let refused = if carries_records(req) {
+        Reason::NotAuthorized
+    } else {
+        Reason::PolicyDeclined
+    };
+    match form {
+        Form::Malformed => Err(Reason::RequestMalformed),
+        Form::Unsigned if needed => Err(refused),
+        Form::Unsigned => Ok(None),
+        Form::Signed { key_id, sig } => {
+            let deadline = req.deadline.ok_or(Reason::RequestMalformed)?;
+            match requester_auth::check(
+                map,
+                &key_id,
+                &sig,
+                deadline,
+                now,
+                responder.keys,
+                responder.replay,
+            ) {
+                Ok(principal) => {
+                    asker.key_id = Some(principal.key_id.clone());
+                    asker.node_id = Some(principal.node_id.clone());
+                    Ok(Some(principal))
+                }
+                Err(failure) => {
+                    asker.key_id = failure.verified_key().map(str::to_string);
+                    asker.node_id = failure.verified_node().map(str::to_string);
+                    Err(if needed {
+                        refused
+                    } else {
+                        Reason::NotAuthorized
+                    })
+                }
+            }
+        }
+    }
+}
+
 /// The sharing-policy gate, except in the deliberately broken build CI uses
 /// to show the parity run catches a responder that drops it.
 fn policy_gate_applies() -> bool {
     !cfg!(feature = "mutant-evidence-skips-policy-gate")
 }
 
-/// Steps 5 to 9, over the index.
+/// Steps 6 to 10, over the index.
 fn answer_from(
     req: &Request,
     digest: &str,
-    requester_id: Option<&str>,
+    principal: Option<&str>,
     responder: &Responder<'_>,
     view: &LogView<'_>,
 ) -> Result<Value, Reason> {
     let index = view.index;
-    // 5. Standard History, only to a counterparty unless shared.
-    if !carries_records(req)
-        && !responder.share_standard_history
+    // 6. An answer that depends on who asks goes only to a counterparty,
+    // decided before the subject is resolved: Standard History unless it is
+    // shared, and record bodies unless they go to any peer. A node no record
+    // names learns nothing of this log's size or cadence from which
+    // refusal it gets.
+    if needs_requester(req, responder)
         && policy_gate_applies()
-        && !is_counterparty(index, requester_id)
+        && !is_counterparty(index, principal)
     {
-        return Err(Reason::PolicyDeclined);
+        return Err(if carries_records(req) {
+            Reason::NotAuthorized
+        } else {
+            Reason::PolicyDeclined
+        });
     }
-    // 6. Resolve.
+    // 7. Resolve.
     let anchor = match resolve::resolve(req, view) {
         Resolution::Artifact(anchor) => anchor,
         Resolution::Refuse(reason) => return Err(reason),
@@ -273,7 +407,7 @@ fn answer_from(
         return served_summary_answer(req, digest, &anchor, responder, index);
     }
 
-    // 7. Size, from the index.
+    // 8. Size, from the index.
     let anchor_position = anchor_position(index, &anchor).ok_or(Reason::CoverageUnsatisfiable)?;
     let covered = leaf_count(index.chain[anchor_position].mmr_size)
         .map_err(|_| Reason::CoverageUnsatisfiable)?;
@@ -311,14 +445,14 @@ fn answer_from(
         Vec::new()
     };
 
-    // 8. Who may have these records.
+    // 9. Who may have these records.
     if policy_gate_applies()
-        && !may_serve_all(index, &records, requester_id, responder.history_segments)
+        && !may_serve_all(index, &records, principal, responder.history_segments)
     {
         return Err(Reason::NotAuthorized);
     }
 
-    // 9. Build and sign.
+    // 10. Build and sign.
     let limit = if carries_records(req) {
         MAX_ANSWER_RECORDS
     } else {
@@ -364,11 +498,12 @@ fn anchor_position(index: &LedgerIndex, anchor: &ResolvedAnchor) -> Option<usize
     }
 }
 
-/// Whether some record of this node names `requester_id` as the other side
-/// of its exchange (a local block or an owner-maintenance record names no
-/// counterparty it was exchanged with, and padding names none).
-fn is_counterparty(index: &LedgerIndex, requester_id: Option<&str>) -> bool {
-    let Some(asker) = requester_id.map(str::trim).filter(|id| !id.is_empty()) else {
+/// Whether some record of this node names `principal`, the node a signed
+/// request proved it came from, as the other side of its exchange (a local
+/// block or an owner-maintenance record names no counterparty it was
+/// exchanged with, and padding names none).
+fn is_counterparty(index: &LedgerIndex, principal: Option<&str>) -> bool {
+    let Some(asker) = principal.map(str::trim).filter(|id| !id.is_empty()) else {
         return false;
     };
     index.leaves.iter().any(|leaf| {
@@ -376,12 +511,12 @@ fn is_counterparty(index: &LedgerIndex, requester_id: Option<&str>) -> bool {
     })
 }
 
-/// Whether every record in `records` may go to `requester_id` under
+/// Whether every record in `records` may go to `principal` under
 /// `history_segments` (see the module doc).
 fn may_serve_all(
     index: &LedgerIndex,
     records: &[u64],
-    requester_id: Option<&str>,
+    principal: Option<&str>,
     history_segments: &str,
 ) -> bool {
     if records.is_empty() {
@@ -390,7 +525,7 @@ fn may_serve_all(
     if history_segments == "off" {
         return false;
     }
-    let asker = requester_id.map(str::trim).filter(|id| !id.is_empty());
+    let asker = principal.map(str::trim).filter(|id| !id.is_empty());
     records.iter().all(|&i| {
         let Some(leaf) = index.leaves.get(i as usize) else {
             return false;
@@ -503,12 +638,13 @@ pub fn answer_and_log(
     log_dir: Option<&Path>,
 ) -> Outcome {
     let requester_id = requester_id(request_bytes);
-    let outcome = if busy {
-        decline_busy(request_bytes, responder)
+    let (outcome, asker) = if busy {
+        (decline_busy(request_bytes, responder), Asker::default())
     } else {
-        answer(request_bytes, requester_id.as_deref(), responder)
+        answer_as(request_bytes, responder)
     };
     let (status, reason) = outcome.log_status();
+    let digest = request_digest(request_bytes);
     crate::received_log::append(
         log_dir,
         &crate::received_log::Entry {
@@ -518,6 +654,9 @@ pub fn answer_and_log(
             subject_kind: outcome.subject_kind(),
             status,
             reason,
+            request_digest: Some(&digest),
+            principal_key_id: asker.key_id.as_deref(),
+            principal_node_id: asker.node_id.as_deref(),
         },
     );
     outcome
@@ -762,13 +901,73 @@ fn verify_served_summary(
 mod tests {
     use super::*;
     use crate::evidence_request_parity::{
-        corpus_checkpoints, corpus_ledger, sealed, write_jsonl, NODE_KEY_SEED,
+        announced_keys as announced, asker_key, corpus_checkpoints, corpus_ledger, sealed,
+        write_jsonl, NODE_KEY_SEED,
     };
+
+    use crate::requester_auth::{Keys, ReplayCache};
 
     const NOW: &str = "2026-09-29T00:00:00Z";
 
     fn key() -> SigningKey {
         SigningKey::from_bytes(&NODE_KEY_SEED)
+    }
+
+    fn key_id_of(key: &SigningKey) -> String {
+        hex::encode(key.verifying_key().to_bytes())
+    }
+
+    fn now() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(NOW).unwrap().into()
+    }
+
+    /// `request` signed with `key` at [`NOW`] (`requester_auth::sign`).
+    fn signed_with(key: &SigningKey, request: &Value) -> Vec<u8> {
+        let mut request = request.clone();
+        requester_auth::sign(&mut request, key, now());
+        serde_json::to_vec(&request).unwrap()
+    }
+
+    /// `request` signed by the node `node`.
+    fn signed_by(node: &str, request: &Value) -> Vec<u8> {
+        signed_with(&asker_key(node), request)
+    }
+
+    /// Asked of a node with these settings and a fresh replay cache.
+    fn ask_with(dir: &Path, bytes: &[u8], segments: &str, share_standard_history: bool) -> Outcome {
+        ask_cached(
+            dir,
+            bytes,
+            segments,
+            share_standard_history,
+            &ReplayCache::default(),
+        )
+    }
+
+    fn ask_cached(
+        dir: &Path,
+        bytes: &[u8],
+        segments: &str,
+        share_standard_history: bool,
+        replay: &ReplayCache,
+    ) -> Outcome {
+        let key = key();
+        let announced = announced();
+        answer(
+            bytes,
+            &Responder {
+                ledger_dir: dir,
+                signing_key: &key,
+                now: NOW,
+                history_segments: segments,
+                share_standard_history,
+                keys: Keys {
+                    announced: &announced,
+                    configured: None,
+                },
+                replay,
+            },
+        )
     }
 
     /// A ledger directory holding `ledger` and checkpoints cut at `cuts`
@@ -787,18 +986,7 @@ mod tests {
     /// Asked with Standard History shared, as every node answered before it
     /// had the switch: these tests are about everything else.
     fn ask(dir: &Path, bytes: &[u8], segments: &str) -> Outcome {
-        let key = key();
-        answer(
-            bytes,
-            requester_id(bytes).as_deref(),
-            &Responder {
-                ledger_dir: dir,
-                signing_key: &key,
-                now: NOW,
-                history_segments: segments,
-                share_standard_history: true,
-            },
-        )
+        ask_with(dir, bytes, segments, true)
     }
 
     fn refused(outcome: &Outcome) -> Option<Reason> {
@@ -977,12 +1165,18 @@ mod tests {
     #[test]
     fn a_busy_node_declines_with_a_signed_refusal() {
         let key = key();
+        let (announced, replay) = (announced(), ReplayCache::default());
         let responder = Responder {
             ledger_dir: Path::new("/nonexistent"),
             signing_key: &key,
             now: NOW,
             history_segments: "peers",
             share_standard_history: true,
+            keys: Keys {
+                announced: &announced,
+                configured: None,
+            },
+            replay: &replay,
         };
         let bytes = br#"{"subject":{"checkpoints":null},"coverage":{"min_freshness":1}}"#;
         let Outcome::Refused { wire, reason, .. } = decline_busy(bytes, &responder) else {
@@ -996,18 +1190,24 @@ mod tests {
     #[test]
     fn a_bad_clock_answers_nothing() {
         let key = key();
+        let (announced, replay) = (announced(), ReplayCache::default());
         let responder = Responder {
             ledger_dir: Path::new("/nonexistent"),
             signing_key: &key,
             now: "yesterday",
             history_segments: "peers",
             share_standard_history: true,
+            keys: Keys {
+                announced: &announced,
+                configured: None,
+            },
+            replay: &replay,
         };
         assert!(matches!(
-            answer(b"{}", None, &responder),
+            answer(b"{}", &responder),
             Outcome::Unanswerable(_)
         ));
-        assert_eq!(answer(b"{}", None, &responder).wire_bytes(), None);
+        assert_eq!(answer(b"{}", &responder).wire_bytes(), None);
     }
 
     /// This node has no referee: a referee's `adjudicate` request is answered
@@ -1228,126 +1428,110 @@ mod tests {
         assert!(v["witnessed"].as_u64().unwrap() > 0);
     }
 
-    /// Asked by `asker` (its stated id, beside the bytes) of a node with the
-    /// default settings, read the way the plugin reads them (no test sets
-    /// these two): records to counterparties, Standard History not shared.
-    fn ask_by_default(dir: &Path, bytes: &[u8], asker: Option<&str>) -> Outcome {
-        let key = key();
-        answer(
+    /// Asked of a node with the default settings, read the way the plugin
+    /// reads them (no test sets these two): records to counterparties,
+    /// Standard History not shared.
+    fn ask_by_default(dir: &Path, bytes: &[u8]) -> Outcome {
+        ask_with(
+            dir,
             bytes,
-            asker,
-            &Responder {
-                ledger_dir: dir,
-                signing_key: &key,
-                now: NOW,
-                history_segments: crate::share_policy::history_segments(),
-                share_standard_history: crate::share_policy::shares_standard_history(),
-            },
+            crate::share_policy::history_segments(),
+            crate::share_policy::shares_standard_history(),
         )
     }
 
     /// The three Standard History requests, each pinned to the corpus's
     /// newest checkpoint.
-    fn standard_history_requests() -> Vec<String> {
+    fn standard_history_requests() -> Vec<Value> {
         let ledger = corpus_ledger();
         let pin = corpus_checkpoints(&ledger, &key())[1].digest();
         let coverage = json!({"expected_pin": pin});
         vec![
-            json!({"subject": {"checkpoints": null}, "coverage": coverage}).to_string(),
-            json!({"subject": {"full_history": null}, "coverage": coverage, "derivation": "history_card/1"}).to_string(),
-            json!({"subject": {"full_history": null}, "coverage": coverage, "derivation": "served_summary/1"}).to_string(),
+            json!({"subject": {"checkpoints": null}, "coverage": coverage}),
+            json!({"subject": {"full_history": null}, "coverage": coverage, "derivation": "history_card/1"}),
+            json!({"subject": {"full_history": null}, "coverage": coverage, "derivation": "served_summary/1"}),
         ]
     }
 
+    /// The refusal of exactly these bytes, now: nothing else goes into it.
+    fn refusal_of(bytes: &[u8], reason: Reason) -> Vec<u8> {
+        let wire = refusal::sign(&request_digest(bytes), reason, NOW, &key())
+            .unwrap()
+            .to_json();
+        serde_json::to_vec(&wire).unwrap()
+    }
+
     /// PRD T7, the default half (R-8): checkpoints, `history_card/1` and
-    /// `served_summary/1` asked by a node that is no counterparty of this one
-    /// are refused `policy_declined`, signed, and the refusal is the same
-    /// bytes whoever asks: two different non-counterparties and an asker
-    /// naming no id. It is the same bytes, too, from a node that holds
-    /// nothing at all, so it says nothing about what this node holds.
+    /// `served_summary/1` asked by anyone who has not proven it is a
+    /// counterparty are refused `policy_declined`, signed, and the refusal is
+    /// the refusal of the request's own bytes, now, and nothing else: an
+    /// unsigned asker naming no id, one naming a counterparty's id, two
+    /// signed strangers, a stranger signing while naming a counterparty, and
+    /// the same bytes asked of a node that holds nothing at all. (Two askers
+    /// never send the same signed bytes; unsigned bytes are the same
+    /// whoever sends them, and get the same refusal.)
     #[test]
-    fn standard_history_to_a_non_counterparty_is_one_signed_refusal_whoever_asks() {
+    fn standard_history_to_a_non_counterparty_is_the_refusal_of_its_own_bytes_whoever_asks() {
         let dir = node(&corpus_ledger());
         let empty = node(&[]);
         for request in standard_history_requests() {
-            let bytes = request.as_bytes();
-            let mut seen = Vec::new();
-            for (ledger, asker) in [
-                (dir.path(), Some("node-y")),
-                (dir.path(), Some("node-z")),
-                (dir.path(), None),
-                (empty.path(), Some("node-y")),
-            ] {
-                let outcome = ask_by_default(ledger, bytes, asker);
-                let Outcome::Refused { wire, reason, .. } = &outcome else {
-                    panic!("{request} by {asker:?}: {outcome:?}");
-                };
-                assert_eq!(*reason, Reason::PolicyDeclined, "{request}");
-                assert_eq!(
-                    refusal::verify_for(wire, &key().verifying_key(), &request_digest(bytes)),
-                    Ok(Reason::PolicyDeclined),
-                    "signed and bound to the request"
-                );
-                seen.push(outcome.wire_bytes().unwrap());
+            let mut claims_a = request.clone();
+            claims_a["requester_id"] = json!("node-a");
+            let asks: Vec<Vec<u8>> = vec![
+                serde_json::to_vec(&request).unwrap(),
+                serde_json::to_vec(&claims_a).unwrap(),
+                signed_by("node-y", &request),
+                signed_by("node-z", &request),
+                signed_by("node-y", &claims_a),
+            ];
+            for bytes in &asks {
+                for ledger in [dir.path(), empty.path()] {
+                    let outcome = ask_by_default(ledger, bytes);
+                    assert_eq!(
+                        outcome.wire_bytes(),
+                        Some(refusal_of(bytes, Reason::PolicyDeclined)),
+                        "{request}: {outcome:?}"
+                    );
+                }
             }
-            assert!(
-                seen.windows(2).all(|pair| pair[0] == pair[1]),
-                "{request}: the refusal differs by asker"
-            );
-            // Nothing beside the request's digest, the reason and the time
-            // goes into it: it is exactly the refusal of these bytes, now.
-            let expected =
-                refusal::sign(&request_digest(bytes), Reason::PolicyDeclined, NOW, &key())
-                    .unwrap()
-                    .to_json();
-            assert_eq!(seen[0], serde_json::to_vec(&expected).unwrap());
         }
     }
 
-    /// Two askers whose requests differ only in the id they state get
-    /// refusals that differ only where their requests do: the request digest,
-    /// and the signature over it.
+    /// Two strangers asking the same thing get refusals that differ only
+    /// where their requests do: the request digest, and the signature over
+    /// it.
     #[test]
     fn two_askers_refusals_differ_only_by_their_own_request() {
         let dir = node(&corpus_ledger());
-        for base in standard_history_requests() {
-            let request = |asker: &str| {
-                let mut r: Value = serde_json::from_str(&base).unwrap();
-                r["requester_id"] = json!(asker);
-                r.to_string()
-            };
-            let (y, z) = (request("node-y"), request("node-z"));
-            let refusal_of = |bytes: &str| match ask_by_default(
-                dir.path(),
-                bytes.as_bytes(),
-                requester_id(bytes.as_bytes()).as_deref(),
-            ) {
+        for request in standard_history_requests() {
+            let refusal = |node: &str| match ask_by_default(dir.path(), &signed_by(node, &request))
+            {
                 Outcome::Refused { wire, .. } => wire,
                 other => panic!("{other:?}"),
             };
-            let (mut a, mut b) = (refusal_of(&y), refusal_of(&z));
+            let (mut a, mut b) = (refusal("node-y"), refusal("node-z"));
             for wire in [&mut a, &mut b] {
                 let members = wire.as_object_mut().unwrap();
                 members.remove("request_digest").expect("binds its request");
                 members.remove("sig").expect("signed");
             }
-            assert_eq!(a, b, "{base}");
+            assert_eq!(a, b, "{request}");
         }
     }
 
-    /// The default half's other side: a node some record names as the other
-    /// side of an exchange is still answered all three.
+    /// The default half's other side: a node that proves it is one some
+    /// record names as the other side of an exchange is answered all three.
     #[test]
     fn a_counterparty_is_still_answered_standard_history() {
         let dir = node(&corpus_ledger());
         for request in standard_history_requests() {
-            let bytes = request.as_bytes();
-            let outcome = ask_by_default(dir.path(), bytes, Some("node-a"));
+            let bytes = signed_by("node-a", &request);
+            let outcome = ask_by_default(dir.path(), &bytes);
             let Outcome::Answered { wire, .. } = &outcome else {
                 panic!("{request}: {outcome:?}");
             };
             let verified =
-                verify_response(bytes, wire, &key().verifying_key(), &Default::default());
+                verify_response(&bytes, wire, &key().verifying_key(), &Default::default());
             assert_eq!(
                 verified["state"],
                 json!("artifact"),
@@ -1376,57 +1560,497 @@ mod tests {
     }
 
     /// `share_standard_history` on restores what every node did before:
-    /// Standard History to anyone, named or not.
+    /// Standard History to anyone, signed or not, named or not.
     #[test]
     fn sharing_standard_history_answers_anyone_as_before() {
         let dir = node(&corpus_ledger());
         for request in standard_history_requests() {
-            for asker in [Some("node-z"), None] {
-                let key = key();
-                let outcome = answer(
-                    request.as_bytes(),
-                    asker,
-                    &Responder {
-                        ledger_dir: dir.path(),
-                        signing_key: &key,
-                        now: NOW,
-                        history_segments: "counterparties",
-                        share_standard_history: true,
-                    },
-                );
+            let mut names_z = request.clone();
+            names_z["requester_id"] = json!("node-z");
+            for bytes in [
+                serde_json::to_vec(&request).unwrap(),
+                serde_json::to_vec(&names_z).unwrap(),
+                signed_by("node-z", &request),
+            ] {
+                let outcome = ask_with(dir.path(), &bytes, "counterparties", true);
                 assert!(
                     matches!(outcome, Outcome::Answered { .. }),
-                    "{request} by {asker:?}: {outcome:?}"
+                    "{request}: {outcome:?}"
                 );
             }
         }
     }
 
     /// The switch governs Standard History only: record bodies stay under
-    /// `share_history_segments`, whichever way it is set.
+    /// `share_history_segments`, whichever way it is set. node-b proves who
+    /// it is and is some record's counterparty, just not this one's.
     #[test]
     fn sharing_standard_history_never_releases_a_record() {
         let ledger = corpus_ledger();
         let dir = node(&ledger);
-        let pin = corpus_checkpoints(&ledger, &key())[1].digest();
-        let record = json!({
-            "subject": {"record": ledger[0]["capsule_id"]},
-            "coverage": {"expected_pin": pin},
-            "requester_id": "node-b",
-        })
-        .to_string();
-        let key = key();
-        let outcome = answer(
-            record.as_bytes(),
-            Some("node-b"),
-            &Responder {
-                ledger_dir: dir.path(),
-                signing_key: &key,
-                now: NOW,
-                history_segments: "counterparties",
-                share_standard_history: true,
-            },
+        let record = record_request(&ledger, 0);
+        let outcome = ask_with(
+            dir.path(),
+            &signed_by("node-b", &record),
+            "counterparties",
+            true,
         );
         assert_eq!(refused(&outcome), Some(Reason::NotAuthorized));
+    }
+
+    /// A request for record `i` of `ledger`, pinned to its newest checkpoint.
+    fn record_request(ledger: &[Value], i: usize) -> Value {
+        let pin = corpus_checkpoints(ledger, &key())[1].digest();
+        json!({
+            "subject": {"record": ledger[i]["capsule_id"]},
+            "coverage": {"expected_pin": pin},
+        })
+    }
+
+    /// The corpus record node-a is the counterparty of, and a request for it.
+    fn node_a_record(ledger: &[Value]) -> Value {
+        let dir = node(ledger);
+        let key_id = hex::encode(key().verifying_key().to_bytes());
+        let i = evidence_log::with_index(dir.path(), &key_id, |index| {
+            index
+                .leaves
+                .iter()
+                .position(|leaf| leaf.counterparty.as_deref() == Some("node-a"))
+        })
+        .unwrap()
+        .expect("the corpus names node-a");
+        record_request(ledger, i)
+    }
+
+    // -----------------------------------------------------------------------
+    // Who asks (requester_auth): the ruling's tests, T3 and D3.
+    // -----------------------------------------------------------------------
+
+    /// A valid signed request from the record's counterparty is answered,
+    /// and the answer verifies.
+    #[test]
+    fn a_signed_request_from_the_counterparty_is_answered() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let bytes = signed_by("node-a", &node_a_record(&ledger));
+        let Outcome::Answered { wire, .. } = ask_by_default(dir.path(), &bytes) else {
+            panic!("answered");
+        };
+        let verified = verify_response(&bytes, &wire, &key().verifying_key(), &Default::default());
+        assert_eq!(verified["state"], json!("artifact"), "{verified}");
+    }
+
+    /// One member changed after signing, and the signature no longer covers
+    /// the request: refused as an asker that proved nothing, `not_authorized`
+    /// for a record and `policy_declined` once the change makes it Standard
+    /// History.
+    #[test]
+    fn a_member_changed_after_signing_is_refused() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let mut request = node_a_record(&ledger);
+        request["nonce"] = json!("nonce-1");
+        let signed: Value = serde_json::from_slice(&signed_by("node-a", &request)).unwrap();
+        // Each change alone would still be answered to node-a (or refused for
+        // another reason than who asks) if the signature were not checked.
+        let changes: Vec<(&str, Value, Reason)> = vec![
+            (
+                "subject",
+                json!({"correlation": "n-1"}),
+                Reason::NotAuthorized,
+            ),
+            (
+                "derivation",
+                json!("history_card/1"),
+                Reason::PolicyDeclined,
+            ),
+            (
+                "coverage",
+                json!({"min_freshness": 1}),
+                Reason::NotAuthorized,
+            ),
+            ("nonce", json!("nonce-2"), Reason::NotAuthorized),
+            (
+                "deadline",
+                json!("2026-09-29T00:02:01Z"),
+                Reason::NotAuthorized,
+            ),
+            ("route", json!("r"), Reason::NotAuthorized),
+        ];
+        for (member, value, reason) in changes {
+            let mut changed = signed.clone();
+            changed[member] = value;
+            let bytes = serde_json::to_vec(&changed).unwrap();
+            assert_eq!(
+                refused(&ask_by_default(dir.path(), &bytes)),
+                Some(reason),
+                "{member}"
+            );
+        }
+        let bytes = serde_json::to_vec(&signed).unwrap();
+        assert!(matches!(
+            ask_by_default(dir.path(), &bytes),
+            Outcome::Answered { .. }
+        ));
+    }
+
+    /// The same signed request twice within its deadline: the second is
+    /// refused `not_authorized`.
+    #[test]
+    fn a_replayed_nonce_is_not_authorized() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let bytes = signed_by("node-a", &node_a_record(&ledger));
+        let replay = ReplayCache::default();
+        let segments = crate::share_policy::history_segments();
+        assert!(matches!(
+            ask_cached(dir.path(), &bytes, segments, false, &replay),
+            Outcome::Answered { .. }
+        ));
+        assert_eq!(
+            refused(&ask_cached(dir.path(), &bytes, segments, false, &replay)),
+            Some(Reason::NotAuthorized)
+        );
+    }
+
+    /// A signed request whose deadline has passed is `deadline_unmet`; one
+    /// whose deadline is further ahead than the window is `not_authorized`.
+    #[test]
+    fn a_deadline_outside_the_window_is_refused() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let mut request = node_a_record(&ledger);
+        request["deadline"] = json!("2026-09-28T23:59:59Z");
+        assert_eq!(
+            refused(&ask_by_default(dir.path(), &signed_by("node-a", &request))),
+            Some(Reason::DeadlineUnmet)
+        );
+        request["deadline"] = json!("2026-09-29T00:05:01Z");
+        assert_eq!(
+            refused(&ask_by_default(dir.path(), &signed_by("node-a", &request))),
+            Some(Reason::NotAuthorized)
+        );
+        request["deadline"] = json!("2026-09-29T00:05:00Z");
+        assert!(matches!(
+            ask_by_default(dir.path(), &signed_by("node-a", &request)),
+            Outcome::Answered { .. }
+        ));
+    }
+
+    /// A key no host announced binds no node: `not_authorized`, even for a
+    /// request the operator's `peers` setting answers unsigned.
+    #[test]
+    fn an_unbound_key_is_not_authorized() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let stranger = SigningKey::from_bytes(&[0x77; 32]);
+        let request = node_a_record(&ledger);
+        assert_eq!(
+            refused(&ask_by_default(
+                dir.path(),
+                &signed_with(&stranger, &request)
+            )),
+            Some(Reason::NotAuthorized)
+        );
+        assert_eq!(
+            refused(&ask_with(
+                dir.path(),
+                &signed_with(&stranger, &request),
+                "peers",
+                true
+            )),
+            Some(Reason::NotAuthorized)
+        );
+    }
+
+    /// A node announcing node-a's public key as its own does not shut node-a
+    /// out: node-a's request, signed and naming node-a, is still node-a's.
+    /// The same signature naming no node is bound to neither.
+    #[test]
+    fn a_node_announcing_another_nodes_key_does_not_unbind_it() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let mut announced = announced();
+        announced.insert("node-m".into(), key_id_of(&asker_key("node-a")));
+        let key = key();
+        let replay = ReplayCache::default();
+        let responder = Responder {
+            ledger_dir: dir.path(),
+            signing_key: &key,
+            now: NOW,
+            history_segments: "counterparties",
+            share_standard_history: false,
+            keys: Keys {
+                announced: &announced,
+                configured: None,
+            },
+            replay: &replay,
+        };
+        let mut request = node_a_record(&ledger);
+        assert_eq!(
+            refused(&answer(&signed_by("node-a", &request), &responder)),
+            Some(Reason::NotAuthorized)
+        );
+        request["requester_id"] = json!("node-a");
+        assert!(matches!(
+            answer(&signed_by("node-a", &request), &responder),
+            Outcome::Answered { .. }
+        ));
+    }
+
+    /// `requester_auth` with a 63-hex key is `request_malformed`, as is a
+    /// signed request with no nonce.
+    #[test]
+    fn a_malformed_requester_auth_is_request_malformed() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let mut signed: Value =
+            serde_json::from_slice(&signed_by("node-a", &node_a_record(&ledger))).unwrap();
+        let mut short = signed.clone();
+        let key_id = short["requester_auth"]["key_id"].as_str().unwrap()[1..].to_string();
+        short["requester_auth"]["key_id"] = json!(key_id);
+        assert_eq!(
+            refused(&ask_by_default(
+                dir.path(),
+                &serde_json::to_vec(&short).unwrap()
+            )),
+            Some(Reason::RequestMalformed)
+        );
+        signed.as_object_mut().unwrap().remove("nonce");
+        assert_eq!(
+            refused(&ask_by_default(
+                dir.path(),
+                &serde_json::to_vec(&signed).unwrap()
+            )),
+            Some(Reason::RequestMalformed)
+        );
+    }
+
+    /// A signature over the same map without the domain tag does not verify.
+    #[test]
+    fn a_signature_without_the_domain_tag_is_not_authorized() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let mut request = node_a_record(&ledger);
+        request["nonce"] = json!("nonce-1");
+        request["deadline"] = json!("2026-09-29T00:02:00Z");
+        let body = jcs::to_string(&request).unwrap();
+        let a = asker_key("node-a");
+        request["requester_auth"] = json!({
+            "key_id": key_id_of(&a),
+            "sig": hex::encode(a.sign(body.as_bytes()).to_bytes()),
+        });
+        let bytes = serde_json::to_vec(&request).unwrap();
+        assert_eq!(
+            refused(&ask_by_default(dir.path(), &bytes)),
+            Some(Reason::NotAuthorized)
+        );
+    }
+
+    /// An unsigned request for a record is `not_authorized` before the ledger
+    /// is read: the same bytes back for a record that exists and one that
+    /// does not, and for a node with a ledger and one with none at all.
+    #[test]
+    fn an_unsigned_record_request_is_refused_alike_for_any_subject_before_the_ledger_is_read() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let missing = tempfile::tempdir().unwrap();
+        let nowhere = missing.path().join("no-such-ledger");
+        let held = node_a_record(&ledger);
+        let mut absent = held.clone();
+        absent["subject"] = json!({"record": "a".repeat(64)});
+        for mut request in [held, absent] {
+            request["requester_id"] = json!("node-a");
+            let bytes = serde_json::to_vec(&request).unwrap();
+            for ledger_dir in [dir.path(), nowhere.as_path()] {
+                let reads = evidence_log::index_reads();
+                let outcome = ask_by_default(ledger_dir, &bytes);
+                assert_eq!(evidence_log::index_reads(), reads, "the ledger was read");
+                assert_eq!(
+                    outcome.wire_bytes(),
+                    Some(refusal_of(&bytes, Reason::NotAuthorized)),
+                    "{request}"
+                );
+            }
+        }
+    }
+
+    /// PRD T3. Node y asks for node-a's record claiming to be node-a: with
+    /// its own key and node-a's id, or with node-a's key id over its own
+    /// signature. Each is a signed `not_authorized` bound to its request,
+    /// given before the ledger is read. The same request from node-a,
+    /// signed by node-a, is answered.
+    #[test]
+    fn a_node_claiming_to_be_another_is_refused_before_the_ledger_is_read() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let mut request = node_a_record(&ledger);
+        request["requester_id"] = json!("node-a");
+
+        let own_key_claims_a = signed_by("node-y", &request);
+        let mut a_key_y_sig: Value = serde_json::from_slice(&own_key_claims_a).unwrap();
+        a_key_y_sig["requester_auth"]["key_id"] = json!(key_id_of(&asker_key("node-a")));
+        let a_key_y_sig = serde_json::to_vec(&a_key_y_sig).unwrap();
+
+        for bytes in [&own_key_claims_a, &a_key_y_sig] {
+            let reads = evidence_log::index_reads();
+            let outcome = ask_by_default(dir.path(), bytes);
+            assert_eq!(evidence_log::index_reads(), reads, "the ledger was read");
+            let Outcome::Refused { wire, reason, .. } = &outcome else {
+                panic!("{outcome:?}");
+            };
+            assert_eq!(*reason, Reason::NotAuthorized);
+            assert_eq!(
+                refusal::verify_for(wire, &key().verifying_key(), &request_digest(bytes)),
+                Ok(Reason::NotAuthorized),
+                "signed and bound to the request"
+            );
+        }
+        assert!(matches!(
+            ask_by_default(dir.path(), &signed_by("node-a", &request)),
+            Outcome::Answered { .. }
+        ));
+    }
+
+    /// D3: a proven node that no record of this one names gets the same
+    /// `not_authorized` for any record subject, held or not, in range or
+    /// past it, small or over the answer limit: the refusal tells it
+    /// nothing about this log's size or cadence.
+    #[test]
+    fn a_stranger_learns_nothing_of_the_logs_size_from_a_record_refusal() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let held = node_a_record(&ledger);
+        let pin = held["coverage"].clone();
+        let subjects = [
+            held["subject"].clone(),
+            json!({"record": "a".repeat(64)}),
+            json!({"range": [0, 3]}),
+            json!({"range": [100_000, 100_001]}),
+            json!({"range": [0, 100_000]}),
+            json!({"full_history": null}),
+            json!({"correlation": "no-such-nonce"}),
+        ];
+        for subject in subjects {
+            let request = json!({"subject": subject, "coverage": pin});
+            let bytes = signed_by("node-z", &request);
+            let outcome = ask_by_default(dir.path(), &bytes);
+            assert_eq!(
+                outcome.wire_bytes(),
+                Some(refusal_of(&bytes, Reason::NotAuthorized)),
+                "{subject}"
+            );
+        }
+    }
+
+    /// The artifact a subject is answered with is the same bytes for two
+    /// different authorized requesters.
+    #[test]
+    fn two_authorized_requesters_get_the_same_artifact() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let artifact =
+            |bytes: &[u8], segments: &str| match ask_with(dir.path(), bytes, segments, false) {
+                Outcome::Answered { wire, .. } => wire["artifact"].clone(),
+                other => panic!("{other:?}"),
+            };
+        let checkpoints = &standard_history_requests()[0];
+        assert_eq!(
+            artifact(&signed_by("node-a", checkpoints), "counterparties"),
+            artifact(&signed_by("node-b", checkpoints), "counterparties")
+        );
+        let record = record_request(&ledger, 0);
+        assert_eq!(
+            artifact(&signed_by("node-y", &record), "peers"),
+            artifact(&signed_by("node-z", &record), "peers")
+        );
+    }
+
+    /// Under `peers` an unsigned request is answered a record, as before
+    /// (R-13's operator exception); a signed one is checked all the same.
+    #[test]
+    fn under_peers_an_unsigned_request_is_answered_and_a_bad_signature_is_not() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let record = record_request(&ledger, 0);
+        assert!(matches!(
+            ask_with(
+                dir.path(),
+                &serde_json::to_vec(&record).unwrap(),
+                "peers",
+                false
+            ),
+            Outcome::Answered { .. }
+        ));
+        let mut tampered: Value = serde_json::from_slice(&signed_by("node-z", &record)).unwrap();
+        tampered["nonce"] = json!("not-the-signed-one");
+        assert_eq!(
+            refused(&ask_with(
+                dir.path(),
+                &serde_json::to_vec(&tampered).unwrap(),
+                "peers",
+                false
+            )),
+            Some(Reason::NotAuthorized)
+        );
+    }
+
+    /// Who asked is recorded with the request's digest: the verified key and
+    /// node when the signature and binding held, even when the request is
+    /// refused for stating another node's id; nothing when it was unsigned.
+    #[test]
+    fn the_log_records_the_verified_principal_with_the_request_digest() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let log = tempfile::tempdir().unwrap();
+        let key = key();
+        let announced = announced();
+        let replay = ReplayCache::default();
+        let responder = Responder {
+            ledger_dir: dir.path(),
+            signing_key: &key,
+            now: NOW,
+            history_segments: "counterparties",
+            share_standard_history: false,
+            keys: Keys {
+                announced: &announced,
+                configured: None,
+            },
+            replay: &replay,
+        };
+        let request = node_a_record(&ledger);
+        let mut claims_a = request.clone();
+        claims_a["requester_id"] = json!("node-a");
+        let asks = [
+            signed_by("node-a", &request),
+            serde_json::to_vec(&claims_a).unwrap(),
+            signed_by("node-y", &claims_a),
+        ];
+        for bytes in &asks {
+            answer_and_log(bytes, false, &responder, Some(log.path()));
+        }
+        let lines: Vec<Value> =
+            std::fs::read_to_string(log.path().join(crate::received_log::RECEIVED_LOG_FILE))
+                .unwrap()
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect();
+        let y = key_id_of(&asker_key("node-y"));
+        let a = key_id_of(&asker_key("node-a"));
+        let expected = [
+            (Some(a.as_str()), Some("node-a"), None, "answered"),
+            (None, None, Some("node-a"), "refused"),
+            (Some(y.as_str()), Some("node-y"), Some("node-a"), "refused"),
+        ];
+        for ((line, bytes), (key_id, node_id, stated, status)) in
+            lines.iter().zip(&asks).zip(expected)
+        {
+            assert_eq!(line["request_digest"], json!(request_digest(bytes)));
+            assert_eq!(line["principal_key_id"], json!(key_id), "{line}");
+            assert_eq!(line["principal_node_id"], json!(node_id), "{line}");
+            assert_eq!(line["requester_id"], json!(stated), "{line}");
+            assert_eq!(line["status"], json!(status), "{line}");
+        }
+        assert_eq!(lines.len(), 3);
     }
 }

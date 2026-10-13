@@ -228,12 +228,19 @@ async fn answer_in_process(
                 return verdict_or_refusal;
             }
         }
+        let announced = crate::peer_keys::announced::snapshot();
+        let configured = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
         let responder = crate::evidence_answer::Responder {
             ledger_dir: capsules.ledger_dir(),
             signing_key: capsules.signing_key(),
             now: &now,
             history_segments: crate::share_policy::history_segments(),
             share_standard_history: crate::share_policy::shares_standard_history(),
+            keys: crate::requester_auth::Keys {
+                announced: &announced,
+                configured: configured.as_deref(),
+            },
+            replay: crate::requester_auth::replay_cache(),
         };
         let log_dir = capsules
             .ledger_dir()
@@ -273,7 +280,8 @@ pub(crate) enum SendError {
 }
 
 /// Send `request` to `peer_id` over the evidence stream and read the answer:
-/// `(the request bytes sent, the peer's JSON)`.
+/// `(the request bytes sent, the peer's JSON)`. Signed as this node
+/// (`requester_auth::sign_outgoing`) once its key is announced.
 pub(crate) async fn send_evidence_request(
     context: &mut PluginContext<'_>,
     peer_id: &str,
@@ -298,8 +306,10 @@ pub(crate) async fn send_evidence_request(
         .await
         .map_err(|error| SendError::NotOpened(error.to_string()))?;
     let (mut read_half, mut write_half) = stream.into_split();
+    let mut request = request.clone();
+    crate::requester_auth::sign_outgoing(&mut request);
     let request_bytes =
-        serde_json::to_vec(request).map_err(|error| SendError::Malformed(error.to_string()))?;
+        serde_json::to_vec(&request).map_err(|error| SendError::Malformed(error.to_string()))?;
     let write_and_read = async {
         write_half.write_all(&request_bytes).await?;
         write_half.shutdown().await?;
@@ -411,8 +421,11 @@ pub struct MeshEvidenceRequestArgs {
     /// Hex-encoded mesh peer id to ask, e.g. `iroh::EndpointId::to_string()`.
     pub peer_id: String,
     /// The request map (draft-mih-agent-evidence-request-00), sent as given.
-    /// When it names no `requester_id`, this node's own mesh id is added
-    /// (the responder's sharing policy reads it; it is this node's word).
+    /// When it names no `requester_id`, this node's own mesh id is added (it
+    /// is this node's word). Once this node's key is announced, the request
+    /// is also signed (`requester_auth`): a `nonce` and a `deadline` are added
+    /// unless it carries them, then `requester_auth` over the whole map. The
+    /// responder answers what depends on who asks only to a signed request.
     pub request: serde_json::Value,
     /// Check what comes back against the peer's announced key
     /// (`CAPSULES_PEER_KEYS`). **On unless the caller turns it off**
