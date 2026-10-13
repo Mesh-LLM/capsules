@@ -27,6 +27,10 @@ mutant-record-push-skips-claims = []
 # sharing-policy gate. CI builds it and requires the evidence-request parity
 # run to FAIL on the not_authorized cases.
 mutant-evidence-skips-policy-gate = []
+# Deliberately-broken requester: checks an answer's witness receipts with no
+# keys, as before 0.1.5. CI builds it and requires the witness-key tests to
+# FAIL on a receipt under its witness's configured key.
+mutant-answer-ignores-witness-keys = []
 
 # The referee's implementation mutants: each builds the referee with one
 # deliberate fault (vectors/parity/referee/mutants.json names the fault and
@@ -110,6 +114,9 @@ rmcp = "1.8"
 # reader task owns the read half of the plugin socket -- same version
 # mesh-llm-plugin itself pins.
 prost = "0.14"
+# Mints witness receipts (COSE_Sign1, EdDSA, RFC 9162 inclusion proof) for the
+# answer-verification tests -- the same coset the evidence-request crate reads.
+coset = "0.4"
 
 [profile.release]
 # Ship the release binary without its symbol table: about a quarter smaller

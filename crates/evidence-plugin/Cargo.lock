@@ -594,6 +594,7 @@ dependencies = [
  "capsule-emit-evidence-request",
  "checkpointed-local-log",
  "chrono",
+ "coset",
  "ed25519-dalek",
  "hex",
  "libc",

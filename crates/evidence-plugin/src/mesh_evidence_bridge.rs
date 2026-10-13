@@ -481,7 +481,12 @@ pub async fn handle_mesh_evidence_request(
     let verification = match crate::peer_keys::announced_key_in(registry.as_deref(), &args.peer_id)
         .and_then(|key_id| verifying_key(&key_id))
     {
-        Some(key) => crate::evidence_answer::verify_response(&request_bytes, &answer, &key),
+        Some(key) => crate::evidence_answer::verify_response(
+            &request_bytes,
+            &answer,
+            &key,
+            &crate::checkpoint_cadence::active_witness_keys(),
+        ),
         None => serde_json::json!({"state": "no_announced_key"}),
     };
     Ok(serde_json::json!({

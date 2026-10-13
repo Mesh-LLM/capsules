@@ -103,6 +103,16 @@ jobs:
           fi
           grep -q "record_to_a_stranger" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the policy cases"; exit 1; }
 
+      - name: The witness-key tests catch a requester that ignores witness keys
+        shell: bash
+        run: |
+          cargo test --locked --bin capsules --features mutant-answer-ignores-witness-keys --no-run
+          if out=$(cargo test --locked --bin capsules --features mutant-answer-ignores-witness-keys -- evidence_answer:: 2>&1); then
+            echo "::error::the witness-key tests passed a requester that ignores witness keys"
+            exit 1
+          fi
+          grep -q "a_receipt_under_its_witnesss_configured_key_is_counted_witnessed ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the witnessed case"; exit 1; }
+
       # The referee's mutants (vectors/parity/referee/mutants.json): each build
       # with one deliberate fault must fail the referee parity run on every
       # case listed for it.

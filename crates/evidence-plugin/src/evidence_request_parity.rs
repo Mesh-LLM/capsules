@@ -588,8 +588,12 @@ fn summarize(request_bytes: &[u8], outcome: &Outcome, key: &SigningKey, cps: &[V
             "issued_at_is_now": wire["issued_at"] == json!(NOW),
         }),
         Outcome::Answered { wire, subject_kind } => {
-            let mut verification =
-                evidence_answer::verify_response(request_bytes, wire, &key.verifying_key());
+            let mut verification = evidence_answer::verify_response(
+                request_bytes,
+                wire,
+                &key.verifying_key(),
+                &Default::default(),
+            );
             // The anchor by its place in the corpus, not its digest.
             if let Some(anchor) = verification
                 .get("anchor")

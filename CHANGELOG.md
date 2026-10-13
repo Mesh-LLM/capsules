@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- **Witness receipts on an answer are checked under the witness keys you configured:** when this
+  node asks another for evidence, each witness receipt carried on the answer's checkpoints is
+  checked under the key set for that witness's URL in `CAPSULES_CHECKPOINT_WITNESS_KEYS` (URLs
+  matched as for your own checkpoints; only keys you set, not keys pinned on first contact). A
+  receipt that does not verify under its witness's key makes the answer not evidence, with reason
+  `witness_receipt_unverified`. Receipts on a `served_summary/1` answer are not checked yet. With
+  keys set, the result also says how many receipts were verified and each receipt's status. A
+  key set for one witness is never used for another. With no keys set, nothing changes: receipts
+  are checked for form and for the checkpoint they are on, and none counts as witnessed.
+
 ### Fixed
 
 - **A half from a model served by a Hugging Face reference is no longer refused `model_mismatch`.**
