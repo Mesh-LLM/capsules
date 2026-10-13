@@ -521,7 +521,25 @@ pub fn decline_busy(request_bytes: &[u8], responder: &Responder<'_>) -> Outcome 
 ///   artifact digest and anchor checkpoint);
 /// - `{"state": "not_evidence", "why"}`: anything else. It is not a refusal
 ///   and not an answer (§4.1).
-pub fn verify_response(sent: &[u8], response: &Value, key: &ed25519_dalek::VerifyingKey) -> Value {
+///
+/// `witness_keys` are the witness keys the operator configured, by witness
+/// URL (`checkpoint_cadence::active_witness_keys`): configured keys only,
+/// never a key this node pinned on first contact with a witness. For an
+/// answer `answer::verify` checks, each receipt is checked under the key
+/// configured for ITS witness's URL (URLs normalized, and duplicates resolved,
+/// as `witness_status` does), never under another witness's key. A receipt
+/// that fails only because of a configured key makes the answer not
+/// evidence with `reason: "witness_receipt_unverified"`; one that fails with
+/// no key at all fails as before. With keys configured, such an artifact also
+/// reports `witnessed` (receipts verified) and each receipt's status. With
+/// none, the result is exactly what it was before keys were passed. A
+/// `served_summary/1` answer's receipts are not checked here.
+pub fn verify_response(
+    sent: &[u8],
+    response: &Value,
+    key: &ed25519_dalek::VerifyingKey,
+    witness_keys: &std::collections::BTreeMap<String, String>,
+) -> Value {
     let not_evidence = |why: String| json!({"state": "not_evidence", "why": why});
     let digest = request_digest(sent);
     if response.get("reason").is_some() {
@@ -545,6 +563,12 @@ pub fn verify_response(sent: &[u8], response: &Value, key: &ed25519_dalek::Verif
             Err(why) => not_evidence(why.into()),
         };
     }
+    let witness_key = |ts_url: &str| {
+        if cfg!(feature = "mutant-answer-ignores-witness-keys") {
+            return None;
+        }
+        configured_witness_key(witness_keys, ts_url)
+    };
     match answer::verify(
         envelope,
         artifact,
@@ -553,19 +577,75 @@ pub fn verify_response(sent: &[u8], response: &Value, key: &ed25519_dalek::Verif
         &digest,
         key,
         &evidence_log::record_digest,
-        // No witness keys: a receipt the answer carries must still be well
-        // formed and bound to its checkpoint, but none is counted as
-        // witnessed, and the result reports none.
-        &|_| None,
+        &witness_key,
     ) {
-        Ok(v) => json!({
-            "state": "artifact",
-            "anchor": v.anchor.digest(),
-            "records": v.records.iter().map(|r| r.leaf_index).collect::<Vec<_>>(),
-            "checkpoints": v.checkpoints.len(),
-        }),
+        Ok(v) => {
+            let mut out = json!({
+                "state": "artifact",
+                "anchor": v.anchor.digest(),
+                "records": v.records.iter().map(|r| r.leaf_index).collect::<Vec<_>>(),
+                "checkpoints": v.checkpoints.len(),
+            });
+            if !witness_keys.is_empty() {
+                out["witnessed"] = json!(v
+                    .receipts
+                    .iter()
+                    .filter(|r| r.status == answer::ReceiptStatus::Verified)
+                    .count());
+                out["receipts"] = v
+                    .receipts
+                    .iter()
+                    .map(|r| {
+                        json!({
+                            "checkpoint": r.checkpoint_digest,
+                            "ts_url": r.ts_url,
+                            "status": match r.status {
+                                answer::ReceiptStatus::Verified => "verified",
+                                answer::ReceiptStatus::NoKey => "no_key",
+                                answer::ReceiptStatus::Stub => "stub",
+                            },
+                        })
+                    })
+                    .collect();
+            }
+            out
+        }
+        // A receipt failing under a configured key: the same answer passes
+        // with no keys, so the key is what refused it.
+        Err(e @ (answer::VerifyError::ReceiptBinding | answer::VerifyError::ReceiptMalformed))
+            if !witness_keys.is_empty()
+                && answer::verify(
+                    envelope,
+                    artifact,
+                    material,
+                    &req,
+                    &digest,
+                    key,
+                    &evidence_log::record_digest,
+                    &|_| None,
+                )
+                .is_ok() =>
+        {
+            json!({"state": "not_evidence", "why": e.to_string(), "reason": "witness_receipt_unverified"})
+        }
         Err(e) => not_evidence(e.to_string()),
     }
+}
+
+/// The key the operator configured for the witness at `ts_url`: the entry
+/// whose URL is the same once normalized (`witness_status::normalize_url`).
+/// A value that is not an Ed25519 key is no key.
+fn configured_witness_key(
+    witness_keys: &std::collections::BTreeMap<String, String>,
+    ts_url: &str,
+) -> Option<ed25519_dalek::VerifyingKey> {
+    let normalized: std::collections::BTreeMap<String, &String> = witness_keys
+        .iter()
+        .map(|(url, key)| (crate::witness_status::normalize_url(url), key))
+        .collect();
+    let hex_key = normalized.get(&crate::witness_status::normalize_url(ts_url))?;
+    let bytes: [u8; 32] = hex::decode(hex_key).ok()?.try_into().ok()?;
+    ed25519_dalek::VerifyingKey::from_bytes(&bytes).ok()
 }
 
 /// The checks `answer::verify` makes of any answer, for the served-summary
@@ -839,7 +919,12 @@ mod tests {
         let Outcome::Answered { wire, .. } = ask(dir.path(), by_digests.as_bytes(), "peers") else {
             panic!("answered");
         };
-        let verification = verify_response(by_digests.as_bytes(), &wire, &key().verifying_key());
+        let verification = verify_response(
+            by_digests.as_bytes(),
+            &wire,
+            &key().verifying_key(),
+            &Default::default(),
+        );
         assert_eq!(verification["state"], json!("artifact"), "{verification}");
         assert_eq!(verification["records"], json!([3]));
     }
@@ -906,5 +991,194 @@ mod tests {
             check.is_ok(),
             "the refusal verifies under this node's key: {check:?}"
         );
+    }
+
+    const WITNESS: &str = "https://witness.example";
+
+    /// A real witness receipt for `entry` under `key`: a COSE_Sign1 (EdDSA)
+    /// over the root of a one-leaf RFC 9162 tree, with its inclusion proof.
+    fn mint_receipt(entry: &[u8; 32], key: &SigningKey) -> String {
+        use base64::Engine as _;
+        use coset::cbor::Value as Cbor;
+        use coset::{iana, CoseSign1Builder, HeaderBuilder, TaggedCborSerializable};
+        let mut leaf = Sha256::new();
+        leaf.update([0u8]);
+        leaf.update(entry);
+        let root = leaf.finalize();
+        let mut proof = Vec::new();
+        coset::cbor::ser::into_writer(
+            &Cbor::Array(vec![1.into(), 0.into(), Cbor::Array(vec![])]),
+            &mut proof,
+        )
+        .unwrap();
+        let protected = HeaderBuilder::new()
+            .algorithm(iana::Algorithm::EdDSA)
+            .value(395, 1.into())
+            .build();
+        let unprotected = HeaderBuilder::new()
+            .value(
+                396,
+                Cbor::Map(vec![((-1).into(), Cbor::Array(vec![Cbor::Bytes(proof)]))]),
+            )
+            .build();
+        let receipt = CoseSign1Builder::new()
+            .protected(protected)
+            .unprotected(unprotected)
+            .create_detached_signature(&root, &[], |tbs| key.sign(tbs).to_bytes().to_vec())
+            .build();
+        base64::engine::general_purpose::STANDARD.encode(receipt.to_tagged_vec().unwrap())
+    }
+
+    /// A node whose every checkpoint carries a receipt from [`WITNESS`],
+    /// signed by `witness`, for that checkpoint's own entry.
+    fn witnessed_node(witness: &SigningKey) -> tempfile::TempDir {
+        node_with_witnesses(|entry| {
+            json!([{
+                "ts_url": WITNESS, "entry_hash": hex::encode(entry),
+                "receipt_b64": mint_receipt(entry, witness),
+                "leaf_index": 0, "tree_size": 1,
+            }])
+        })
+    }
+
+    /// A node whose every checkpoint carries `witnesses(its entry)`.
+    fn node_with_witnesses(witnesses: impl Fn(&[u8; 32]) -> Value) -> tempfile::TempDir {
+        let dir = node(&corpus_ledger());
+        let path = dir.path().join("checkpoints.jsonl");
+        let lines: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| {
+                let mut cp: Value = serde_json::from_str(l).unwrap();
+                let record: cll::checkpoint::CheckpointRecord =
+                    serde_json::from_value(cp.clone()).unwrap();
+                let entry: [u8; 32] = Sha256::digest(hex::decode(record.digest()).unwrap()).into();
+                cp["witnesses"] = witnesses(&entry);
+                cp
+            })
+            .collect();
+        write_jsonl(&path, &lines);
+        dir
+    }
+
+    const CHECKPOINTS: &[u8] =
+        br#"{"subject":{"checkpoints":null},"coverage":{"min_freshness":1}}"#;
+
+    fn verified_with(dir: &Path, keys: &[(&str, &SigningKey)]) -> Value {
+        let Outcome::Answered { wire, .. } = ask(dir, CHECKPOINTS, "peers") else {
+            panic!("answered");
+        };
+        let keys = keys
+            .iter()
+            .map(|(url, k)| (url.to_string(), hex::encode(k.verifying_key().to_bytes())))
+            .collect();
+        verify_response(CHECKPOINTS, &wire, &key().verifying_key(), &keys)
+    }
+
+    #[test]
+    fn a_receipt_under_its_witnesss_configured_key_is_counted_witnessed() {
+        let witness = SigningKey::from_bytes(&[21; 32]);
+        let dir = witnessed_node(&witness);
+        let v = verified_with(dir.path(), &[(WITNESS, &witness)]);
+        assert_eq!(v["state"], json!("artifact"), "{v}");
+        let receipts = v["receipts"].as_array().unwrap();
+        assert!(!receipts.is_empty());
+        assert!(receipts
+            .iter()
+            .all(|r| r["status"] == json!("verified") && r["ts_url"] == json!(WITNESS)));
+        assert_eq!(v["witnessed"], json!(receipts.len()));
+        // The configured URL is matched as the cadence matches it: normalized.
+        let v = verified_with(dir.path(), &[("HTTPS://Witness.Example/", &witness)]);
+        assert_eq!(v["witnessed"], json!(receipts.len()), "{v}");
+    }
+
+    #[test]
+    fn a_receipt_that_does_not_verify_under_the_configured_key_is_refused_by_name() {
+        let witness = SigningKey::from_bytes(&[21; 32]);
+        let impostor = SigningKey::from_bytes(&[22; 32]);
+        let dir = witnessed_node(&witness);
+        let v = verified_with(dir.path(), &[(WITNESS, &impostor)]);
+        assert_eq!(v["state"], json!("not_evidence"), "{v}");
+        assert_eq!(v["reason"], json!("witness_receipt_unverified"));
+        assert_eq!(
+            v["why"],
+            json!(answer::VerifyError::ReceiptBinding.to_string())
+        );
+    }
+
+    #[test]
+    fn only_the_key_configured_for_that_witness_is_used() {
+        let witness = SigningKey::from_bytes(&[21; 32]);
+        let dir = witnessed_node(&witness);
+        // The right key, configured for another witness: never tried on this one.
+        let v = verified_with(dir.path(), &[("https://other.example", &witness)]);
+        assert_eq!(v["state"], json!("artifact"), "{v}");
+        assert_eq!(v["witnessed"], json!(0));
+        assert!(v["receipts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["status"] == json!("no_key")));
+    }
+
+    #[test]
+    fn with_no_witness_keys_the_result_is_what_it_was_before() {
+        let witness = SigningKey::from_bytes(&[21; 32]);
+        let dir = witnessed_node(&witness);
+        let v = verified_with(dir.path(), &[]);
+        assert_eq!(v["state"], json!("artifact"), "{v}");
+        let mut members: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        members.sort_unstable();
+        assert_eq!(members, ["anchor", "checkpoints", "records", "state"]);
+    }
+
+    #[test]
+    fn a_stub_receipt_is_listed_as_a_stub_and_not_counted() {
+        let witness = SigningKey::from_bytes(&[21; 32]);
+        let dir = node_with_witnesses(|entry| {
+            json!([{"ts_url": WITNESS, "entry_hash": hex::encode(entry), "receipt_b64": "",
+                    "leaf_index": 0, "tree_size": 1, "is_stub": true}])
+        });
+        let v = verified_with(dir.path(), &[(WITNESS, &witness)]);
+        assert_eq!(v["state"], json!("artifact"), "{v}");
+        assert_eq!(v["witnessed"], json!(0));
+        assert!(v["receipts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["status"] == json!("stub")));
+    }
+
+    #[test]
+    fn a_bad_receipt_from_a_witness_with_no_key_fails_as_before_not_as_a_key_failure() {
+        let witness = SigningKey::from_bytes(&[21; 32]);
+        // A receipt from an unkeyed witness, carried on the wrong checkpoint.
+        let dir = node_with_witnesses(|_| {
+            json!([{"ts_url": "https://unkeyed.example", "entry_hash": "00".repeat(32),
+                    "receipt_b64": mint_receipt(&[0; 32], &witness), "leaf_index": 0, "tree_size": 1}])
+        });
+        let v = verified_with(dir.path(), &[(WITNESS, &witness)]);
+        assert_eq!(v["state"], json!("not_evidence"), "{v}");
+        assert_eq!(v.get("reason"), None, "no configured key was involved: {v}");
+        assert_eq!(
+            verified_with(dir.path(), &[]),
+            v,
+            "the same answer as with no keys"
+        );
+    }
+
+    #[test]
+    fn two_entries_for_one_witness_resolve_as_the_witness_status_rows_do() {
+        let witness = SigningKey::from_bytes(&[21; 32]);
+        let impostor = SigningKey::from_bytes(&[22; 32]);
+        let dir = witnessed_node(&witness);
+        // Both normalize to WITNESS; as in `witness_status`, the entry that
+        // comes last in the map's order wins ("https" sorts after "HTTPS").
+        let v = verified_with(
+            dir.path(),
+            &[("HTTPS://Witness.Example", &impostor), (WITNESS, &witness)],
+        );
+        assert_eq!(v["state"], json!("artifact"), "{v}");
+        assert!(v["witnessed"].as_u64().unwrap() > 0);
     }
 }
