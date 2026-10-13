@@ -122,6 +122,16 @@ jobs:
           fi
           grep -q "check_3_a_quote_bound_to_another_record_fails ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the binding case"; exit 1; }
 
+      - name: The own-key tests catch a node that never announces its key
+        shell: bash
+        run: |
+          cargo test --locked --bin capsules --features mutant-own-key-not-announced --no-run
+          if out=$(cargo test --locked --bin capsules --features mutant-own-key-not-announced -- peer_keys:: 2>&1); then
+            echo "::error::the own-key tests passed a node that never announces its key"
+            exit 1
+          fi
+          grep -q "a_peers_announced_key_verifies_its_pushed_half_with_no_configured_keys ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the no-configured-keys case"; exit 1; }
+
       # The referee's mutants (vectors/parity/referee/mutants.json): each build
       # with one deliberate fault must fail the referee parity run on every
       # case listed for it.

@@ -185,6 +185,57 @@ pub mod announced {
     }
 }
 
+/// This node's own key, announced by the host on this plugin's behalf, so a
+/// peer reads it at its own `GET /api/plugin-keys` ([`announced`]) and can
+/// check what this node pushes without `CAPSULES_PEER_KEYS` naming it.
+pub mod own {
+    /// What became of the announce.
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum Announced {
+        /// The host took the key and announces it.
+        Sent,
+        /// The host does not list `plugin_keys.v1`: nothing was sent.
+        HostLacksCapability,
+        /// The host refused the key, or did not answer.
+        Refused(String),
+    }
+
+    /// Ask the host to announce `public_key`, the raw Ed25519 key every
+    /// record this node seals is signed with (its `key_id`). Public bytes
+    /// only. `send` is the host call (`PluginContext::announce_plugin_key`).
+    /// Off a host without the capability nothing is sent, and the node runs
+    /// as before: peers then need `CAPSULES_PEER_KEYS` to name it.
+    pub async fn announce<F, Fut, R, E>(
+        host_supports: bool,
+        public_key: [u8; 32],
+        send: F,
+    ) -> Announced
+    where
+        F: FnOnce(Vec<u8>) -> Fut,
+        Fut: std::future::Future<Output = Result<R, E>>,
+        E: std::fmt::Display,
+    {
+        let key_id = hex::encode(public_key);
+        if !host_supports || cfg!(feature = "mutant-own-key-not-announced") {
+            tracing::info!(
+                %key_id,
+                "the host announces no plugin keys; this node's key was not announced"
+            );
+            return Announced::HostLacksCapability;
+        }
+        match send(public_key.to_vec()).await {
+            Ok(_) => {
+                tracing::info!(%key_id, "this node's key is announced by the host");
+                Announced::Sent
+            }
+            Err(error) => {
+                tracing::warn!(%key_id, %error, "this node's key was not announced");
+                Announced::Refused(error.to_string())
+            }
+        }
+    }
+}
+
 /// The `key_id` configured for `peer_id` in `registry`, the raw value of
 /// [`ENV_PEER_KEYS`] (`None` when it is unset). `None` whenever the answer is
 /// not a non-empty string: see the module doc.
@@ -360,5 +411,178 @@ mod tests {
             "own key in; a peer with another plugin's key only, a withdrawn key and a malformed key out; \
              a peer no longer listed keeps the key it announced"
         );
+    }
+
+    /// What `own::announce` handed the host, if anything, and its outcome.
+    async fn announce_capturing(
+        host_supports: bool,
+        public_key: [u8; 32],
+        host_answer: Result<(), &str>,
+    ) -> (own::Announced, Option<Vec<u8>>) {
+        let mut sent = None;
+        let announced = own::announce(host_supports, public_key, |bytes| {
+            sent = Some(bytes);
+            async move { host_answer }
+        })
+        .await;
+        (announced, sent)
+    }
+
+    /// A node, as a peer's receiver sees it after one push: its own state
+    /// (keys and all) in a scratch directory, and the corpus's verified
+    /// bare half sealed again with that node's key, so the half is one this
+    /// node signed.
+    struct Sender {
+        _dir: tempfile::TempDir,
+        state: crate::capsule_emit::CapsuleState,
+        peer_id: String,
+        body: Vec<u8>,
+    }
+
+    fn sender() -> Sender {
+        use crate::record_push_parity::{body_bytes, parity_dir, read_json};
+        let corpus = read_json(&parity_dir().join("corpus/record_push.json"));
+        let push = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "bare_valid")
+            .expect("corpus case bare_valid")["pushes"][0]
+            .clone();
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::capsule_emit::CapsuleState::open(dir.path(), "sender").unwrap();
+        let body = sealed_by(&body_bytes(&push), state.signing_key());
+        Sender {
+            _dir: dir,
+            state,
+            peer_id: push["sender"].as_str().unwrap().to_string(),
+            body,
+        }
+    }
+
+    /// The half in `body`, sealed again with `key`: what that key's holder
+    /// can push.
+    fn sealed_by(body: &[u8], key: &ed25519_dalek::SigningKey) -> Vec<u8> {
+        let mut half: serde_json::Value = serde_json::from_slice(body).unwrap();
+        half["capsule_id"] =
+            serde_json::json!(capsule_emit_lib::jcs::compute_capsule_id(&half).unwrap());
+        capsule_emit_lib::capsule::attach_producer_envelope(&mut half, key).unwrap();
+        half.to_string().into_bytes()
+    }
+
+    /// `sender`'s push, received by a node whose registry is `registry`:
+    /// `Ok(())` when it is held, else the refusal reason.
+    fn push(sender: &Sender, registry: Option<&str>) -> Result<(), String> {
+        push_body(&sender.peer_id, &sender.body, registry)
+    }
+
+    /// `body`, pushed by `peer_id` to a node whose registry is `registry`.
+    fn push_body(peer_id: &str, body: &[u8], registry: Option<&str>) -> Result<(), String> {
+        use crate::record_push_receive::{receive, Receiver, MAX_REJECTED_LOG_BYTES};
+        let dir = tempfile::tempdir().unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
+        let receiver = Receiver {
+            ledger_dir: dir.path(),
+            signing_key: &key,
+            peer_keys: registry,
+            record_at_completion_off: false,
+            rejected_log_limit: MAX_REJECTED_LOG_BYTES,
+        };
+        let reply = receive(&receiver, body, Some(peer_id), "2026-10-12T00:00:00Z").unwrap();
+        match reply["reason"].as_str() {
+            Some(reason) => Err(reason.to_string()),
+            None => {
+                assert_eq!(reply["status"], "received", "{reply}");
+                Ok(())
+            }
+        }
+    }
+
+    /// The sender announces its key, its host lists it to the receiver's host
+    /// as the sender's key for this plugin (`GET /api/plugin-keys`), and the
+    /// receiver folds it in: its registry, with no `CAPSULES_PEER_KEYS`.
+    async fn registry_after_announce(sender: &Sender) -> Option<String> {
+        let (_, sent) = announce_capturing(true, sender.state.public_key(), Ok(())).await;
+        let mut known = std::collections::BTreeMap::new();
+        if let Some(bytes) = sent {
+            let answer = serde_json::json!({
+                "node_id": "receiver",
+                "plugin_keys": {},
+                "peers": {&sender.peer_id: {crate::PLUGIN_ID: hex::encode(bytes)}},
+            });
+            announced::fold(&mut known, &answer, crate::PLUGIN_ID);
+        }
+        merged(None, &known)
+    }
+
+    #[tokio::test]
+    async fn the_announce_carries_the_key_this_nodes_records_verify_against() {
+        let sender = sender();
+        let (announced, sent) = announce_capturing(true, sender.state.public_key(), Ok(())).await;
+        assert_eq!(announced, own::Announced::Sent);
+        let sent = sent.expect("the key was handed to the host");
+        let half: serde_json::Value = serde_json::from_slice(&sender.body).unwrap();
+        assert_eq!(
+            Some(hex::encode(&sent).as_str()),
+            half["key_id"].as_str(),
+            "the announced bytes are the key_id a sealed record carries"
+        );
+        assert_eq!(
+            sent,
+            sender.state.signing_key().verifying_key().to_bytes(),
+            "public bytes only, never the private key"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_peers_announced_key_verifies_its_pushed_half_with_no_configured_keys() {
+        let sender = sender();
+        assert_eq!(
+            push(&sender, None),
+            Err(crate::record_push_receive::REASON_SIGNATURE_UNVERIFIED.to_string()),
+            "no registry at all: the push is unverified"
+        );
+        let registry = registry_after_announce(&sender).await;
+        assert_eq!(push(&sender, registry.as_deref()), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn an_announced_key_that_disagrees_with_the_configured_one_verifies_nothing() {
+        let sender = sender();
+        let stale_key = ed25519_dalek::SigningKey::from_bytes(&[0x11; 32]);
+        let stale_body = sealed_by(&sender.body, &stale_key);
+        let configured = serde_json::json!({
+            &sender.peer_id: hex::encode(stale_key.verifying_key().to_bytes()),
+        })
+        .to_string();
+        assert_eq!(
+            push_body(&sender.peer_id, &stale_body, Some(&configured)),
+            Ok(()),
+            "the configured key alone verifies the half its holder sealed"
+        );
+        let announced: std::collections::BTreeMap<String, String> =
+            serde_json::from_str(&registry_after_announce(&sender).await.expect("announced"))
+                .unwrap();
+        let registry = merged(Some(&configured), &announced);
+        assert_eq!(
+            push(&sender, registry.as_deref()),
+            Err(crate::record_push_receive::REASON_SIGNATURE_UNVERIFIED.to_string()),
+            "the announced key does not win"
+        );
+        assert_eq!(
+            push_body(&sender.peer_id, &stale_body, registry.as_deref()),
+            Err(crate::record_push_receive::REASON_SIGNATURE_UNVERIFIED.to_string()),
+            "the configured key does not win"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_host_without_the_capability_is_sent_nothing_and_a_refusal_is_returned() {
+        let (announced, sent) = announce_capturing(false, [3; 32], Ok(())).await;
+        assert_eq!(announced, own::Announced::HostLacksCapability);
+        assert_eq!(sent, None, "nothing is sent to an older host");
+        let (announced, sent) = announce_capturing(true, [3; 32], Err("not a key")).await;
+        assert_eq!(announced, own::Announced::Refused("not a key".into()));
+        assert!(sent.is_some());
     }
 }

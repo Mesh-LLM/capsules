@@ -53,6 +53,13 @@
   failure shows as failed. The Evidence page then says "Quote signed by a TDX quoting enclave and
   bound to this exchange (checked here)", and on its own line that platform status, revocation and
   measurements are not checked here. The checks use `p256` 0.13 (ECDSA P-256) and `x509-cert` 0.2.
+- **Each node's key is announced by capsules itself:** on a host that lists `plugin_keys.v1`,
+  capsules asks the host at start to announce the public key its records are signed with, so a
+  peer verifies this node's pushed records without `CAPSULES_PEER_KEYS` naming it. On an older
+  host nothing is sent, and the log says the key was not announced. `CAPSULES_PEER_KEYS` stays the fallback; a peer
+  the two sources give different keys still verifies nothing until the stale entry is removed.
+- **Built against mesh-llm-plugin from mesh-llm main (a39211e),** which has the announce call;
+  no published release has it yet.
 
 ### Fixed
 

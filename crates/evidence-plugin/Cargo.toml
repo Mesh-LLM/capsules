@@ -35,6 +35,10 @@ mutant-answer-ignores-witness-keys = []
 # bind the record. CI builds it and requires the tee_attest tests to FAIL on
 # the quote-bound-to-another-record case.
 mutant-tee-skips-binding-check = []
+# Deliberately-broken announce: this node never asks the host to announce
+# its key. CI builds it and requires the own-key tests to FAIL, so a peer
+# with no configured keys is shown to depend on the announce.
+mutant-own-key-not-announced = []
 
 # The referee's implementation mutants: each builds the referee with one
 # deliberate fault (vectors/parity/referee/mutants.json names the fault and
@@ -144,3 +148,10 @@ strip = true
 # for. Release builds and every output are unchanged.
 [profile.dev.package.sha2]
 opt-level = 3
+
+# `PluginContext::announce_plugin_key` (host capability `plugin_keys.v1`,
+# mesh-llm #2299) is on mesh-llm main but in no published mesh-llm-plugin yet:
+# 0.78.1 predates it. Taken from the commit the hosts run until a release
+# carries it; then this goes and the requirement above moves to that release.
+[patch.crates-io]
+mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "a39211e78f3dd73cf9a94b08417c0da17e5fa5d9" }
