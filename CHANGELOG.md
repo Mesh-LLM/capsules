@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed
+
+- **Standard History is no longer answered to every node that asks.** A node's checkpoint list,
+  `history_card/1` and `served_summary/1` now go only to a counterparty (a node one of its records
+  names as the other side of an exchange). Every other node gets a signed `policy_declined` that
+  carries nothing about the asker: it is signed over the request's digest, the reason and the
+  time, so the same request gets the same refusal whoever sends it. Until 0.1.5 any node could
+  read them. **After upgrading, a node you have never exchanged with can no longer read your
+  checkpoints, history card or served summary** until you set the new `share_standard_history`
+  switch to `on` (console: Sharing policy › Standard history; or
+  `CAPSULES_SHARE_STANDARD_HISTORY=on`). Your records are unaffected: they stay under
+  `share_history_segments`. As for records, a counterparty is known by the id its request
+  states, which this version does not authenticate.
+- **`share_history_segments` defaults to `counterparties`.** `prospective`, the old default, is
+  deprecated and read as `counterparties`: it always served exactly the same nodes, so nothing
+  changes for a node using it. A log line says when it is read. Set `counterparties` instead.
+
 ### Added
 
 - **Witness receipts on an answer are checked under the witness keys you configured:** when this
@@ -13,6 +30,11 @@
   keys set, the result also says how many receipts were verified and each receipt's status. A
   key set for one witness is never used for another. With no keys set, nothing changes: receipts
   are checked for form and for the checkpoint they are on, and none counts as witnessed.
+- **`advertise_evidence_requests`, off by default.** Whether this node tells other nodes that it
+  answers evidence requests. This version advertises nothing, so nothing reads it yet. A node
+  with it off still answers a node that asks.
+- The plugin's records status (`sharing`) reports both new switches. The Evidence page does not
+  show them yet.
 
 ### Fixed
 

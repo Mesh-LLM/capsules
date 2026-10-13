@@ -1,7 +1,7 @@
 //! This plugin's `config_schema` declaration for
-//! the one sharing-policy object -- four switches, one key
+//! the one sharing-policy object -- six switches, one key
 //! (`docs/SHARING-POLICY.md`). Declaring it here
-//! makes mesh's console render the four switches under Configuration >
+//! makes mesh's console render the six switches under Configuration >
 //! Plugins with the host's own controls -- nothing here is a score, and
 //! nothing here ranks anyone.
 //!
@@ -29,6 +29,11 @@ pub const RECORD_AT_COMPLETION_KEY: &str = "share_record_at_completion";
 pub const HISTORY_SEGMENTS_KEY: &str = "share_history_segments";
 pub const ADJUDICATIONS_KEY: &str = "share_adjudications";
 pub const WITNESS_KEY: &str = "witness";
+/// Standard Service History (checkpoints, `history_card/1`,
+/// `served_summary/1`) to a requester that is not this node's counterparty.
+pub const STANDARD_HISTORY_KEY: &str = "share_standard_history";
+/// Whether this node advertises that it answers evidence requests at all.
+pub const ADVERTISE_EVIDENCE_REQUESTS_KEY: &str = "advertise_evidence_requests";
 /// The opt-in stop-routing rule (`routing_rule`): N, and D in days. Same
 /// env-suffix convention (`CAPSULES_STOP_ROUTING_*`).
 pub const STOP_ROUTING_AFTER_KEY: &str = "stop_routing_after_contradictions";
@@ -72,17 +77,31 @@ pub(crate) fn normalized(raw: Option<&str>) -> Option<String> {
 /// This process's own env var for `share_history_segments`.
 pub const ENV_HISTORY_SEGMENTS: &str = "CAPSULES_SHARE_HISTORY_SEGMENTS";
 
-/// Who may read one of this node's records back: `off`, `counterparties`,
-/// `prospective` or `peers`. Unset is the documented default, `prospective`;
-/// an unknown value is `off`, never wider.
+/// `prospective`, deprecated: it never served anyone `counterparties` does
+/// not, so it is read as `counterparties` and a log line says so. The one
+/// place the old value is resolved.
+const DEPRECATED_PROSPECTIVE: &str = "prospective";
+
+/// Who may read one of this node's records back: `off`, `counterparties` or
+/// `peers`. Unset is the documented default, `counterparties`; `prospective`
+/// is read as `counterparties`; an unknown value is `off`, never wider.
 pub fn history_segments() -> &'static str {
     history_segments_for(crate::settings::var(ENV_HISTORY_SEGMENTS).ok().as_deref())
 }
 
-fn history_segments_for(raw: Option<&str>) -> &'static str {
+pub(crate) fn history_segments_for(raw: Option<&str>) -> &'static str {
     match normalized(raw).as_deref() {
-        None | Some("prospective") => "prospective",
-        Some("counterparties") => "counterparties",
+        None | Some("counterparties") => "counterparties",
+        Some(DEPRECATED_PROSPECTIVE) => {
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| {
+                tracing::warn!(
+                    setting = ENV_HISTORY_SEGMENTS,
+                    "prospective is deprecated and read as counterparties, which it always behaved as; set counterparties"
+                );
+            });
+            "counterparties"
+        }
         Some("peers") => "peers",
         // "off", and anything this plugin does not know: never wider than
         // the operator could have meant (`setting_problems` says so).
@@ -90,24 +109,51 @@ fn history_segments_for(raw: Option<&str>) -> &'static str {
     }
 }
 
+/// This process's own env var for `share_standard_history`.
+pub const ENV_STANDARD_HISTORY: &str = "CAPSULES_SHARE_STANDARD_HISTORY";
+
+/// Whether Standard Service History goes to a requester that is not this
+/// node's counterparty: only when the operator turned it on. Off by default;
+/// a counterparty is answered either way.
+pub fn shares_standard_history() -> bool {
+    switched_on(crate::settings::var(ENV_STANDARD_HISTORY).ok().as_deref())
+}
+
+/// This process's own env var for `advertise_evidence_requests`: off unless
+/// switched on (`on`, `1`, `true` or `yes`). This version has nothing that
+/// advertises evidence requests, so nothing reads it yet: the plugin's
+/// `evidence-request/1` channel is declared only to its own host, so that a
+/// request can reach it, and mesh-llm does not pass a plugin's channels on to
+/// other nodes.
+pub const ENV_ADVERTISE_EVIDENCE_REQUESTS: &str = "CAPSULES_ADVERTISE_EVIDENCE_REQUESTS";
+
+/// An on/off switch: on only for `on` (or `1`, `true`, `yes`); unset and
+/// anything else is off.
+fn switched_on(raw: Option<&str>) -> bool {
+    matches!(
+        normalized(raw).as_deref(),
+        Some("on" | "1" | "true" | "yes")
+    )
+}
+
 /// The sharing switches set to a value this plugin does not know, each read
 /// as off: for the page, so a typo is seen rather than silently obeyed.
 pub fn setting_problems() -> Vec<String> {
-    let known: [(&str, &[&str]); 5] = [
+    const ON_OFF: &[&str] = &["on", "off", "1", "0", "true", "false", "yes", "no"];
+    let known: [(&str, &[&str]); 7] = [
         (ENV_RECORD_AT_COMPLETION, &["counterparty", "off"]),
         (
             ENV_HISTORY_SEGMENTS,
-            &["counterparties", "prospective", "peers", "off"],
+            &["counterparties", DEPRECATED_PROSPECTIVE, "peers", "off"],
         ),
+        (ENV_STANDARD_HISTORY, ON_OFF),
+        (ENV_ADVERTISE_EVIDENCE_REQUESTS, ON_OFF),
         (ENV_ADJUDICATIONS, &["deliver_to_subjects", "off"]),
         (
             crate::referee::request::ENV_ADJUDICATE_DIFFERING_TWINS,
-            &["on", "off", "1", "0", "true", "false", "yes", "no"],
+            ON_OFF,
         ),
-        (
-            crate::checkpoint_cadence::ENV_ENABLE,
-            &["on", "off", "1", "0", "true", "false", "yes", "no"],
-        ),
+        (crate::checkpoint_cadence::ENV_ENABLE, ON_OFF),
     ];
     known
         .iter()
@@ -154,7 +200,7 @@ const RULE_CATEGORY_SUMMARY: &str =
     "An optional rule of yours for when this node stops routing to a \
     peer. Off by default.";
 
-/// The `config_schema` manifest entry naming all four switches. Attach with
+/// The `config_schema` manifest entry naming all six sharing switches and the other settings. Attach with
 /// `DeclarativePluginBuilder::config_item`.
 ///
 /// Every choice list names its default FIRST. mesh-llm 0.78's console does not
@@ -183,13 +229,14 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
         .setting(
             config_setting(
                 HISTORY_SEGMENTS_KEY,
-                config_enum(["prospective", "counterparties", "peers", "off"]),
+                config_enum(["counterparties", DEPRECATED_PROSPECTIVE, "peers", "off"]),
             )
-            .default_value(&"prospective")
+            .default_value(&"counterparties")
             .description(
                 "Who this node answers a chain-segment/record/correlation request from: past \
-                 counterparties only, counterparties plus prospective ones (default), any peer, \
-                 or nobody. A refusal is structural (not_authorized): it says nothing about the peer.",
+                 counterparties only (the default), any peer, or nobody. prospective is \
+                 deprecated and read as counterparties, which it always behaved as. A refusal \
+                 is structural (not_authorized): it says nothing about the peer.",
             )
             .label("History segments")
             .category(CATEGORY_ID, CATEGORY_LABEL, CATEGORY_SUMMARY, 1),
@@ -225,6 +272,33 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
             )
                 .label("Witnesses")
                 .category(CATEGORY_ID, CATEGORY_LABEL, CATEGORY_SUMMARY, 3),
+        )
+        .setting(
+            config_setting(STANDARD_HISTORY_KEY, config_enum(["off", "on"]))
+                .default_value(&"off")
+                .description(
+                    "Answer a node this node has never exchanged with when it asks for this \
+                     node's checkpoints, history card or served summary (on), or decline (off, \
+                     the default). These carry no records, but they show how much and how \
+                     often this node serves. Off, such a node gets a signed policy_declined \
+                     that says nothing about who asked; a counterparty is answered either way. \
+                     A counterparty is known by the id its request states, which is not yet \
+                     authenticated.",
+                )
+                .label("Standard history")
+                .category(CATEGORY_ID, CATEGORY_LABEL, CATEGORY_SUMMARY, 4),
+        )
+        .setting(
+            config_setting(ADVERTISE_EVIDENCE_REQUESTS_KEY, config_enum(["off", "on"]))
+                .default_value(&"off")
+                .description(
+                    "Tell other nodes that this node answers evidence requests (on), or \
+                     don't (off, the default). Off, a node that asks is still answered under \
+                     the settings above. This version advertises nothing, so nothing reads this \
+                     yet.",
+                )
+                .label("Advertise evidence requests")
+                .category(CATEGORY_ID, CATEGORY_LABEL, CATEGORY_SUMMARY, 5),
         )
         .setting(
             config_setting(ADJUDICATE_DIFFERING_TWINS_KEY, config_enum(["off", "on"]))
@@ -303,6 +377,8 @@ mod tests {
                 HISTORY_SEGMENTS_KEY,
                 ADJUDICATIONS_KEY,
                 WITNESS_KEY,
+                STANDARD_HISTORY_KEY,
+                ADVERTISE_EVIDENCE_REQUESTS_KEY,
                 ADJUDICATE_DIFFERING_TWINS_KEY,
                 REFEREE_BAR_DAYS_KEY,
                 STOP_ROUTING_AFTER_KEY,
@@ -340,7 +416,7 @@ mod tests {
             );
             checked += 1;
         }
-        assert_eq!(checked, 4, "the four choice settings were checked");
+        assert_eq!(checked, 6, "the six choice settings were checked");
     }
 
     #[test]
@@ -356,16 +432,27 @@ mod tests {
     }
 
     #[test]
-    fn history_segments_defaults_to_prospective_reads_the_four_tiers_and_unknown_is_off() {
-        assert_eq!(history_segments_for(None), "prospective");
+    fn history_segments_defaults_to_counterparties_reads_the_three_tiers_and_unknown_is_off() {
+        assert_eq!(history_segments_for(None), "counterparties");
         assert_eq!(
             history_segments_for(Some("bogus")),
             "off",
             "an unknown value never widens"
         );
-        for tier in ["off", "counterparties", "prospective", "peers"] {
+        for tier in ["off", "counterparties", "peers"] {
             assert_eq!(history_segments_for(Some(tier)), tier);
         }
+    }
+
+    /// `prospective` (R-10): still accepted, so a saved setting keeps working,
+    /// and read as exactly `counterparties`.
+    #[test]
+    fn prospective_is_read_as_counterparties() {
+        assert_eq!(history_segments_for(Some("prospective")), "counterparties");
+        assert_eq!(
+            history_segments_for(Some(" Prospective ")),
+            "counterparties"
+        );
     }
 
     #[test]
@@ -378,6 +465,11 @@ mod tests {
             (HISTORY_SEGMENTS_KEY, "SHARE_HISTORY_SEGMENTS"),
             (ADJUDICATIONS_KEY, "SHARE_ADJUDICATIONS"),
             (WITNESS_KEY, "CHECKPOINT_WITNESS_URLS"),
+            (STANDARD_HISTORY_KEY, "SHARE_STANDARD_HISTORY"),
+            (
+                ADVERTISE_EVIDENCE_REQUESTS_KEY,
+                "ADVERTISE_EVIDENCE_REQUESTS",
+            ),
             (ADJUDICATE_DIFFERING_TWINS_KEY, "ADJUDICATE_DIFFERING_TWINS"),
             (REFEREE_BAR_DAYS_KEY, "REFEREE_BAR_DAYS"),
             (STOP_ROUTING_AFTER_KEY, "STOP_ROUTING_AFTER_CONTRADICTIONS"),
@@ -402,7 +494,17 @@ mod tests {
         );
         assert_eq!(
             by_key(HISTORY_SEGMENTS_KEY).default_json.as_deref(),
-            Some("\"prospective\"")
+            Some("\"counterparties\"")
+        );
+        assert_eq!(
+            by_key(STANDARD_HISTORY_KEY).default_json.as_deref(),
+            Some("\"off\"")
+        );
+        assert_eq!(
+            by_key(ADVERTISE_EVIDENCE_REQUESTS_KEY)
+                .default_json
+                .as_deref(),
+            Some("\"off\"")
         );
         assert_eq!(
             by_key(ADJUDICATIONS_KEY).default_json.as_deref(),
@@ -414,8 +516,13 @@ mod tests {
                 .as_deref(),
             Some("\"off\"")
         );
-        // Answering a request for a record is unchanged.
-        assert_eq!(history_segments_for(None), "prospective");
+        // Answering a request for a record is unchanged: `counterparties`
+        // serves exactly whom `prospective` did.
+        assert_eq!(history_segments_for(None), "counterparties");
+        assert!(
+            !switched_on(None),
+            "standard history and advertising are off"
+        );
         assert!(!adjudications_delivered_for(None));
         assert!(!crate::referee::request::adjudicate_differing_twins_from(
             None
@@ -485,10 +592,10 @@ mod tests {
     /// read records back.
     #[test]
     fn history_segments_never_widen_on_a_typo() {
-        assert_eq!(history_segments_for(None), "prospective");
+        assert_eq!(history_segments_for(None), "counterparties");
         assert_eq!(
             history_segments_for(Some("")),
-            "prospective",
+            "counterparties",
             "empty is unset"
         );
         assert_eq!(history_segments_for(Some("Off ")), "off");
@@ -503,6 +610,23 @@ mod tests {
         );
         assert_eq!(history_segments_for(Some("peeers")), "off");
         assert!(!record_at_completion_is_off_for(Some(" Counterparty")));
+    }
+
+    #[test]
+    fn an_on_off_switch_is_on_only_when_switched_on() {
+        for on in ["on", " ON ", "1", "true", "yes"] {
+            assert!(switched_on(Some(on)), "{on:?}");
+        }
+        for off in [
+            None,
+            Some(""),
+            Some("off"),
+            Some("0"),
+            Some("no"),
+            Some("onn"),
+        ] {
+            assert!(!switched_on(off), "{off:?}");
+        }
     }
 
     #[test]

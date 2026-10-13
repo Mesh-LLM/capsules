@@ -52,6 +52,8 @@ impl Harness {
             .env("MESH_LLM_PLUGIN_TRANSPORT", "unix")
             // An isolated data dir per run: never the operator's own.
             .env("CAPSULES_DATA_DIR", &data_dir)
+            // Nor the operator's mesh config: no console setting reaches it.
+            .env("MESH_LLM_CONFIG", data_dir.join("no-mesh-config.toml"))
             .env("CAPSULES_BLOCKED_MODELS", "blocked-test-model")
             .env("CAPSULES_MESH_REQUEST_TIMEOUT_MS", "1500")
             // `bind_side_stream` (mesh-llm-plugin's own `io.rs`) derives the
@@ -320,12 +322,16 @@ async fn ask_over_stream(stream: LocalStream, request_bytes: &[u8]) -> Vec<u8> {
 /// in-process -- here a signed `coverage_unsatisfiable` refusal (a fresh
 /// node has no checkpoint yet), bound to the digest of the bytes the peer
 /// sent -- no external evidence server is contacted, and the request is
-/// logged to the "asked of you" log.
+/// logged to the "asked of you" log. Standard History is shared, so the
+/// request gets as far as its coverage.
 #[tokio::test]
 async fn responder_answers_an_evidence_request_in_process() {
     let (evidence_server_url, received) = spawn_fake_evidence_server(b"{}").await;
-    let mut harness =
-        Harness::spawn(&[("CAPSULES_EVIDENCE_SERVER_URL", &evidence_server_url)]).await;
+    let mut harness = Harness::spawn(&[
+        ("CAPSULES_EVIDENCE_SERVER_URL", &evidence_server_url),
+        ("CAPSULES_SHARE_STANDARD_HISTORY", "on"),
+    ])
+    .await;
     harness.initialize().await;
 
     let stream = harness.open_evidence_stream().await;
@@ -354,6 +360,56 @@ async fn responder_answers_an_evidence_request_in_process() {
     assert_eq!(line["subject_kind"], "checkpoints");
     assert_eq!(line["status"], "refused");
     assert_eq!(line["reason"], "coverage_unsatisfiable");
+
+    harness.shutdown_process().await;
+}
+
+/// PRD T7, the default half, on the plugin binary: with the default
+/// settings, two nodes this one never exchanged with ask for its checkpoints
+/// and each gets a signed `policy_declined` (on a fresh node, so it comes
+/// before coverage, which would refuse `coverage_unsatisfiable`). Each
+/// carries exactly the -00 refusal's members, none naming the asker, and the
+/// two agree on all but the request each binds, the time and the signature.
+#[tokio::test]
+async fn standard_history_is_one_signed_refusal_to_every_non_counterparty_by_default() {
+    let mut harness = Harness::spawn(&[]).await;
+    harness.initialize().await;
+
+    let mut refusals = Vec::new();
+    for asker in ["node-y", "node-z"] {
+        let request = serde_json::json!({
+            "subject": {"checkpoints": null},
+            "coverage": {"min_freshness": 1},
+            "requester_id": asker,
+        })
+        .to_string();
+        let stream = harness.open_evidence_stream().await;
+        let mut response: serde_json::Value =
+            serde_json::from_slice(&ask_over_stream(stream, request.as_bytes()).await)
+                .expect("a JSON answer");
+        assert!(
+            capsule_emit_evidence_request::refusal::check(&response).conformant,
+            "a conforming, signed refusal: {response}"
+        );
+        assert_eq!(response["reason"], "policy_declined", "{response}");
+        assert_eq!(
+            response["request_digest"],
+            capsule_emit_evidence_request::digest::request_digest(request.as_bytes())
+        );
+        let members = response.as_object_mut().unwrap();
+        let mut names: Vec<&str> = members.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["issued_at", "key_id", "reason", "request_digest", "sig"],
+            "nothing beside the -00 refusal's members"
+        );
+        for bound in ["request_digest", "issued_at", "sig"] {
+            members.remove(bound).expect("a refusal binds its request");
+        }
+        refusals.push(response);
+    }
+    assert_eq!(refusals[0], refusals[1]);
 
     harness.shutdown_process().await;
 }

@@ -215,6 +215,14 @@ fn case(name: &str, covers: &str, history_segments: &str, request: Value) -> Val
     json!({"name": name, "covers": covers, "history_segments": history_segments, "request": request})
 }
 
+/// `case` on a node that shares Standard History with any requester: the
+/// cases about what an answer is, not about who gets one.
+fn shared(name: &str, covers: &str, history_segments: &str, request: Value) -> Value {
+    let mut c = case(name, covers, history_segments, request);
+    c["share_standard_history"] = json!("on");
+    c
+}
+
 fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
     let id = |i: usize| ledger[i]["capsule_id"].as_str().unwrap().to_string();
     let latest = json!({"expected_pin": cps[1].digest()});
@@ -230,7 +238,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
         case(
             "record_to_its_counterparty",
             "a record goes to the node it names as the other side",
-            "prospective",
+            "counterparties",
             with(
                 req(json!({"record": id(0)}), &latest),
                 "requester_id",
@@ -240,7 +248,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
         case(
             "record_to_another_node",
             "a record does not go to a node it does not name",
-            "prospective",
+            "counterparties",
             with(
                 req(json!({"record": id(0)}), &latest),
                 "requester_id",
@@ -250,7 +258,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
         case(
             "record_to_a_stranger",
             "an asker naming no id is nobody's counterparty",
-            "prospective",
+            "counterparties",
             req(json!({"record": id(0)}), &latest),
         ),
         case(
@@ -325,7 +333,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
         case(
             "range_to_a_counterparty",
             "a range naming only one counterparty's records goes to it",
-            "prospective",
+            "counterparties",
             with(
                 req(json!({"range": [16, 20]}), &latest),
                 "requester_id",
@@ -335,7 +343,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
         case(
             "range_mixed_counterparties",
             "a range with another node's record is refused whole, never filtered",
-            "prospective",
+            "counterparties",
             with(
                 req(json!({"range": [0, 4]}), &latest),
                 "requester_id",
@@ -376,7 +384,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
         case(
             "correlation_to_its_counterparty",
             "records carrying one nonce, all naming the asker",
-            "prospective",
+            "counterparties",
             with(
                 req(json!({"correlation": "n-1"}), &latest),
                 "requester_id",
@@ -411,13 +419,13 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
             req(json!({"exchange": "b".repeat(64)}), &latest),
         ),
         // Checkpoints and derivations: no record bodies, so never gated.
-        case(
+        shared(
             "checkpoints_with_sharing_off",
             "the checkpoint list carries no records and is served under off",
             "off",
             req(json!({"checkpoints": null}), &latest),
         ),
-        case(
+        shared(
             "history_card",
             "the history_card/1 derivation, with consistency proofs",
             "off",
@@ -427,7 +435,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
                 json!("history_card/1"),
             ),
         ),
-        case(
+        shared(
             "history_card_wrong_subject",
             "history_card/1 is not derived for a record",
             "peers",
@@ -437,7 +445,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
                 json!("history_card/1"),
             ),
         ),
-        case(
+        shared(
             "derivation_unknown",
             "a derivation this node does not derive",
             "peers",
@@ -447,7 +455,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
                 json!("unregistered_fold/1"),
             ),
         ),
-        case(
+        shared(
             "served_summary",
             "served_summary/1 pinned to the newest checkpoint",
             "off",
@@ -457,7 +465,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
                 json!("served_summary/1"),
             ),
         ),
-        case(
+        shared(
             "served_summary_older_pin",
             "served_summary/1 is a static export of the newest checkpoint only",
             "peers",
@@ -467,7 +475,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
                 json!("served_summary/1"),
             ),
         ),
-        case(
+        shared(
             "served_summary_on_demand",
             "served_summary/1 under min_freshness asks for an on-demand export",
             "peers",
@@ -478,7 +486,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
             ),
         ),
         // Coverage.
-        case(
+        shared(
             "coverage_unknown_pin",
             "a pin that is none of this node's checkpoints",
             "peers",
@@ -487,7 +495,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
                 &json!({"expected_pin": "d".repeat(64)}),
             ),
         ),
-        case(
+        shared(
             "coverage_both_members",
             "coverage carries exactly one member",
             "peers",
@@ -496,13 +504,13 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
                 &json!({"expected_pin": cps[1].digest(), "min_freshness": 1}),
             ),
         ),
-        case(
+        shared(
             "coverage_missing",
             "coverage is required",
             "peers",
             json!({"subject": {"checkpoints": null}}),
         ),
-        case(
+        shared(
             "coverage_fresher_than_held",
             "min_freshness beyond every checkpoint",
             "peers",
@@ -511,7 +519,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
                 &json!({"min_freshness": 1000}),
             ),
         ),
-        case(
+        shared(
             "coverage_by_time",
             "min_freshness as a time picks a checkpoint issued since",
             "peers",
@@ -521,13 +529,13 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
             ),
         ),
         // Malformed, late, large.
-        case(
+        shared(
             "pre_draft_request_shape",
             "a request in the shape used before -00 (a kind and capsule_id subject) is not a -00 request",
             "peers",
             json!({"subject": {"kind": "record", "capsule_id": id(0)}}),
         ),
-        case(
+        shared(
             "deadline_passed",
             "a deadline already past at receipt",
             "peers",
@@ -538,6 +546,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
             ),
         ),
     ];
+    cases.extend(standard_history_cases(&latest, &id(0)));
     cases.push(
         json!({"name": "not_json", "covers": "bytes that are not JSON", "history_segments": "peers",
                       "request_text": "{\"subject\": "}),
@@ -551,6 +560,97 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
                       "request": req(json!({"checkpoints": null}), &latest)}),
     );
     cases
+}
+
+/// PRD T7's default half: Standard History (checkpoints, `history_card/1`,
+/// `served_summary/1`) goes to a counterparty, and every other requester is
+/// refused `policy_declined` before the subject is looked up.
+fn standard_history_cases(latest: &Value, record: &str) -> Vec<Value> {
+    let with_asker = |subject: Value, derivation: Option<&str>, asker: Option<&str>| {
+        let mut r = json!({"subject": subject, "coverage": latest});
+        if let Some(d) = derivation {
+            r["derivation"] = json!(d);
+        }
+        if let Some(a) = asker {
+            r["requester_id"] = json!(a);
+        }
+        r
+    };
+    let full = || json!({"full_history": null});
+    vec![
+        case(
+            "checkpoints_to_a_non_counterparty",
+            "checkpoints are not shared with a node this one never exchanged with",
+            "counterparties",
+            with_asker(json!({"checkpoints": null}), None, Some("node-z")),
+        ),
+        case(
+            "checkpoints_to_a_stranger",
+            "an asker naming no id is nobody's counterparty",
+            "counterparties",
+            with_asker(json!({"checkpoints": null}), None, None),
+        ),
+        case(
+            "checkpoints_to_a_non_counterparty_under_peers",
+            "share_history_segments governs records, never Standard History",
+            "peers",
+            with_asker(json!({"checkpoints": null}), None, Some("node-z")),
+        ),
+        case(
+            "checkpoints_to_a_counterparty",
+            "a counterparty is answered checkpoints",
+            "counterparties",
+            with_asker(json!({"checkpoints": null}), None, Some("node-a")),
+        ),
+        case(
+            "history_card_to_a_non_counterparty",
+            "history_card/1 is not shared with a node this one never exchanged with",
+            "counterparties",
+            with_asker(full(), Some("history_card/1"), Some("node-z")),
+        ),
+        case(
+            "history_card_to_a_counterparty",
+            "a counterparty is answered history_card/1",
+            "counterparties",
+            with_asker(full(), Some("history_card/1"), Some("node-b")),
+        ),
+        case(
+            "served_summary_to_a_non_counterparty",
+            "served_summary/1 is not shared with a node this one never exchanged with",
+            "counterparties",
+            with_asker(full(), Some("served_summary/1"), Some("node-z")),
+        ),
+        case(
+            "served_summary_to_a_counterparty",
+            "a counterparty is answered served_summary/1",
+            "counterparties",
+            with_asker(full(), Some("served_summary/1"), Some("node-a")),
+        ),
+        case(
+            "derivation_unknown_to_a_non_counterparty",
+            "the refusal comes before the derivation is looked at: it says nothing about what this node derives",
+            "counterparties",
+            with_asker(full(), Some("unregistered_fold/1"), Some("node-z")),
+        ),
+        case(
+            "standard_history_unknown_pin_to_a_non_counterparty",
+            "the refusal comes before the anchor is resolved: it says nothing about what this node holds",
+            "counterparties",
+            json!({"subject": {"checkpoints": null}, "coverage": {"expected_pin": "d".repeat(64)}, "requester_id": "node-z"}),
+        ),
+        case(
+            "record_to_its_counterparty_under_prospective",
+            "prospective, deprecated, is read as counterparties",
+            "prospective",
+            json!({"subject": {"record": record}, "coverage": latest, "requester_id": "node-a"}),
+        ),
+        case(
+            "record_to_another_node_under_prospective",
+            "prospective, deprecated, serves no one counterparties does not",
+            "prospective",
+            json!({"subject": {"record": record}, "coverage": latest, "requester_id": "node-b"}),
+        ),
+    ]
 }
 
 fn build_corpus() -> Value {
@@ -645,11 +745,17 @@ fn run(corpus: &Value) -> BTreeMap<String, Value> {
         };
         let log_dir = data.path().join(format!("received-log-{name}"));
         std::fs::create_dir_all(&log_dir).unwrap();
+        // Each case's settings as the operator would write them, read the way
+        // the plugin reads them. Standard History is not shared unless the
+        // case says so.
         let responder = Responder {
             ledger_dir: &ledger_dir,
             signing_key: &key,
             now,
-            history_segments: case["history_segments"].as_str().unwrap(),
+            history_segments: crate::share_policy::history_segments_for(
+                case["history_segments"].as_str(),
+            ),
+            share_standard_history: case["share_standard_history"] == json!("on"),
         };
         let busy = case.get("busy").and_then(Value::as_bool).unwrap_or(false);
         let outcome = evidence_answer::answer_and_log(&bytes, busy, &responder, Some(&log_dir));

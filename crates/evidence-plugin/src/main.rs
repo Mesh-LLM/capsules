@@ -1513,6 +1513,29 @@ mod manifest_tests {
         assert!(!manifest.mesh_channels.is_empty());
     }
 
+    /// R-7 (PRD T7), this plugin's half: what it declares to its host names
+    /// no evidence capability, and `evidence-request/1` is its one
+    /// evidence-request item, a channel the host needs to deliver a request
+    /// to it. That the host passes no plugin channel on to other nodes is
+    /// mesh-llm's behaviour and is not tested here.
+    #[test]
+    fn the_manifest_declares_no_evidence_capability() {
+        for manifest in [manifest_for(None), manifest_for(Some("http://127.0.0.1:9"))] {
+            assert!(
+                !manifest.capabilities.iter().any(|c| c.contains("evidence")),
+                "{:?}",
+                manifest.capabilities
+            );
+            let evidence_items: Vec<&str> = manifest
+                .mesh_channels
+                .iter()
+                .map(|c| c.name.as_str())
+                .filter(|name| name.contains("evidence"))
+                .collect();
+            assert_eq!(evidence_items, [EVIDENCE_REQUEST_CHANNEL]);
+        }
+    }
+
     #[test]
     fn a_configured_manifest_has_both() {
         let manifest = manifest_for(Some("http://127.0.0.1:9"));

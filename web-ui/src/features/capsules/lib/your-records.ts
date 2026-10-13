@@ -190,7 +190,8 @@ function describeSwitch(key: SharingSwitchKey, value: string | null): { state: s
     case 'history_segments': {
       const to: Record<string, string> = {
         counterparties: 'nodes you’ve dealt with',
-        prospective: 'nodes you’ve dealt with or are about to',
+        // Deprecated: read as counterparties, which it always behaved as.
+        prospective: 'nodes you’ve dealt with',
         peers: 'any node that asks'
       }
       if (value === 'off' || !value || !to[value]) {
