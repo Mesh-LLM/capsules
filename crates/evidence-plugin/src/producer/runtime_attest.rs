@@ -49,8 +49,8 @@
 //!
 //! `os_measured` does **NOT** prove hardware-rooted measurement — no TEE, no
 //! hardware register is involved — so it must never be confused with
-//! `tee_measured` (unbuilt; would require a TEE measuring into a hardware
-//! register before `exec`, e.g. Linux+TPM or SEV-SNP). A root attacker with
+//! `tee_measured` (a TDX quote bound to the record, carried in the separate
+//! `tee_attestation` slot: [`crate::producer::tee_attest`]). A root attacker with
 //! SIP disabled (able to swap the binary under a valid code signature) is
 //! the named residual only `tee_measured` closes.
 //!

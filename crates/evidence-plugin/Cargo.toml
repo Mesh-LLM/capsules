@@ -31,6 +31,10 @@ mutant-evidence-skips-policy-gate = []
 # keys, as before 0.1.5. CI builds it and requires the witness-key tests to
 # FAIL on a receipt under its witness's configured key.
 mutant-answer-ignores-witness-keys = []
+# Deliberately-broken TEE check: accepts a quote whose REPORT_DATA does not
+# bind the record. CI builds it and requires the tee_attest tests to FAIL on
+# the quote-bound-to-another-record case.
+mutant-tee-skips-binding-check = []
 
 # The referee's implementation mutants: each builds the referee with one
 # deliberate fault (vectors/parity/referee/mutants.json names the fault and

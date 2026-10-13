@@ -35,6 +35,22 @@
   with it off still answers a node that asks.
 - The plugin's records status (`sharing`) reports both new switches. The Evidence page does not
   show them yet.
+- **A TDX quote in the record, on a TDX host:** when the plugin can take a quote (the kernel's
+  configfs-tsm report interface, writable by the plugin's user), each record's `tee_attestation`
+  slot carries the quote, its SHA-256 and the 64-byte REPORT_DATA. REPORT_DATA is
+  `SHA-512("x-mesh-poc-v1/tee-binding/v1" || 0x00 || request digest || answer digest ||
+  SHA-256(client nonce) || the record's signing key)`, each input 32 bytes, the nonce hashed
+  exactly as recorded. A quote is taken only for a real client nonce (a host-forwarded one or one
+  the client sent to capsules' own `/v1`), never for a placeholder; otherwise the slot says "no
+  client nonce". The context says the quote is bound to the exchange's nonce, and fresh against
+  the client's challenge only when the record shows the client chose that nonce. A host whose report interface is not TDX, or not usable by the
+  plugin's user, records the slot empty exactly as before (the latter is said once in the log).
+- **What the node checks, and what it does not:** it checks the quote's SHA-256, that it parses
+  as a TDX DCAP v4 quote, that its REPORT_DATA is the one recomputed from the record, and that the
+  bound key signs the record. It does not check the quote's signatures, the PCK chain, QE
+  identity, TCB status or the measurements, so a quote that names the record is not by itself
+  evidence of a TEE. The Evidence page shows "quote bound to this record" on one line and what is
+  not checked on another.
 
 ### Fixed
 

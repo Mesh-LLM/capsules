@@ -14,6 +14,7 @@ import {
   buildChecksRows,
   buildCommitsToRows,
   recordServedBy,
+  TEE_COPY,
   buildHeaderRows,
   buildIdentityRow,
   theirsFetchable
@@ -879,5 +880,52 @@ describe('buildCommitsToRows — served by, from our own record (item 5)', () =>
     expect(recordServedBy(recordServedByProvider(PROVIDER))).toBe(PROVIDER)
     expect(recordServedBy(recordServedByProvider('unknown'))).toBeNull()
     expect(recordServedBy(null)).toBeNull()
+  })
+})
+
+describe('buildCommitsToRows — the TDX quote (u229)', () => {
+  const rowsFor = (overrides: Partial<PaneCRow>) =>
+    buildCommitsToRows(paneCRow(overrides), null).filter((r) => r.label.startsWith('TEE'))
+
+  it('shows no TEE rows when neither record says anything about a quote', () => {
+    expect(rowsFor({})).toEqual([])
+  })
+
+  it('a quote bound to our record: the binding on one line, the unchecked platform on another', () => {
+    const rows = rowsFor({ mine: { state: 'present', capsule_id: 'm', tee: { state: 'bound' } } })
+    expect(rows.map((r) => r.label)).toEqual(['TEE quote', 'TEE platform'])
+    expect(rows[0].yours).toBe(TEE_COPY.bound)
+    expect(rows[1].yours).toBe(TEE_COPY.platform)
+  })
+
+  it("their held record's quote shows in their column, checked on this node", () => {
+    const rows = rowsFor({
+      mine: { state: 'present', capsule_id: 'm', tee: { state: 'absent' } },
+      theirs: { state: 'present', capsule_id: 't', tee: { state: 'bound' } }
+    })
+    expect(rows[0].yours).toBe(TEE_COPY.absent)
+    expect(rows[0].theirs).toEqual({ value: TEE_COPY.bound, note: 'checked on this node' })
+    const platform = rows.find((r) => r.label === 'TEE platform')
+    expect(platform?.yours).toBe('—')
+    expect(platform?.theirs).toEqual({ value: TEE_COPY.platform, note: 'left to you' })
+  })
+
+  it('MUTANT-GUARD: a quote that fails a check is said to fail, and no platform line implies a measurement', () => {
+    const rows = rowsFor({ mine: { state: 'present', capsule_id: 'm', tee: { state: 'failed', check: 'report_data' } } })
+    expect(rows.map((r) => r.label)).toEqual(['TEE quote'])
+    expect(rows[0].yours).toBe(TEE_COPY.failed('report_data'))
+    expect(rows[0].yours).toContain('report data')
+    expect(rows[0].yours).not.toBe(TEE_COPY.bound)
+  })
+
+  it('never says attested or verified about a TEE, and says the signatures are not checked', () => {
+    const rows = rowsFor({
+      mine: { state: 'present', capsule_id: 'm', tee: { state: 'bound' } },
+      theirs: { state: 'present', capsule_id: 't', tee: { state: 'failed', check: 'digest' } }
+    })
+    const shown = rows.flatMap((r) => [r.label, r.yours, r.theirs?.value ?? '', r.theirs?.note ?? ''])
+    const words = [...shown, TEE_COPY.absent].join(' ').toLowerCase()
+    expect(words).not.toMatch(/attest|verif/)
+    expect(TEE_COPY.platform).toContain("quote's signatures")
   })
 })

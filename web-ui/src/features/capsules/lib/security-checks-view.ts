@@ -15,7 +15,7 @@
 // `theirs.state === 'absent'` (L-G, the same rule the row's own "WHAT IT
 // COMMITS TO" comparison already lives by).
 import type { CapsuleRecord } from '@/features/capsules/api/types'
-import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
+import type { PaneCRow, TeeFact } from '@/features/capsules/api/sidecarTypes'
 import { pushedHalfRecompute, type RightCellStateKind } from '@/features/capsules/lib/exchange-row-state'
 import type { PeerRecomputeState, RecomputedIdentity } from '@/features/capsules/lib/recompute-identity'
 import { peerFetchJoinKey } from '@/features/capsules/lib/recompute-identity'
@@ -241,6 +241,48 @@ export function recordServedBy(record: object | null): string | null {
   return id && id !== 'unknown' ? id : null
 }
 
+/** What a record's TDX quote shows (u229): the binding this node checked, on
+ *  its own line, and never "attested". The quote's signatures and the
+ *  platform behind it are not checked here, so a quote that names this
+ *  record is not yet evidence of a TEE; the second line says so. */
+export const TEE_COPY = {
+  bound: 'quote bound to this record (checked on this node)',
+  absent: 'no quote',
+  failed: (check: string) => `quote does not check (${check.replace(/_/g, ' ')}): not counted as measured`,
+  platform:
+    "not checked here: the quote's signatures, the PCK chain to the vendor root, QE identity, TCB status and MRTD/RTMRs; until they are, this is not evidence of a TEE"
+} as const
+
+export function teeQuoteText(fact: TeeFact | undefined): string | null {
+  if (!fact) return null
+  if (fact.state === 'bound') return TEE_COPY.bound
+  if (fact.state === 'failed') return TEE_COPY.failed(fact.check)
+  return TEE_COPY.absent
+}
+
+function teeRows(row: PaneCRow): CommitsToRow[] {
+  const yours = teeQuoteText(row.mine.tee)
+  const theirs = teeQuoteText(row.theirs.tee)
+  if (yours === null && theirs === null) return []
+  const rows: CommitsToRow[] = [
+    {
+      label: 'TEE quote',
+      yours: yours ?? '—',
+      theirs: theirs === null ? null : { value: theirs, note: 'checked on this node' }
+    }
+  ]
+  const mineBound = row.mine.tee?.state === 'bound'
+  const theirsBound = row.theirs.tee?.state === 'bound'
+  if (mineBound || theirsBound) {
+    rows.push({
+      label: 'TEE platform',
+      yours: mineBound ? TEE_COPY.platform : '—',
+      theirs: theirsBound ? { value: TEE_COPY.platform, note: 'left to you' } : null
+    })
+  }
+  return rows
+}
+
 export function buildCommitsToRows(
   row: PaneCRow,
   localRecord: CapsuleRecord | null,
@@ -310,7 +352,8 @@ export function buildCommitsToRows(
       yours: modelIdentity,
       theirs: theirsFor(modelIdentity, ['model_attestation', 'model_id'])
     },
-    { label: 'served by', yours: servedBy, theirs: null }
+    { label: 'served by', yours: servedBy, theirs: null },
+    ...teeRows(row)
   ]
 }
 

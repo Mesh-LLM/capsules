@@ -2170,7 +2170,7 @@ fn build_pane_c_list_with_settlements(
             continue;
         };
 
-        let mine_cell = match mine {
+        let mut mine_cell = match mine {
             Some(record) if theirs_sibling.is_some() => mine_pair_cell(record),
             Some(record) => json!({
                 "state": STATE_PRESENT_UNVERIFIED,
@@ -2185,6 +2185,10 @@ fn build_pane_c_list_with_settlements(
             }),
         };
 
+        if let Some(record) = mine {
+            mine_cell["tee"] = crate::producer::tee_attest::page_fact(record);
+        }
+
         // `theirs`: a provenance-carrying local sibling fills it (the
         // push-primary CLOSED path). With no such sibling, fall back to the
         // record's own peer-asserted join key (`theirs_cell`, the DEFERRED
@@ -2195,7 +2199,9 @@ fn build_pane_c_list_with_settlements(
                     .get("capsule_id")
                     .and_then(Value::as_str)
                     .expect("received sibling always carries a capsule_id")];
-                (theirs_sibling_cell(sibling, provenance), false)
+                let mut cell = theirs_sibling_cell(sibling, provenance);
+                cell["tee"] = crate::producer::tee_attest::page_fact(sibling);
+                (cell, false)
             }
             None => (theirs_cell(anchor), true),
         };

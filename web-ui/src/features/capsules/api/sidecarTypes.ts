@@ -400,6 +400,13 @@ export type TwinComparison = {
   response_digest?: string | null
 }
 
+/** The TDX quote check on one record (`producer::tee_attest::page_fact`): run
+ *  on the node, never in the browser. `check` names the check that failed. */
+export type TeeFact =
+  | { state: 'absent'; context?: string | null }
+  | { state: 'bound' }
+  | { state: 'failed'; check: 'shape' | 'digest' | 'parse' | 'report_data' | 'producer_key' }
+
 export type PaneCRow = {
   exchange_key: string
   role_tag: string
@@ -440,6 +447,8 @@ export type PaneCRow = {
      *  (`capsule_panes_native.rs::mine_pair_cell`), so the gate compares the
      *  counterparty half against our real digests + `served_by_node_id`. */
     record?: Record<string, unknown>
+    /** The TDX quote in our own record, as the node checked it. */
+    tee?: TeeFact
   }
   theirs: {
     state: string
@@ -467,6 +476,8 @@ export type PaneCRow = {
      *  citing record; a self-sealed / provenance-less sibling never carries
      *  it, so it never closes. */
     signature_ok?: boolean
+    /** The TDX quote in their held record, as this node checked it. */
+    tee?: TeeFact
     received_from?: string
     via?: string
     received_at?: string

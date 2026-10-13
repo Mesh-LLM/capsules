@@ -406,6 +406,8 @@ pub struct CapsuleState {
     settlement_legs: crate::settlement_legs::Legs,
     /// See [`CapsuleState::observed_not_sealed`].
     observed_not_sealed: std::sync::atomic::AtomicU64,
+    /// Where a TDX quote for a record comes from (`producer::tee_attest`).
+    quote_source: Box<dyn crate::producer::tee_attest::QuoteSource>,
 }
 
 pub struct EmittedCapsule {
@@ -506,7 +508,35 @@ impl CapsuleState {
             settlement_legs: crate::settlement_legs::Legs::default(),
             observed_not_sealed: std::sync::atomic::AtomicU64::new(0),
             torn_write_cut_at: report.truncated_torn_write_at,
+            quote_source: Box::new(crate::producer::tee_attest::ConfigfsTsm::default()),
         })
+    }
+
+    /// Take TDX quotes from `source` instead of the kernel's configfs-tsm.
+    #[cfg(test)]
+    pub fn set_quote_source(&mut self, source: Box<dyn crate::producer::tee_attest::QuoteSource>) {
+        self.quote_source = source;
+    }
+
+    /// The `tee_attestation` slot for a record about to be sealed with these
+    /// values. Called before the ledger lock: a quote can take a while.
+    fn tee_slot(
+        &self,
+        agent_input_digest: Option<&str>,
+        agent_output_digest: Option<&str>,
+        client_nonce: Option<&str>,
+        client_nonce_source: &str,
+    ) -> serde_json::Value {
+        crate::producer::tee_attest::slot_for(
+            self.quote_source.as_ref(),
+            agent_input_digest,
+            agent_output_digest,
+            client_nonce.map(|value| crate::producer::tee_attest::ClientNonce {
+                value,
+                source: client_nonce_source,
+            }),
+            &self.keys.signing_key.verifying_key().to_bytes(),
+        )
     }
 
     /// Where the ledger was cut back to when it was opened, if its last line
@@ -631,6 +661,14 @@ impl CapsuleState {
         let host = host_provenance.clone().unwrap_or_default();
         let agent_input_digest = canonical_body_digest(request_bytes)?;
         let agent_output_digest = canonical_body_digest(response_bytes)?;
+        // The nonce source as this record carries it (`client_nonce_source`
+        // below): a nonce is only ever the client's own on this path.
+        let tee_attestation = self.tee_slot(
+            Some(&agent_input_digest),
+            Some(&agent_output_digest),
+            client_nonce,
+            "client_supplied",
+        );
         let usage = parse_usage(response_bytes);
         // This path serves the response itself, so it holds the bytes -- compute
         // the OPTIONAL tool_calls/reasoning sub-digests directly (absent when the
@@ -778,10 +816,7 @@ impl CapsuleState {
                 generation_parameters,
                 latency_ms: crate::producer::capsule::committed_latency_ms(latency_ms),
                 binary_attestation,
-                // No TEE quote: the tee_attestation slot is always written empty
-                // (honest absence, never fabricated). This plugin never took a
-                // quote, so the TDX parser was not brought over from the old
-                // producer.
+                tee_attestation: Some(tee_attestation),
             },
             effect_status: "confirmed".to_string(),
             effect_type: "inference_completion".to_string(),
@@ -1180,6 +1215,13 @@ impl CapsuleState {
         // a streamed body it could not buffer). Never a digest of the terminal
         // facts in its place: a bare 64-hex there reads as a body digest.
         let agent_output_digest = response_digest.map(str::to_string);
+        // As this record carries it: a nonce here is always host-forwarded.
+        let tee_attestation = self.tee_slot(
+            request_digest,
+            agent_output_digest.as_deref(),
+            nonce,
+            "host_forwarded_nonce",
+        );
 
         let mut ledger = self
             .ledger
@@ -1348,10 +1390,7 @@ impl CapsuleState {
                 // time the host's own dispatch) -- honest zero-marker, not faked.
                 latency_ms: "0.000".to_string(),
                 binary_attestation,
-                // No TEE quote: the tee_attestation slot is always written empty
-                // (honest absence, never fabricated). This plugin never took a
-                // quote, so the TDX parser was not brought over from the old
-                // producer.
+                tee_attestation: Some(tee_attestation),
             },
             // Confirmed only over the host's digest of the REAL response body;
             // without one the completion was dispatched but its output is
