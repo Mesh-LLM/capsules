@@ -13,6 +13,7 @@ import { fixtureMineCell, fixtureTheirsCell } from '@/features/capsules/lib/push
 import {
   buildChecksRows,
   buildCommitsToRows,
+  recordServedBy,
   buildHeaderRows,
   buildIdentityRow,
   theirsFetchable
@@ -809,5 +810,74 @@ describe('buildChecksRows — a pushed record the badge judged fills THEIRS', ()
     expect(content).toMatchObject({ state: 'PASS', recomputed: true })
     expect(signature).toMatchObject({ state: 'PASS', recomputed: false })
     expect(signature?.detail).toMatch(/checked by this node when it arrived/)
+  })
+})
+
+describe('buildCommitsToRows — served by, from our own record (item 5)', () => {
+  const PROVIDER = 'a1'.repeat(32)
+  const recordServedByProvider = (id: string | null) =>
+    ({
+      model_attestation: {
+        compute_attestation: { 'x-mesh-poc-v1': { serving_provenance: id === null ? {} : { served_by_node_id: id } } }
+      }
+    }) as never
+  // A payer's CLOSED row: their half is held, so the pane sends no `theirs.peer_id`.
+  const closedPayerRow = (mineRecord?: Record<string, unknown>) =>
+    paneCRow({
+      role_tag: 'ASKED',
+      mine: { state: 'present', capsule_id: 'm', ...(mineRecord ? { record: mineRecord } : {}) },
+      theirs: { state: 'present', capsule_id: 't', signature_ok: true, received_from: 'node-b' }
+    })
+  const servedBy = (rows: ReturnType<typeof buildCommitsToRows>) => rows.find((r) => r.label === 'served by')?.yours
+
+  it("MUTANT-GUARD: a payer's CLOSED row shows the provider its record names", () => {
+    expect(servedBy(buildCommitsToRows(closedPayerRow(), recordServedByProvider(PROVIDER)))).toBe(PROVIDER)
+  })
+
+  it('reads the row\'s own record when the view holds no local record', () => {
+    const mine = recordServedByProvider(PROVIDER) as unknown as Record<string, unknown>
+    expect(servedBy(buildCommitsToRows(closedPayerRow(mine), null))).toBe(PROVIDER)
+  })
+
+  it('a record that names no server, or the producer\'s "unknown", is still "not recorded"', () => {
+    expect(servedBy(buildCommitsToRows(closedPayerRow(), recordServedByProvider(null)))).toBe('not recorded')
+    expect(servedBy(buildCommitsToRows(closedPayerRow(), recordServedByProvider('unknown')))).toBe('not recorded')
+    expect(servedBy(buildCommitsToRows(closedPayerRow(), recordServedByProvider('')))).toBe('not recorded')
+  })
+
+  it("falls back to the pane's join key only when no record is held, and a served row is this node", () => {
+    const fetchable = paneCRow({ role_tag: 'ASKED', theirs: { state: 'NOT_CHECKED', capsule_id: 't', peer_id: 'node-x' } })
+    expect(servedBy(buildCommitsToRows(fetchable, null))).toBe('node-x')
+    expect(servedBy(buildCommitsToRows(paneCRow({ role_tag: 'SERVED' }), recordServedByProvider(PROVIDER)))).toBe(
+      'this node'
+    )
+  })
+
+  it('our record wins over the pane\'s join key when they name different nodes', () => {
+    const row = paneCRow({
+      role_tag: 'ASKED',
+      mine: { state: 'present', capsule_id: 'm' },
+      theirs: { state: 'NOT_CHECKED', capsule_id: 't', peer_id: 'node-other' }
+    })
+    expect(servedBy(buildCommitsToRows(row, recordServedByProvider(PROVIDER)))).toBe(PROVIDER)
+  })
+
+  it('a row with no record of ours never reads theirs: "not recorded"', () => {
+    const receivedOnly = paneCRow({
+      role_tag: 'ASKED',
+      mine: { state: 'absent', capsule_id: null },
+      theirs: {
+        state: 'present',
+        capsule_id: 't',
+        record: recordServedByProvider('b2'.repeat(32)) as unknown as Record<string, unknown>
+      } as never
+    })
+    expect(servedBy(buildCommitsToRows(receivedOnly, null))).toBe('not recorded')
+  })
+
+  it('recordServedBy follows the pane\'s rule', () => {
+    expect(recordServedBy(recordServedByProvider(PROVIDER))).toBe(PROVIDER)
+    expect(recordServedBy(recordServedByProvider('unknown'))).toBeNull()
+    expect(recordServedBy(null)).toBeNull()
   })
 })
