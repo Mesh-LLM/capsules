@@ -953,6 +953,18 @@ mod tests {
     /// When the fixture quote was taken.
     const TAKEN: &str = "2026-10-12T15:04:16Z";
 
+    /// Run by hand over a record a live TDX run sealed:
+    /// `TEE_RECORD=<record.json> cargo test --locked --bin capsules -- --ignored a_live_records_quote_is_bound`.
+    /// Every check, against the pinned Intel root, on whatever machine runs it.
+    #[test]
+    #[ignore = "needs TEE_RECORD: a record a live TDX run sealed"]
+    fn a_live_records_quote_is_bound() {
+        let path = std::env::var("TEE_RECORD").expect("TEE_RECORD names a record file");
+        let record: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(check(&record), Checked::Bound);
+        assert_eq!(page_fact(&record), json!({"state": "bound"}));
+    }
+
     #[test]
     fn checks_5_to_8_pass_on_a_real_quote_at_its_time_against_the_pinned_root() {
         let quote = TdxQuote::parse(&fixture()).unwrap();
