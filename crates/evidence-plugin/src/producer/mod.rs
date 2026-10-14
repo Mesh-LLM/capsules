@@ -18,3 +18,4 @@ pub mod index;
 pub mod runtime_attest;
 pub mod stage;
 pub mod stage_verify;
+pub mod tee_attest;

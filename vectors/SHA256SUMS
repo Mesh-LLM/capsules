@@ -53,3 +53,4 @@ cfe98771f0f6db97b0cae07a5fa78a9a707a8ee26c0cde41d628dcb86ddeee5c  split-stage/fo
 9db46ed7e3fd2d01ab538ee0c1fbab4bcf1b9733cb3aafe1ed13081106ae6b5c  split-stage/hop-cases.json
 770a3fb82c70ce4656a9b8a1a273ee75c7056f2f1b6ee246a574a7f0e75a1908  split-stage/receipt-cases.json
 d336689906ef378127e6ab7c56b34f1aa2e63aa4aedaf0d7178b43be40b48ab4  split-stage/rust-split-bundle.json
+60efa583e5d92860765cc9bba354c78fec3465cf5cbbffaaf5b638713dd344e9  tdx/tdx_quote.bin

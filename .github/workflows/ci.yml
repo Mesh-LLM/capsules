@@ -112,6 +112,15 @@ jobs:
             exit 1
           fi
           grep -q "a_receipt_under_its_witnesss_configured_key_is_counted_witnessed ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the witnessed case"; exit 1; }
+      - name: The TEE checks catch a verifier that skips the binding
+        shell: bash
+        run: |
+          cargo test --locked --bin capsules --features mutant-tee-skips-binding-check --no-run
+          if out=$(cargo test --locked --bin capsules --features mutant-tee-skips-binding-check -- producer::tee_attest 2>&1); then
+            echo "::error::the TEE checks passed a verifier that skips the binding"
+            exit 1
+          fi
+          grep -q "check_3_a_quote_bound_to_another_record_fails ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the binding case"; exit 1; }
 
       # The referee's mutants (vectors/parity/referee/mutants.json): each build
       # with one deliberate fault must fail the referee parity run on every

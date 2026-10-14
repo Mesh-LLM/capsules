@@ -35,6 +35,24 @@
   with it off still answers a node that asks.
 - The plugin's records status (`sharing`) reports both new switches. The Evidence page does not
   show them yet.
+- **A TDX quote in the record, on a TDX host:** when the plugin can take a quote (the kernel's
+  configfs-tsm report interface, writable by the plugin's user), each record's `tee_attestation`
+  slot carries the quote, its SHA-256 and the 64-byte REPORT_DATA. REPORT_DATA is
+  `SHA-512("x-mesh-poc-v1/tee-binding/v1" || 0x00 || request digest || answer digest ||
+  SHA-256(client nonce) || the record's signing key)`, each input 32 bytes, the nonce hashed
+  exactly as recorded. A quote is taken only for a real client nonce (a host-forwarded one or one
+  the client sent to capsules' own `/v1`), never for a placeholder; otherwise the slot says "no
+  client nonce". The context says the quote is bound to the exchange's nonce, and fresh against
+  the client's challenge only when the record shows the client chose that nonce. A host whose report interface is not TDX, or not usable by the
+  plugin's user, records the slot empty exactly as before (the latter is said once in the log).
+- **What the node checks before it calls a quote bound, all offline:** the quote's SHA-256; that
+  it parses as a TDX DCAP v4 quote; that its REPORT_DATA is the one recomputed from the record; that
+  the bound key signs the record; the quote's signature by its attestation key; the QE report's
+  signature by the PCK key; that the QE report binds the attestation key; and the PCK certificate
+  chain to the Intel SGX Root CA, pinned in the code by its SHA-256, at the record's own time. Any
+  failure shows as failed. The Evidence page then says "Quote signed by a TDX quoting enclave and
+  bound to this exchange (checked here)", and on its own line that platform status, revocation and
+  measurements are not checked here. The checks use `p256` 0.13 (ECDSA P-256) and `x509-cert` 0.2.
 
 ### Fixed
 

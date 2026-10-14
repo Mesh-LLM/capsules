@@ -305,6 +305,10 @@ pub struct MeshPocV1 {
     /// SELF-measured (the node hashed its own binary) and is only trustworthy up
     /// to an OS/TEE that independently measures it.
     pub binary_attestation: Option<crate::producer::runtime_attest::BinaryAttestation>,
+    /// The `tee_measured` rung's slot, as [`crate::producer::tee_attest::slot_for`]
+    /// built it for this record. `None` records the empty slot with
+    /// [`crate::producer::tee_attest::names::NO_TEE`].
+    pub tee_attestation: Option<Value>,
 }
 
 impl MeshPocV1 {
@@ -328,17 +332,14 @@ impl MeshPocV1 {
             // path / unreadable file) the slot degrades to the same empty shape
             // as the other future slots — recorded ABSENT, never fabricated.
             //
-            // `tee_attestation` is the `tee_measured` rung's slot. This
-            // producer takes no TEE quote, so the slot is always recorded
-            // empty, never fabricated.
+            // `tee_attestation` is the `tee_measured` rung's slot: a TDX
+            // quote bound to this record when one was taken, else empty with
+            // the reason (`crate::producer::tee_attest`).
             "evidence_refs": {
                 "statistical_fingerprint": {"type": "statistical_fingerprint", "digest": null, "context": null},
-                "tee_attestation": {
-                    "type": "tee_attestation",
-                    "measurement_class": null,
-                    "digest": null,
-                    "context": "no TEE quote measured (no TDX hardware on this host, or the producer leg has not run here); recorded absent, never fabricated",
-                },
+                "tee_attestation": self.tee_attestation.clone().unwrap_or_else(|| {
+                    crate::producer::tee_attest::empty(crate::producer::tee_attest::names::NO_TEE)
+                }),
                 "binary_attestation": match &self.binary_attestation {
                     Some(att) => att.to_value(),
                     // Honest empty slot: no binary was measured, so no
@@ -1775,6 +1776,7 @@ mod tests {
                 generation_parameters,
                 latency_ms: "1.0".to_string(),
                 binary_attestation: None,
+                tee_attestation: None,
             },
             effect_status: "confirmed".to_string(),
             effect_type: "inference_completion".to_string(),
