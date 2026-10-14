@@ -41,6 +41,50 @@ const NOW: &str = "2026-09-29T00:00:00Z";
 /// A throwaway test key, public by design: it signs only this corpus.
 pub(crate) const NODE_KEY_SEED: [u8; 32] = [0x5e; 32];
 
+/// The answering node's own mesh id, which a signed request's `audience`
+/// names.
+pub(crate) const RESPONDER_NODE: &str = "node-r";
+
+/// The nodes that ask. node-a and node-b are the corpus's counterparties;
+/// node-y and node-z are named by no record.
+pub(crate) const ASKERS: [&str; 4] = ["node-a", "node-b", "node-y", "node-z"];
+
+/// An asking node's throwaway test key, public by design: its seed is the
+/// SHA-256 of the node's id. The corpus carries only the public half.
+pub(crate) fn asker_key(node: &str) -> SigningKey {
+    SigningKey::from_bytes(&Sha256::digest(node.as_bytes()).into())
+}
+
+/// The key the host announced for each asking node.
+pub(crate) fn announced_keys() -> BTreeMap<String, String> {
+    ASKERS
+        .iter()
+        .map(|node| {
+            let key = asker_key(node).verifying_key().to_bytes();
+            (node.to_string(), hex::encode(key))
+        })
+        .collect()
+}
+
+/// `request` signed by `key` at [`NOW`], with a nonce fixed by the case's
+/// `name` so the corpus is the same bytes every time it is written.
+fn signed_as(key: &SigningKey, name: &str, mut request: Value) -> Value {
+    request["nonce"] = json!(hex::encode(Sha256::digest(name.as_bytes())));
+    let now = chrono::DateTime::parse_from_rfc3339(NOW).unwrap().into();
+    crate::requester_auth::sign(&mut request, key, now, RESPONDER_NODE);
+    request
+}
+
+/// A case whose request `node` signs.
+fn case_by(name: &str, covers: &str, history_segments: &str, node: &str, request: Value) -> Value {
+    case(
+        name,
+        covers,
+        history_segments,
+        signed_as(&asker_key(node), name, request),
+    )
+}
+
 pub(crate) fn sealed(mut body: Value) -> Value {
     let id =
         crate::producer::jcs::compute_capsule_id(&body).expect("a corpus record has a capsule_id");
@@ -235,9 +279,44 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
     let req = |subject: Value, coverage: &Value| json!({"subject": subject, "coverage": coverage});
     let mut cases = vec![
         // Records, and who may have them.
-        case(
+        case_by(
             "record_to_its_counterparty",
             "a record goes to the node it names as the other side",
+            "counterparties",
+            "node-a",
+            with(req(json!({"record": id(0)}), &latest), "requester_id", json!("node-a")),
+        ),
+        case_by(
+            "record_to_another_node",
+            "a record does not go to a node it does not name",
+            "counterparties",
+            "node-b",
+            with(req(json!({"record": id(0)}), &latest), "requester_id", json!("node-b")),
+        ),
+        case_by(
+            "record_to_a_stranger",
+            "a proven node no record names is nobody's counterparty",
+            "counterparties",
+            "node-z",
+            req(json!({"record": id(0)}), &latest),
+        ),
+        case_by(
+            "record_unknown_to_a_stranger",
+            "a stranger is refused before the subject is resolved: it learns nothing of what this node holds",
+            "counterparties",
+            "node-z",
+            req(json!({"record": "a".repeat(64)}), &latest),
+        ),
+        case_by(
+            "range_over_limit_to_a_stranger",
+            "a stranger is refused before the size is counted: it learns nothing of this log's size",
+            "counterparties",
+            "node-z",
+            req(json!({"range": [0, 299]}), &latest),
+        ),
+        case(
+            "record_unsigned_naming_its_counterparty",
+            "an unsigned request is nobody's, whatever id it states",
             "counterparties",
             with(
                 req(json!({"record": id(0)}), &latest),
@@ -246,20 +325,110 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
             ),
         ),
         case(
-            "record_to_another_node",
-            "a record does not go to a node it does not name",
+            "record_unsigned_asking_nothing_held",
+            "an unsigned request is refused before the subject is resolved",
             "counterparties",
+            req(json!({"record": "a".repeat(64)}), &latest),
+        ),
+        case_by(
+            "record_signed_by_one_claiming_another",
+            "a node stating another node's id is refused before lookup",
+            "counterparties",
+            "node-y",
             with(
                 req(json!({"record": id(0)}), &latest),
                 "requester_id",
-                json!("node-b"),
+                json!("node-a"),
             ),
         ),
         case(
-            "record_to_a_stranger",
-            "an asker naming no id is nobody's counterparty",
+            "record_signed_under_another_nodes_key_id",
+            "a signature by one node under another node's key id does not verify",
             "counterparties",
-            req(json!({"record": id(0)}), &latest),
+            {
+                let mut r = signed_as(
+                    &asker_key("node-y"),
+                    "record_signed_under_another_nodes_key_id",
+                    req(json!({"record": id(0)}), &latest),
+                );
+                r["requester_auth"]["key_id"] = json!(announced_keys()["node-a"]);
+                r
+            },
+        ),
+        case(
+            "record_signature_over_another_request",
+            "a member changed after signing: the signature no longer covers the request",
+            "counterparties",
+            {
+                let mut r = signed_as(
+                    &asker_key("node-a"),
+                    "record_signature_over_another_request",
+                    req(json!({"record": id(0)}), &latest),
+                );
+                r["coverage"] = json!({"expected_pin": cps[0].digest()});
+                r
+            },
+        ),
+        case(
+            "record_signed_by_an_unannounced_key",
+            "a valid signature under a key no host binds reads as unsigned where no identity is needed",
+            "peers",
+            signed_as(
+                &SigningKey::from_bytes(&[0x77; 32]),
+                "record_signed_by_an_unannounced_key",
+                req(json!({"record": id(0)}), &latest),
+            ),
+        ),
+        case(
+            "record_signed_by_an_unannounced_key_needing_identity",
+            "a key no host binds proves no node, where the answer needs one",
+            "counterparties",
+            signed_as(
+                &SigningKey::from_bytes(&[0x77; 32]),
+                "record_signed_by_an_unannounced_key_needing_identity",
+                req(json!({"record": id(0)}), &latest),
+            ),
+        ),
+        case(
+            "record_signed_without_an_audience",
+            "a signed request must name the node it is addressed to",
+            "peers",
+            {
+                let mut r = signed_as(
+                    &asker_key("node-a"),
+                    "record_signed_without_an_audience",
+                    req(json!({"record": id(0)}), &latest),
+                );
+                r.as_object_mut().unwrap().remove(crate::requester_auth::AUDIENCE);
+                r
+            },
+        ),
+        case(
+            "record_relayed_from_another_audience",
+            "a request signed for another node is refused before lookup, even under peers",
+            "peers",
+            {
+                let mut r = req(json!({"record": id(0)}), &latest);
+                r["nonce"] = json!(hex::encode(Sha256::digest(b"record_relayed_from_another_audience")));
+                let now = chrono::DateTime::parse_from_rfc3339(NOW).unwrap().into();
+                crate::requester_auth::sign(&mut r, &asker_key("node-a"), now, "node-x");
+                r
+            },
+        ),
+        case(
+            "requester_auth_short_key",
+            "requester_auth with a 63-hex key is malformed",
+            "peers",
+            {
+                let mut r = signed_as(
+                    &asker_key("node-a"),
+                    "requester_auth_short_key",
+                    req(json!({"record": id(0)}), &latest),
+                );
+                let short = r["requester_auth"]["key_id"].as_str().unwrap()[1..].to_string();
+                r["requester_auth"]["key_id"] = json!(short);
+                r
+            },
         ),
         case(
             "record_under_peers",
@@ -267,25 +436,19 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
             "peers",
             req(json!({"record": id(0)}), &latest),
         ),
-        case(
+        case_by(
             "record_sharing_off",
             "off serves no record, even to its counterparty",
             "off",
-            with(
-                req(json!({"record": id(0)}), &latest),
-                "requester_id",
-                json!("node-a"),
-            ),
+            "node-a",
+            with(req(json!({"record": id(0)}), &latest), "requester_id", json!("node-a")),
         ),
-        case(
+        case_by(
             "record_counterparties_tier",
             "counterparties serves a record to its counterparty",
             "counterparties",
-            with(
-                req(json!({"record": id(1)}), &first),
-                "requester_id",
-                json!("node-b"),
-            ),
+            "node-b",
+            with(req(json!({"record": id(1)}), &first), "requester_id", json!("node-b")),
         ),
         case(
             "record_local_block_never_leaves",
@@ -330,25 +493,19 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
             "peers",
             req(json!({"range": [5, 12]}), &first),
         ),
-        case(
+        case_by(
             "range_to_a_counterparty",
             "a range naming only one counterparty's records goes to it",
             "counterparties",
-            with(
-                req(json!({"range": [16, 20]}), &latest),
-                "requester_id",
-                json!("node-a"),
-            ),
+            "node-a",
+            with(req(json!({"range": [16, 20]}), &latest), "requester_id", json!("node-a")),
         ),
-        case(
+        case_by(
             "range_mixed_counterparties",
             "a range with another node's record is refused whole, never filtered",
             "counterparties",
-            with(
-                req(json!({"range": [0, 4]}), &latest),
-                "requester_id",
-                json!("node-a"),
-            ),
+            "node-a",
+            with(req(json!({"range": [0, 4]}), &latest), "requester_id", json!("node-a")),
         ),
         case(
             "range_with_a_local_block",
@@ -381,15 +538,12 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
             req(json!({"full_history": null}), &first),
         ),
         // Correlation and exchange.
-        case(
+        case_by(
             "correlation_to_its_counterparty",
             "records carrying one nonce, all naming the asker",
             "counterparties",
-            with(
-                req(json!({"correlation": "n-1"}), &latest),
-                "requester_id",
-                json!("node-a"),
-            ),
+            "node-a",
+            with(req(json!({"correlation": "n-1"}), &latest), "requester_id", json!("node-a")),
         ),
         case(
             "correlation_by_exchange_id",
@@ -577,8 +731,16 @@ fn standard_history_cases(latest: &Value, record: &str) -> Vec<Value> {
         r
     };
     let full = || json!({"full_history": null});
+    // A case asked by `asker`: signed by it, so it is that node.
+    let by = |name: &str, covers: &str, segments: &str, request: Value| match request
+        .get("requester_id")
+        .and_then(Value::as_str)
+    {
+        Some(node) => case_by(name, covers, segments, node, request.clone()),
+        None => case(name, covers, segments, request),
+    };
     vec![
-        case(
+        by(
             "checkpoints_to_a_non_counterparty",
             "checkpoints are not shared with a node this one never exchanged with",
             "counterparties",
@@ -590,65 +752,71 @@ fn standard_history_cases(latest: &Value, record: &str) -> Vec<Value> {
             "counterparties",
             with_asker(json!({"checkpoints": null}), None, None),
         ),
-        case(
+        by(
             "checkpoints_to_a_non_counterparty_under_peers",
             "share_history_segments governs records, never Standard History",
             "peers",
             with_asker(json!({"checkpoints": null}), None, Some("node-z")),
         ),
-        case(
+        by(
             "checkpoints_to_a_counterparty",
             "a counterparty is answered checkpoints",
             "counterparties",
             with_asker(json!({"checkpoints": null}), None, Some("node-a")),
         ),
-        case(
+        by(
             "history_card_to_a_non_counterparty",
             "history_card/1 is not shared with a node this one never exchanged with",
             "counterparties",
             with_asker(full(), Some("history_card/1"), Some("node-z")),
         ),
-        case(
+        by(
             "history_card_to_a_counterparty",
             "a counterparty is answered history_card/1",
             "counterparties",
             with_asker(full(), Some("history_card/1"), Some("node-b")),
         ),
-        case(
+        by(
             "served_summary_to_a_non_counterparty",
             "served_summary/1 is not shared with a node this one never exchanged with",
             "counterparties",
             with_asker(full(), Some("served_summary/1"), Some("node-z")),
         ),
-        case(
+        by(
             "served_summary_to_a_counterparty",
             "a counterparty is answered served_summary/1",
             "counterparties",
             with_asker(full(), Some("served_summary/1"), Some("node-a")),
         ),
-        case(
+        by(
             "derivation_unknown_to_a_non_counterparty",
             "the refusal comes before the derivation is looked at: it says nothing about what this node derives",
             "counterparties",
             with_asker(full(), Some("unregistered_fold/1"), Some("node-z")),
         ),
-        case(
+        by(
             "standard_history_unknown_pin_to_a_non_counterparty",
             "the refusal comes before the anchor is resolved: it says nothing about what this node holds",
             "counterparties",
             json!({"subject": {"checkpoints": null}, "coverage": {"expected_pin": "d".repeat(64)}, "requester_id": "node-z"}),
         ),
-        case(
+        by(
             "record_to_its_counterparty_under_prospective",
             "prospective, deprecated, is read as counterparties",
             "prospective",
             json!({"subject": {"record": record}, "coverage": latest, "requester_id": "node-a"}),
         ),
-        case(
+        by(
             "record_to_another_node_under_prospective",
             "prospective, deprecated, serves no one counterparties does not",
             "prospective",
             json!({"subject": {"record": record}, "coverage": latest, "requester_id": "node-b"}),
+        ),
+        case(
+            "checkpoints_unsigned_naming_a_counterparty",
+            "an unsigned request is nobody's, whatever id it states",
+            "counterparties",
+            with_asker(json!({"checkpoints": null}), None, Some("node-a")),
         ),
     ]
 }
@@ -662,6 +830,8 @@ fn build_corpus() -> Value {
         "v": 1,
         "path": "evidence-request",
         "now": NOW,
+        "announced_keys": announced_keys(),
+        "node_id": RESPONDER_NODE,
         "ledger": ledger,
         "checkpoints": cps,
         "cases": cases,
@@ -735,6 +905,9 @@ fn run(corpus: &Value) -> BTreeMap<String, Value> {
     let cps = corpus["checkpoints"].as_array().unwrap();
     write_jsonl(&ledger_dir.join("checkpoints.jsonl"), cps);
     let now = corpus["now"].as_str().unwrap();
+    // The keys the host announced for the asking nodes: public halves only.
+    let announced: BTreeMap<String, String> =
+        serde_json::from_value(corpus["announced_keys"].clone()).unwrap_or_default();
 
     let mut answers = BTreeMap::new();
     for case in corpus["cases"].as_array().unwrap() {
@@ -748,6 +921,8 @@ fn run(corpus: &Value) -> BTreeMap<String, Value> {
         // Each case's settings as the operator would write them, read the way
         // the plugin reads them. Standard History is not shared unless the
         // case says so.
+        // A fresh replay cache per case: each case is one request.
+        let replay = crate::requester_auth::ReplayCache::default();
         let responder = Responder {
             ledger_dir: &ledger_dir,
             signing_key: &key,
@@ -756,6 +931,12 @@ fn run(corpus: &Value) -> BTreeMap<String, Value> {
                 case["history_segments"].as_str(),
             ),
             share_standard_history: case["share_standard_history"] == json!("on"),
+            keys: crate::requester_auth::Keys {
+                announced: &announced,
+                configured: None,
+            },
+            replay: &replay,
+            node_id: corpus["node_id"].as_str(),
         };
         let busy = case.get("busy").and_then(Value::as_bool).unwrap_or(false);
         let outcome = evidence_answer::answer_and_log(&bytes, busy, &responder, Some(&log_dir));

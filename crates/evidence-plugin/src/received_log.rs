@@ -4,6 +4,12 @@
 //!
 //! The same file and line shape the Python reference wrote: `received_log.jsonl`, one
 //! `{ts, path, requester_id, subject_kind, status, reason}` object per line,
+//! plus who proved they asked, for an evidence request: `{request_digest,
+//! principal_key_id, principal_node_id, principal_binding, audience, replay}`
+//! (null where nothing was proven; `principal_binding` is `unbound` for a key
+//! that verified but no host binds, which is never a principal; `replay` is
+//! `unchecked` when such a key's nonce could not be held for the replay
+//! check),
 //! in the directory `evidence_routes::EvidenceSource::received_log_dir`
 //! resolves. **Opt-in, as before:** nothing is written unless that directory
 //! existed when the plugin started and this process holds a lock covering it
@@ -50,11 +56,25 @@ pub struct Entry<'a> {
     pub ts: &'a str,
     /// The route asked: `evidence-request`, `evidence/record-push`.
     pub path: &'a str,
+    /// The id the request states: its word, not who asked.
     pub requester_id: Option<&'a str>,
     pub subject_kind: Option<&'a str>,
     /// `answered`, `refused`, `received` or `issued`.
     pub status: &'a str,
     pub reason: Option<&'a str>,
+    /// The digest of the request bytes as received.
+    pub request_digest: Option<&'a str>,
+    /// The key the request's signature verified under, if it did.
+    pub principal_key_id: Option<&'a str>,
+    /// The node that key is bound to, if the binding verified.
+    pub principal_node_id: Option<&'a str>,
+    /// `bound`, or `unbound` for a key that verified but no host binds.
+    pub principal_binding: Option<&'a str>,
+    /// The node a signed request named as its audience, as checked.
+    pub audience: Option<&'a str>,
+    /// `checked`, or `unchecked` for an unbound key's nonce the full pool
+    /// could not hold.
+    pub replay: Option<&'a str>,
 }
 
 impl Entry<'_> {
@@ -66,6 +86,12 @@ impl Entry<'_> {
             "subject_kind": self.subject_kind,
             "status": self.status,
             "reason": self.reason,
+            "request_digest": self.request_digest,
+            "principal_key_id": self.principal_key_id,
+            "principal_node_id": self.principal_node_id,
+            "principal_binding": self.principal_binding,
+            "audience": self.audience,
+            "replay": self.replay,
         })
     }
 }
@@ -161,6 +187,12 @@ mod tests {
             subject_kind: Some("record"),
             status: "refused",
             reason: Some("no_such_subject"),
+            request_digest: Some("ab"),
+            principal_key_id: Some("cd"),
+            principal_node_id: Some("node-a"),
+            principal_binding: Some("bound"),
+            audience: Some("node-r"),
+            replay: Some("checked"),
         }
     }
 

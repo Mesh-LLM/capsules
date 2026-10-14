@@ -132,6 +132,36 @@ jobs:
           fi
           grep -q "a_peers_announced_key_verifies_its_pushed_half_with_no_configured_keys ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the no-configured-keys case"; exit 1; }
 
+      - name: The requester-auth tests catch a responder that skips the signature check
+        shell: bash
+        run: |
+          cargo test --locked --bin capsules --features mutant-requester-auth-skips-verify --no-run
+          if out=$(cargo test --locked --bin capsules --features mutant-requester-auth-skips-verify -- evidence_answer:: 2>&1); then
+            echo "::error::the requester-auth tests passed a responder that skips the signature check"
+            exit 1
+          fi
+          grep -q "a_node_claiming_to_be_another_is_refused_before_the_ledger_is_read ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the T3 case"; exit 1; }
+
+      - name: The requester-auth tests catch a responder that skips the audience check
+        shell: bash
+        run: |
+          cargo test --locked --bin capsules --features mutant-requester-auth-skips-audience --no-run
+          if out=$(cargo test --locked --bin capsules --features mutant-requester-auth-skips-audience -- evidence_answer:: 2>&1); then
+            echo "::error::the requester-auth tests passed a responder that skips the audience check"
+            exit 1
+          fi
+          grep -q "a_request_addressed_to_another_node_is_refused_before_the_ledger_is_read ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the relay case"; exit 1; }
+
+      - name: The requester-auth tests catch a responder that answers any failed signature as unsigned
+        shell: bash
+        run: |
+          cargo test --locked --bin capsules --features mutant-requester-auth-downgrades-all --no-run
+          if out=$(cargo test --locked --bin capsules --features mutant-requester-auth-downgrades-all -- evidence_answer:: 2>&1); then
+            echo "::error::the requester-auth tests passed a responder that answers any failed signature as unsigned"
+            exit 1
+          fi
+          grep -q "a_failed_request_is_never_answered_as_unsigned ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the never-downgraded case"; exit 1; }
+
       # The referee's mutants (vectors/parity/referee/mutants.json): each build
       # with one deliberate fault must fail the referee parity run on every
       # case listed for it.
