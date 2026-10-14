@@ -1210,6 +1210,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(log_id = %log_id, "checkpoint log id");
     let capsules = Arc::new(CapsuleState::open(&data_dir, PLUGIN_ID)?);
     let evidence_pub_key_pem = capsules.public_key_pem();
+    let own_public_key = capsules.public_key();
     owner_maintenance::finish_pending_after_open(&data_dir, &capsules, &log_id)?;
     tracing::info!(
         chain_head = ?capsules.chain_head(),
@@ -1457,13 +1458,19 @@ async fn main() -> anyhow::Result<()> {
             })
         })
     })
-    .customize(|plugin| {
-        // Peers' keys for this plugin, when the host announces them
-        // (`peer_keys::announced`); CAPSULES_PEER_KEYS stays the fallback.
-        plugin.on_initialized(|context| {
+    .customize(move |plugin| {
+        // This node's own key, announced through the host
+        // (`peer_keys::own`), and peers' keys for this plugin, when the host
+        // announces them (`peer_keys::announced`); CAPSULES_PEER_KEYS stays
+        // the fallback.
+        plugin.on_initialized(move |context| {
             let announces = context.host_supports(peer_keys::announced::CAPABILITY);
             Box::pin(async move {
                 peer_keys::announced::start(announces, PLUGIN_ID);
+                peer_keys::own::announce(announces, own_public_key, |key| {
+                    context.announce_plugin_key(key)
+                })
+                .await;
                 Ok(())
             })
         })

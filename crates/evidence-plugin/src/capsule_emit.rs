@@ -594,6 +594,12 @@ impl CapsuleState {
         &self.keys.signing_key
     }
 
+    /// The raw Ed25519 public key every record this node seals verifies
+    /// against (its `key_id`): the key it announces (`crate::peer_keys::own`).
+    pub fn public_key(&self) -> [u8; 32] {
+        self.keys.signing_key.verifying_key().to_bytes()
+    }
+
     /// Pad the ledger to a multiple of `bucket` lines under the SAME writer
     /// lock every seal takes, so a real record never lands between two
     /// padding records (Evidence Layer -00 §12.1; see
