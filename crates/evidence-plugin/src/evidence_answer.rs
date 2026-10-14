@@ -217,6 +217,10 @@ pub struct Asker {
     pub binding: Option<&'static str>,
     /// The `audience` a signed request named, as checked.
     pub audience: Option<String>,
+    /// `checked` when the request's nonce went through the replay check;
+    /// `unchecked` when it could not, because the unbound pool was full
+    /// (ruling u290 §2).
+    pub replay: Option<&'static str>,
 }
 
 /// Answer `request_bytes`, exactly as received.
@@ -377,23 +381,33 @@ fn requester(
                     asker.key_id = Some(principal.key_id.clone());
                     asker.node_id = Some(principal.node_id.clone());
                     asker.binding = Some("bound");
+                    asker.replay = Some("checked");
                     Ok(Some(principal))
                 }
                 Err(failure) => {
                     asker.key_id = failure.verified_key().map(str::to_string);
                     asker.node_id = failure.verified_node().map(str::to_string);
-                    if matches!(failure, requester_auth::Failure::ClaimMismatch { .. }) {
-                        asker.binding = Some("bound");
+                    match failure {
+                        requester_auth::Failure::ClaimMismatch { .. } => {
+                            asker.binding = Some("bound");
+                            asker.replay = Some("checked");
+                        }
+                        requester_auth::Failure::Unbound { replay_checked, .. } => {
+                            asker.binding = Some("unbound");
+                            asker.replay = Some(if replay_checked {
+                                "checked"
+                            } else {
+                                "unchecked"
+                            });
+                        }
+                        _ => {}
                     }
                     // A valid signature under a key no host binds reads as
                     // an unsigned request where the answer needs no
-                    // identity, and gets nothing more (ruling addendum §2).
+                    // identity, and gets nothing more (ruling addendum §2),
+                    // also when its nonce could not be held (u290 §2).
                     if failure.reads_as_unsigned() && !needed {
-                        asker.binding = Some("unbound");
                         return Ok(None);
-                    }
-                    if matches!(failure, requester_auth::Failure::Unbound { .. }) {
-                        asker.binding = Some("unbound");
                     }
                     Err(if needed {
                         refused
@@ -698,6 +712,7 @@ pub fn answer_and_log(
             principal_node_id: asker.node_id.as_deref(),
             principal_binding: asker.binding,
             audience: asker.audience.as_deref(),
+            replay: asker.replay,
         },
     );
     outcome
@@ -1863,6 +1878,90 @@ mod tests {
         assert_eq!(line["principal_binding"], json!("unbound"));
         assert_eq!(line["principal_node_id"], Value::Null);
         assert_eq!(line["audience"], json!(RESPONDER));
+        assert_eq!(line["replay"], json!("checked"));
+    }
+
+    /// The unbound pool full of live nonces (ruling u290 §2): a validly
+    /// signed request under a key no host announced is answered as an
+    /// unsigned one would be, not refused, and logged `unbound` with
+    /// `replay` `unchecked`. A replay the pool still holds is refused, and a
+    /// bound key's replay is refused whatever that pool holds.
+    #[test]
+    fn a_full_unbound_pool_answers_as_unsigned_and_still_refuses_a_replay() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let stranger = SigningKey::from_bytes(&[0x77; 32]);
+        let record = node_a_record(&ledger);
+        let unsigned = serde_json::to_vec(&record).unwrap();
+        let held = signed_with(&stranger, &record);
+        let bound = signed_by("node-a", &record);
+        let (key, announced, replay) = (key(), announced(), ReplayCache::default());
+        let ask = |bytes: &[u8], segments: &str, log: Option<&Path>| {
+            let responder = Responder {
+                ledger_dir: dir.path(),
+                signing_key: &key,
+                now: NOW,
+                history_segments: segments,
+                share_standard_history: false,
+                keys: Keys {
+                    announced: &announced,
+                    configured: None,
+                },
+                replay: &replay,
+                node_id: Some(RESPONDER),
+            };
+            answer_and_log(bytes, false, &responder, log)
+        };
+        let artifact = |outcome: Outcome| match outcome {
+            Outcome::Answered { wire, .. } => wire["artifact"].clone(),
+            other => panic!("{other:?}"),
+        };
+        let expected = artifact(ask(&unsigned, "peers", None));
+        assert_eq!(artifact(ask(&held, "peers", None)), expected);
+        assert!(matches!(
+            ask(&bound, "counterparties", None),
+            Outcome::Answered { .. }
+        ));
+        let now = parse_utc(NOW).unwrap().seconds;
+        for i in 1..requester_auth::MAX_UNBOUND_NONCES {
+            assert_eq!(
+                replay.first_use(&format!("filler-{i}"), "n", now + 60, now, false),
+                requester_auth::Use::First
+            );
+        }
+
+        let log = tempfile::tempdir().unwrap();
+        let fresh = signed_with(&stranger, &record);
+        assert_eq!(
+            artifact(ask(&fresh, "peers", Some(log.path()))),
+            expected,
+            "answered as unsigned, not refused"
+        );
+        let text = std::fs::read_to_string(log.path().join(crate::received_log::RECEIVED_LOG_FILE))
+            .unwrap();
+        let line: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(line["principal_key_id"], json!(key_id_of(&stranger)));
+        assert_eq!(line["principal_binding"], json!("unbound"));
+        assert_eq!(line["replay"], json!("unchecked"));
+        assert_eq!(
+            refused(&ask(&held, "peers", None)),
+            Some(Reason::NotAuthorized),
+            "a replay the pool holds"
+        );
+        assert_eq!(
+            refused(&ask(&bound, "counterparties", None)),
+            Some(Reason::NotAuthorized),
+            "a bound key's replay"
+        );
+        assert_eq!(
+            refused(&ask(
+                &signed_with(&stranger, &record),
+                "counterparties",
+                None
+            )),
+            Some(Reason::NotAuthorized),
+            "still nothing where the answer needs an identity"
+        );
     }
 
     /// A signed request with no `audience` is `request_malformed`, before

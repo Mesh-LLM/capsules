@@ -37,11 +37,14 @@
     same refusal for any subject, so the refusal no longer shows how large the log is.
   - **The replay check is held in memory,** so a restart forgets it: a request can be repeated to
     the same node, before its deadline, across a restart.
-  - **Keys no host announced share one replay pool** of 16,384 live nonces. While it is full,
-    their signed requests are refused even where an unsigned request is answered. Keys a host
-    announced each have their own room.
+  - **Keys no host announced share one replay pool** of 16,384 nonces, each held until its
+    deadline, and their replay check is best-effort. While the pool is full of live nonces, their
+    signed requests are answered as unsigned requests would be, not refused, and logged as
+    `replay` `unchecked`; a replay that is detected is still refused. Keys a host announced each
+    have their own room, and their replays are always refused.
   - **The "asked of you" log records each request's digest,** the key and node it was proven to
-    come from (or `unbound`), and the audience it named.
+    come from (or `unbound`), the audience it named, and whether its nonce was checked for
+    replay.
 - **Standard History is no longer answered to every node that asks.** A node's checkpoint list,
   `history_card/1` and `served_summary/1` now go only to a counterparty (a node one of its records
   names as the other side of an exchange). Every other node gets a signed `policy_declined` that

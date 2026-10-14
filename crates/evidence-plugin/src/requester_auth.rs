@@ -20,8 +20,10 @@
 //! `audience`, the node it is addressed to, so a node it was sent to cannot
 //! forward it to another; and a `nonce` and a `deadline`, so a responder
 //! refuses it once that deadline has passed, and a second time before then
-//! while it runs (the replay cache is in memory). The spec ruling is
-//! `svc-ev-m1-request-signing-ruling` with its u289 addendum.
+//! while it runs (the replay cache is in memory, and for a key no host binds
+//! it is best-effort: [`MAX_UNBOUND_NONCES`]). The spec ruling is
+//! `svc-ev-m1-request-signing-ruling` with its u289 addendum, as amended by
+//! em-spec u290.
 //!
 //! **The asker** ([`sign_outgoing`]) signs only once its host took its key
 //! ([`set_announced`]): a key no host announced is bound to no node.
@@ -72,9 +74,12 @@ pub const MAX_NONCE_BYTES: usize = 256;
 pub const MAX_NONCES_PER_KEY: usize = 4096;
 
 /// The most nonces held, all together, for keys no host binds. Anyone can
-/// make such a key, so they share one pool: when it is full their signed
-/// requests are refused (sent unsigned they are answered as before), and no
-/// bound key is affected.
+/// make such a key, so they share one pool, and no bound key is affected.
+/// Replay checking there is best-effort: each nonce is held until its
+/// deadline, and while the pool is full of live nonces a new one is not
+/// held, so its request is answered as unsigned, labelled replay-unchecked
+/// (ruling u290 §2). Refusing it instead would let anyone flood the pool to
+/// deny every upgraded asker, and an unsigned request gets the same answer.
 pub const MAX_UNBOUND_NONCES: usize = 16_384;
 
 /// The signing input for `map`: the domain tag, a zero byte, and the map
@@ -257,6 +262,18 @@ pub fn bound_node(claimants: &[String], stated: Option<&str>) -> Binding {
     }
 }
 
+/// What [`ReplayCache::first_use`] found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Use {
+    /// Not seen before, and now held until its deadline.
+    First,
+    /// Already held within its deadline, or a bound key with no room left.
+    Replayed,
+    /// An unbound key's nonce, not seen, but not held either: the unbound
+    /// pool is full of live nonces.
+    Unchecked,
+}
+
 /// The nonces seen, each held until its deadline: per key for bound keys,
 /// and in one shared pool for keys no host binds.
 #[derive(Default)]
@@ -266,10 +283,10 @@ pub struct ReplayCache {
 }
 
 impl ReplayCache {
-    /// Record `nonce` for `key_id` until `deadline` (Unix seconds). `false`
-    /// when it is already held, or when there is no room for it: a bound key
-    /// already holding [`MAX_NONCES_PER_KEY`] live nonces, or unbound keys
-    /// together holding [`MAX_UNBOUND_NONCES`].
+    /// Record `nonce` for `key_id` until `deadline` (Unix seconds).
+    /// [`Use::Replayed`] when it is already held, or when a bound key already
+    /// holds [`MAX_NONCES_PER_KEY`] live nonces; [`Use::Unchecked`] when
+    /// unbound keys together hold [`MAX_UNBOUND_NONCES`] live nonces.
     pub fn first_use(
         &self,
         key_id: &str,
@@ -277,21 +294,21 @@ impl ReplayCache {
         deadline: i64,
         now: i64,
         bound: bool,
-    ) -> bool {
+    ) -> Use {
         if !bound {
             let mut seen = self.unbound.lock().unwrap_or_else(PoisonError::into_inner);
             let pair = (key_id.to_string(), nonce.to_string());
             if seen.get(&pair).is_some_and(|&until| until >= now) {
-                return false;
+                return Use::Replayed;
             }
             if seen.len() >= MAX_UNBOUND_NONCES {
                 seen.retain(|_, &mut until| until >= now);
             }
             if seen.len() >= MAX_UNBOUND_NONCES {
-                return false;
+                return Use::Unchecked;
             }
             seen.insert(pair, deadline);
-            return true;
+            return Use::First;
         }
         let mut seen = self.bound.lock().unwrap_or_else(PoisonError::into_inner);
         seen.retain(|_, nonces| {
@@ -300,10 +317,10 @@ impl ReplayCache {
         });
         let nonces = seen.entry(key_id.to_string()).or_default();
         if nonces.contains_key(nonce) || nonces.len() >= MAX_NONCES_PER_KEY {
-            return false;
+            return Use::Replayed;
         }
         nonces.insert(nonce.to_string(), deadline);
-        true
+        Use::First
     }
 }
 
@@ -341,13 +358,17 @@ pub enum Failure {
     /// The request is addressed to another node than this one (or this node
     /// does not know its own id yet).
     AudienceMismatch { key_id: String },
-    /// This (key_id, nonce) was already seen within its deadline, or there
-    /// is no room to hold it.
+    /// This (key_id, nonce) was already seen within its deadline, or a
+    /// bound key has no room to hold it.
     Replayed { key_id: String },
     /// The key is bound to no node, or to several and the request states
     /// no id. The only failure that may read as unsigned
-    /// ([`Failure::reads_as_unsigned`]).
-    Unbound { key_id: String },
+    /// ([`Failure::reads_as_unsigned`]). `replay_checked` is false when the
+    /// unbound pool was full and the nonce was not held ([`Use::Unchecked`]).
+    Unbound {
+        key_id: String,
+        replay_checked: bool,
+    },
     /// The key is bound, and the request states a `requester_id` that is
     /// none of its nodes (`node_id`: its node, when it has one).
     ClaimMismatch {
@@ -363,7 +384,7 @@ impl Failure {
             Failure::OutsideWindow | Failure::BadSignature => None,
             Failure::AudienceMismatch { key_id }
             | Failure::Replayed { key_id }
-            | Failure::Unbound { key_id }
+            | Failure::Unbound { key_id, .. }
             | Failure::ClaimMismatch { key_id, .. } => Some(key_id),
         }
     }
@@ -421,11 +442,16 @@ pub fn check(
     let claimants = claimants(keys.announced, keys.configured, key_id);
     let nonce = map.get("nonce").and_then(Value::as_str).unwrap_or_default();
     let bound = !claimants.is_empty();
-    if !replay.first_use(key_id, nonce, deadline.seconds, now.seconds, bound) {
-        return Err(Failure::Replayed {
-            key_id: key_id.to_string(),
-        });
-    }
+    let replay_checked = match replay.first_use(key_id, nonce, deadline.seconds, now.seconds, bound)
+    {
+        Use::First => true,
+        Use::Unchecked => false,
+        Use::Replayed => {
+            return Err(Failure::Replayed {
+                key_id: key_id.to_string(),
+            })
+        }
+    };
     let node_id = match bound_node(&claimants, stated) {
         Binding::Node(node_id) => node_id,
         Binding::Mismatch(node_id) => {
@@ -437,6 +463,7 @@ pub fn check(
         Binding::Unbound => {
             return Err(Failure::Unbound {
                 key_id: key_id.to_string(),
+                replay_checked,
             })
         }
     };
@@ -609,16 +636,22 @@ mod tests {
     #[test]
     fn a_nonce_is_used_once_until_its_deadline() {
         let cache = ReplayCache::default();
-        assert!(cache.first_use("k", "n", 100, 0, true));
-        assert!(!cache.first_use("k", "n", 100, 50, true));
-        assert!(cache.first_use("k2", "n", 100, 50, true), "per key");
-        assert!(
+        assert_eq!(cache.first_use("k", "n", 100, 0, true), Use::First);
+        assert_eq!(cache.first_use("k", "n", 100, 50, true), Use::Replayed);
+        assert_eq!(
+            cache.first_use("k2", "n", 100, 50, true),
+            Use::First,
+            "per key"
+        );
+        assert_eq!(
             cache.first_use("k", "n", 300, 101, true),
+            Use::First,
             "after its deadline"
         );
-        assert!(cache.first_use("u", "n", 100, 0, false));
-        assert!(
-            !cache.first_use("u", "n", 100, 50, false),
+        assert_eq!(cache.first_use("u", "n", 100, 0, false), Use::First);
+        assert_eq!(
+            cache.first_use("u", "n", 100, 50, false),
+            Use::Replayed,
             "an unbound key's nonce too"
         );
     }
@@ -627,32 +660,83 @@ mod tests {
     fn a_key_that_fills_its_share_refuses_only_itself_until_its_nonces_expire() {
         let cache = ReplayCache::default();
         for i in 0..MAX_NONCES_PER_KEY {
-            assert!(cache.first_use("noisy", &i.to_string(), 100, 0, true));
+            assert_eq!(
+                cache.first_use("noisy", &i.to_string(), 100, 0, true),
+                Use::First
+            );
         }
-        assert!(!cache.first_use("noisy", "one-more", 100, 1, true));
-        assert!(
+        assert_eq!(
+            cache.first_use("noisy", "one-more", 100, 1, true),
+            Use::Replayed,
+            "a bound key with no room is refused, never unchecked"
+        );
+        assert_eq!(
             cache.first_use("quiet", "n", 100, 1, true),
+            Use::First,
             "another key is unaffected"
         );
-        assert!(
+        assert_eq!(
             cache.first_use("noisy", "one-more", 200, 101, true),
+            Use::First,
             "after they expire"
         );
     }
 
-    /// Keys no host binds share one pool: filling it refuses only them.
+    /// Keys no host binds share one pool. While it is full of live nonces a
+    /// new one is unchecked, not refused; one it holds is still a replay;
+    /// and no bound key is affected (ruling u290 §2).
     #[test]
-    fn unbound_keys_share_one_pool_and_cannot_crowd_out_a_bound_key() {
+    fn a_full_unbound_pool_leaves_new_nonces_unchecked_and_bound_keys_alone() {
         let cache = ReplayCache::default();
         for i in 0..MAX_UNBOUND_NONCES {
-            assert!(cache.first_use(&format!("k{i}"), "n", 100, 0, false));
+            assert_eq!(
+                cache.first_use(&format!("k{i}"), "n", 100, 0, false),
+                Use::First
+            );
         }
-        assert!(!cache.first_use("fresh", "n", 100, 1, false));
-        assert!(cache.first_use("bound", "n", 100, 1, true));
-        assert!(!cache.first_use("k0", "n", 100, 1, false), "still a replay");
-        assert!(
-            cache.first_use("fresh", "n", 200, 101, false),
-            "after they expire"
+        assert_eq!(cache.first_use("fresh", "n", 100, 1, false), Use::Unchecked);
+        assert_eq!(
+            cache.first_use("fresh", "n", 100, 2, false),
+            Use::Unchecked,
+            "an unchecked nonce is not held"
+        );
+        assert_eq!(cache.first_use("k0", "n", 100, 1, false), Use::Replayed);
+        assert_eq!(cache.first_use("bound", "n", 100, 1, true), Use::First);
+        assert_eq!(cache.first_use("bound", "n", 100, 1, true), Use::Replayed);
+    }
+
+    /// Nonces past their deadline are pruned from a full unbound pool, so
+    /// the room they held is checked again; live ones stay held.
+    #[test]
+    fn a_full_unbound_pool_prunes_nonces_past_their_deadline() {
+        let cache = ReplayCache::default();
+        let half = MAX_UNBOUND_NONCES / 2;
+        for i in 0..MAX_UNBOUND_NONCES {
+            let deadline = if i < half { 100 } else { 300 };
+            assert_eq!(
+                cache.first_use(&format!("k{i}"), "n", deadline, 0, false),
+                Use::First
+            );
+        }
+        assert_eq!(
+            cache.first_use("fresh", "n", 400, 100, false),
+            Use::Unchecked,
+            "at its deadline a nonce is live"
+        );
+        assert_eq!(
+            cache.first_use("fresh", "n", 400, 101, false),
+            Use::First,
+            "past it, pruned"
+        );
+        assert_eq!(
+            cache.first_use("fresh", "n", 400, 102, false),
+            Use::Replayed,
+            "and the new one is held"
+        );
+        assert_eq!(
+            cache.first_use(&format!("k{half}"), "n", 300, 102, false),
+            Use::Replayed,
+            "a live nonce survives the prune"
         );
     }
 

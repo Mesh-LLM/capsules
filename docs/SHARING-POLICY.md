@@ -112,7 +112,13 @@ Before it looks anything up, the answering node checks, in order:
 - the signature verifies;
 - the `audience` is this node, so a request one node received cannot be
   forwarded to another;
-- the nonce has not been used before its deadline;
+- the nonce has not been used before its deadline. For a key a host
+  announced this is strict: a replay is refused, and so is a request once that
+  key holds 4,096 live nonces. Keys no host announced share one pool of 16,384
+  nonces, held until their deadlines, and the check there is best-effort: a
+  replay found in the pool is refused, but while the pool is full of live
+  nonces a new one is not held, and the request goes on unchecked (it can then
+  only be answered as an unsigned request would be, below);
 - a host announced the key for a node. If several nodes announced it, the
   request's `requester_id` must be one of them. If only one did, the request's
   `requester_id`, when given, must be that node. An entry in
@@ -133,7 +139,9 @@ one failure answered as an unsigned request would be, and only where an
 unsigned request is answered. Every other failed check is refused.
 
 Each request's digest is recorded in the "asked of you" log, with the key and
-node it was proven to come from (or `unbound`) and the audience it named.
+node it was proven to come from (or `unbound`), the audience it named, and
+`replay`: `checked`, or `unchecked` when a key no host announced found the
+pool full.
 
 The checkpoint list, the `history_card/1` derivation and the `served_summary/1`
 derivation carry no record bodies: `share_history_segments` does not govern

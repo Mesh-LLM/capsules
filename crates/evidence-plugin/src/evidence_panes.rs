@@ -202,6 +202,7 @@ pub(crate) fn read_received_log(dir: &Path) -> Vec<Value> {
                 "principal_node_id": entry.get("principal_node_id").cloned().unwrap_or(Value::Null),
                 "principal_binding": entry.get("principal_binding").cloned().unwrap_or(Value::Null),
                 "audience": entry.get("audience").cloned().unwrap_or(Value::Null),
+                "replay": entry.get("replay").cloned().unwrap_or(Value::Null),
             })
         })
         .collect();
