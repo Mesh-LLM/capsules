@@ -290,10 +290,11 @@ async fn accept_one_remote_peer_connection() -> (UnixListener, std::path::PathBu
     (listener, path)
 }
 
-/// Under the default sharing switch, a record that names no other side is
-/// declined over the real wire, never served to whoever asks.
+/// Under the default sharing switch, an unsigned fetch stating an id is
+/// declined over the real wire before anything is looked up: a record goes
+/// only to the node a signature proves, never to whoever asks.
 #[tokio::test]
-async fn responder_declines_a_record_naming_no_other_side_by_default() {
+async fn responder_declines_an_unsigned_fetch_by_default() {
     let mut harness = Harness::spawn(&[]).await;
     let manifest = harness.initialize().await;
     let capsule_id = harness.seal_one_real_capsule(&manifest).await;
@@ -370,7 +371,9 @@ async fn responder_answers_a_real_sealed_capsule_over_the_real_wire() {
 /// just the pure `answer()` unit tests.
 #[tokio::test]
 async fn responder_reports_not_found_for_a_real_miss_over_the_real_wire() {
-    let mut harness = Harness::spawn(&[]).await;
+    // Under `peers` an unsigned fetch is looked up; the default refuses it
+    // before the ledger is read (above).
+    let mut harness = Harness::spawn(&[("CAPSULES_SHARE_HISTORY_SEGMENTS", "peers")]).await;
     harness.initialize().await;
 
     let stream = harness.open_ledger_fetch_stream().await;

@@ -1440,7 +1440,7 @@ async fn main() -> anyhow::Result<()> {
                 } else if ledger_fetch_bridge::is_ledger_fetch_request(&request) {
                     // See `ledger_fetch_bridge`'s module doc for why
                     // `metadata_json` is its dispatch key.
-                    ledger_fetch_bridge::handle_open_stream(request, context, capsules.clone()).await
+                    ledger_fetch_bridge::handle_open_stream(request, context, capsules.clone(), self_peer.clone()).await
                 } else {
                     mesh_evidence_bridge::handle_open_stream(request, context, capsules.clone(), self_peer).await
                 };
@@ -1473,13 +1473,14 @@ async fn main() -> anyhow::Result<()> {
             let own_signing_key = own_signing_key.clone();
             Box::pin(async move {
                 peer_keys::announced::start(announces, PLUGIN_ID);
-                let announced = peer_keys::own::announce(announces, own_public_key, |key| {
-                    context.announce_plugin_key(key)
-                })
+                announce_own_key(
+                    announces,
+                    own_public_key,
+                    own_signing_key,
+                    requester_auth::asker_key(),
+                    |key| context.announce_plugin_key(key),
+                )
                 .await;
-                if announced == peer_keys::own::Announced::Sent {
-                    requester_auth::set_announced(own_signing_key);
-                }
                 Ok(())
             })
         })
@@ -1487,6 +1488,68 @@ async fn main() -> anyhow::Result<()> {
     .build();
 
     PluginRuntime::run(plugin).await
+}
+
+/// Ask the host to announce this node's key (`peer_keys::own::announce`),
+/// and sign the requests this node sends with it only once the host took it.
+/// Refused, or a host without the capability, leaves them unsigned: no peer
+/// could bind the key, so a signature would prove nothing more than an
+/// unsigned request does, and both get the answer any asker gets.
+async fn announce_own_key<F, Fut, R, E>(
+    announces: bool,
+    public_key: [u8; 32],
+    signing_key: ed25519_dalek::SigningKey,
+    asker: &requester_auth::AskerKey,
+    send: F,
+) -> peer_keys::own::Announced
+where
+    F: FnOnce(Vec<u8>) -> Fut,
+    Fut: std::future::Future<Output = Result<R, E>>,
+    E: std::fmt::Display,
+{
+    let announced = peer_keys::own::announce(announces, public_key, send).await;
+    if announced == peer_keys::own::Announced::Sent {
+        asker.set_announced(signing_key);
+    }
+    announced
+}
+
+#[cfg(test)]
+mod own_key_tests {
+    use super::*;
+    use peer_keys::own::Announced;
+    use serde_json::json;
+
+    /// What the plugin does at start with each answer the host can give:
+    /// whether a request it then sends is signed.
+    async fn signs_after(announces: bool, host: Result<(), &'static str>) -> (Announced, bool) {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+        let public = key.verifying_key().to_bytes();
+        let asker = requester_auth::AskerKey::default();
+        let announced =
+            announce_own_key(announces, public, key, &asker, |_| async move { host }).await;
+        let mut request = json!({"subject": {"checkpoints": null}});
+        asker.sign_outgoing(&mut request, "node-r");
+        let signed =
+            requester_auth::form(request.as_object().unwrap()) != requester_auth::Form::Unsigned;
+        assert_eq!(signed, asker.is_announced());
+        (announced, signed)
+    }
+
+    /// Only a key the host took signs: refused, or a host without
+    /// `plugin_keys.v1`, sends every request unsigned.
+    #[tokio::test]
+    async fn requests_are_signed_only_once_the_host_took_the_key() {
+        assert_eq!(signs_after(true, Ok(())).await, (Announced::Sent, true));
+        assert_eq!(
+            signs_after(false, Ok(())).await,
+            (Announced::HostLacksCapability, false)
+        );
+        assert_eq!(
+            signs_after(true, Err("busy")).await,
+            (Announced::Refused("busy".into()), false)
+        );
+    }
 }
 
 #[cfg(test)]

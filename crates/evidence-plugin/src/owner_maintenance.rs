@@ -451,6 +451,12 @@ impl Maintenance {
     }
 
     pub fn status(&self) -> Value {
+        self.status_signing(crate::requester_auth::asker_key())
+    }
+
+    /// [`Self::status`], with `asker` the key this node's requests are signed
+    /// with.
+    fn status_signing(&self, asker: &crate::requester_auth::AskerKey) -> Value {
         let ids = self.capsules.capsule_ids_in_order();
         let pending = read_pending(&self.data_dir);
         json!({
@@ -469,6 +475,9 @@ impl Maintenance {
                 "closing_record_id": p.closing_record_id,
             })),
             "sharing": sharing_status(),
+            // Whether the requests this node sends are signed: only once its
+            // host took its key (`requester_auth::AskerKey`).
+            "requests_signed": asker.is_announced(),
             // Why mesh's config file is not being read as written, when it
             // is not: the switches are then its last good values, or all off.
             "config_problem": crate::settings::config_problem(),
@@ -1074,6 +1083,19 @@ mod tests {
             status["exchange_text"]["retention_days"],
             json!(crate::exchange_text::configured_retention_days())
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A host that refused this node's key leaves its requests unsigned,
+    /// and the status says which.
+    #[test]
+    fn status_says_whether_this_nodes_requests_are_signed() {
+        let dir = temp_dir("status-requests-signed");
+        let (m, _ids) = maintenance(&dir, 1);
+        let asker = crate::requester_auth::AskerKey::default();
+        assert_eq!(m.status_signing(&asker)["requests_signed"], json!(false));
+        asker.set_announced(ed25519_dalek::SigningKey::from_bytes(&[7; 32]));
+        assert_eq!(m.status_signing(&asker)["requests_signed"], json!(true));
         let _ = fs::remove_dir_all(&dir);
     }
 

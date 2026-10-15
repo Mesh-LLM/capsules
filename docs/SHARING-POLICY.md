@@ -80,15 +80,12 @@ A peer can ask this node for one of its records by id, over the plugin's
 | `peers` | ✓ | ✓ |
 
 A local block and an owner-maintenance record are never served. A declined
-request is answered `not_authorized`. The requester's identity is the peer id
-the asking node states for itself: mesh-llm does not yet tell the plugin which
-peer opened a stream. This is a scope filter against casual reads, not access
-control: a record id is not guessable, and `peers` hands out the same records
-anyway.
-
-**On `ledger-fetch/1` this trusts the id the request states.** Under `counterparties` a peer that lies about its id receives the records the peer
-it names would receive: the switch scopes what this node discloses, it is not
-access control. Evidence requests (below) do not trust it.
+request is answered `not_authorized`. The counterparty is the node the
+request's signature proves it came from, checked as for an evidence request
+(below) before anything is looked up: the id a request states is never
+trusted. Under `counterparties` an unsigned request, or one whose signature
+fails, is refused before the record is looked up; under `peers` an unsigned
+request is answered, and a signature that fails any check is still refused.
 
 **Evidence requests** (`evidence-request/1`, draft-mih-agent-evidence-request-00)
 are answered in-process by `evidence_answer.rs`, with the protocol from the

@@ -45,6 +45,20 @@
   - **The "asked of you" log records each request's digest,** the key and node it was proven to
     come from (or `unbound`), the audience it named, and whether its nonce was checked for
     replay.
+- **Fetching a record by id (`ledger-fetch/1`) is proven the same way.** The asker signs the
+  fetch, and the node answering checks it before it looks the record up. Unless records go to
+  any peer (`peers`), a record goes only to the node the signature proves, never to the id the
+  fetch states. Under the default
+  `share_history_segments` an unsigned fetch, from a node on 0.1.5 or older, is now refused
+  `not_authorized`; under `peers` it is answered as before. With sharing `off`, a fetch is refused
+  before the lookup, so the refusal no longer shows whether the record exists.
+- **A referee checks the signature on an `adjudicate` request** before it reads anything. A
+  request addressed to another node, changed after signing, past its deadline or replayed is
+  refused `not_authorized`. A verdict does not depend on who asks, so an unsigned request is
+  answered as before.
+- **The records status (`evidence_records_status`) says whether this node's requests are
+  signed** (`requests_signed`). They are not when its host refused its key or lacks
+  `plugin_keys.v1`; its requests then go out unsigned.
 - **Standard History is no longer answered to every node that asks.** A node's checkpoint list,
   `history_card/1` and `served_summary/1` now go only to a counterparty (a node one of its records
   names as the other side of an exchange). Every other node gets a signed `policy_declined` that

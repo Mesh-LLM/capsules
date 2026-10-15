@@ -655,6 +655,102 @@ mod tests {
         );
     }
 
+    /// The referee's door checks the requester's signature before it reads
+    /// anything: a request signed for another node (relayed), one changed
+    /// after signing, or one replayed is refused `not_authorized`, even about
+    /// a pair it already ruled on, where it would otherwise return the held
+    /// verdict. Unsigned, or signed for this node, it is answered.
+    #[test]
+    fn the_referee_refuses_a_failed_signature_before_it_reads_anything() {
+        use crate::referee::service::{
+            handle_asked_adjudicate_request, Asked, REASON_NOT_AUTHORIZED, REASON_REQUEST_MALFORMED,
+        };
+        use crate::requester_auth::{Keys, ReplayCache};
+        let (dir, case) = requester_with_the_pair();
+        let live = assemble(dir.path(), "bracket-1").unwrap();
+        let sent: Value =
+            serde_json::from_str(case["requests"][0]["body"].as_str().unwrap()).unwrap();
+        let answer = &sent["referee_answer"];
+        let request =
+            adjudicate_request(&live, 2, &answer["request_body"], &answer["response_body"]);
+        let referee = CaseNode::new(&case["node"]);
+        let door = crate::referee::service::Referee {
+            ledger_dir: referee.ledger_dir(),
+            signing_key: &referee.key,
+            peer_keys: referee.peer_keys.as_deref(),
+        };
+        let own_node =
+            crate::peer_keys::peer_id_for_key_in(referee.peer_keys.as_deref(), &referee.key_id())
+                .expect("the referee is named");
+        let asker = crate::evidence_request_parity::asker_key("node-y");
+        let at: chrono::DateTime<chrono::Utc> =
+            chrono::DateTime::parse_from_rfc3339(NOW).unwrap().into();
+        let signed_for = |audience: &str| {
+            let mut request = request.clone();
+            crate::requester_auth::sign(&mut request, &asker, at, audience);
+            request
+        };
+        let announced = crate::evidence_request_parity::announced_keys();
+        let replay = ReplayCache::default();
+        let asked = Asked {
+            keys: Keys {
+                announced: &announced,
+                configured: None,
+            },
+            replay: &replay,
+            own_node: Some(&own_node),
+        };
+        let ask = |request: &Value| {
+            let body = serde_json::to_vec(request).unwrap();
+            handle_asked_adjudicate_request(&door, &body, NOW, &asked).unwrap()
+        };
+        let issued = referee
+            .ledger_dir()
+            .join(crate::referee::service::ISSUED_ADJUDICATIONS_FILENAME);
+
+        let relayed = signed_for("node-x");
+        let mut changed = signed_for(&own_node);
+        changed["selection_tier"] = json!(1);
+        let mut malformed = request.clone();
+        malformed["requester_auth"] = json!("x");
+        for (request, reason) in [
+            (&relayed, REASON_NOT_AUTHORIZED),
+            (&changed, REASON_NOT_AUTHORIZED),
+            (&malformed, REASON_REQUEST_MALFORMED),
+        ] {
+            let reply = ask(request);
+            assert_eq!(reply["reason"], json!(reason), "{reply}");
+            assert!(!issued.exists(), "nothing was ruled on");
+        }
+
+        let signed = signed_for(&own_node);
+        let reply = ask(&signed);
+        assert_eq!(reply["verdict"], json!("contradicted:node-b"), "{reply}");
+        assert!(issued.exists());
+        // The pair is ruled on now: each of these would get the held verdict
+        // back if the door read the ledger before the signature.
+        for request in [&signed, &relayed, &changed] {
+            let reply = ask(request);
+            assert_eq!(reply["reason"], json!(REASON_NOT_AUTHORIZED), "{reply}");
+        }
+        assert_eq!(
+            ask(&request)["verdict"],
+            json!("contradicted:node-b"),
+            "unsigned, the held verdict"
+        );
+        let unbound = {
+            let mut request = request.clone();
+            let key = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
+            crate::requester_auth::sign(&mut request, &key, at, &own_node);
+            request
+        };
+        assert_eq!(
+            ask(&unbound)["verdict"],
+            json!("contradicted:node-b"),
+            "a key no host binds reads as unsigned"
+        );
+    }
+
     /// The operator asking again while the exchange handler is deciding the
     /// same pair returns at once: no second decision, no second call.
     #[test]

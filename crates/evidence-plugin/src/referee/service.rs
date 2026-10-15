@@ -32,6 +32,14 @@
 //! (`referee_prompt: requester_attested`): the host rewrites a request before
 //! a provider seals it, so the tie to the twins' prompt is not checked here.
 //!
+//! **Who asks** is checked first, before any of these and before anything is
+//! read ([`handle_asked_adjudicate_request`]): the requester signs its
+//! request as it signs every evidence request (`requester_auth`), and a
+//! signature that fails its deadline, window, key, `audience` (this node),
+//! nonce or stated id is refused `not_authorized`. A verdict does not depend
+//! on who asks, so an unsigned request, or a valid signature under a key no
+//! host binds, is answered as before.
+//!
 //! The verdict is held beside the ledger (`issued-adjudications.jsonl`),
 //! never on the chain; the bridge seals this node's `adjudication_issued`
 //! record citing it before the reply leaves. A repeated request about the
@@ -69,6 +77,9 @@ pub const REASON_REFEREE_RECORD_NOT_FOUND: &str = "referee_record_not_found";
 pub const REASON_REFEREE_NOT_INDEPENDENT: &str = "referee_not_independent";
 pub const REASON_REFEREE_UNNAMED: &str = "referee_unnamed";
 pub const REASON_NO_VERDICT: &str = "no_verdict";
+/// A signed request whose signature does not prove its asker
+/// (`requester_auth`): the evidence-request refusal token of the same name.
+pub const REASON_NOT_AUTHORIZED: &str = "not_authorized";
 
 /// The two tiers a referee can be asked from (`crate::referee` selection):
 /// 1, a node with a corroboration for the model; 2, one with none yet.
@@ -221,9 +232,55 @@ fn ruling_block(
     block
 }
 
+/// What a request's signature is checked against.
+pub struct Asked<'a> {
+    pub keys: crate::requester_auth::Keys<'a>,
+    pub replay: &'a crate::requester_auth::ReplayCache,
+    /// This node's own mesh id, as the host reported it.
+    pub own_node: Option<&'a str>,
+}
+
+/// [`handle_adjudicate_request`], once the request's signature, if it
+/// carries one, proved its asker (`requester_auth::principal`; a verdict
+/// needs no identity). A malformed `requester_auth` is
+/// [`REASON_REQUEST_MALFORMED`]; any other failure is
+/// [`REASON_NOT_AUTHORIZED`], given before anything is read.
+pub fn handle_asked_adjudicate_request(
+    node: &Referee<'_>,
+    body: &[u8],
+    now: &str,
+    asked: &Asked<'_>,
+) -> std::io::Result<Value> {
+    if let Ok(Value::Object(map)) = crate::strict_json::parse(body) {
+        let checked = capsule_emit_evidence_request::time::parse_utc(now)
+            .ok_or(crate::requester_auth::Refused::NotAuthorized)
+            .and_then(|now| {
+                crate::requester_auth::principal(
+                    &map,
+                    now,
+                    asked.keys,
+                    asked.replay,
+                    asked.own_node,
+                    false,
+                )
+            });
+        match checked {
+            Ok(_) => {}
+            Err(crate::requester_auth::Refused::Malformed) => {
+                return Ok(refuse(node, body, REASON_REQUEST_MALFORMED, None, now))
+            }
+            Err(crate::requester_auth::Refused::NotAuthorized) => {
+                return Ok(refuse(node, body, REASON_NOT_AUTHORIZED, None, now))
+            }
+        }
+    }
+    handle_adjudicate_request(node, body, now)
+}
+
 /// Answer one adjudicate request (`body`, as received) at `now`: a signed
 /// verdict, or a signed refusal. Never panics on any body; an `Err` is a
-/// local write that failed.
+/// local write that failed. Who asks is not checked here
+/// ([`handle_asked_adjudicate_request`]).
 pub fn handle_adjudicate_request(
     node: &Referee<'_>,
     body: &[u8],

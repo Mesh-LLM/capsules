@@ -26,7 +26,9 @@
 //! em-spec u290.
 //!
 //! **The asker** ([`sign_outgoing`]) signs only once its host took its key
-//! ([`set_announced`]): a key no host announced is bound to no node.
+//! ([`AskerKey::set_announced`]): a key no host announced is bound to no
+//! node. `ledger-fetch/1` and a referee's `adjudicate` requests are signed
+//! and checked the same way ([`principal`]).
 //!
 //! **The responder** ([`check`]) runs before anything is looked up: window,
 //! signature, audience, replay, then the key's binding and the stated id
@@ -54,6 +56,11 @@ pub const MEMBER: &str = "requester_auth";
 pub const AUDIENCE: &str = "audience";
 
 /// The domain tag: the carrier's own identifier, then the profile member.
+/// The same tag signs this plugin's `ledger-fetch/1` requests and a
+/// referee's `adjudicate` requests: what keeps one channel's signed request
+/// from being taken on another is its [`AUDIENCE`] and its shape (a fetch
+/// carries a top-level `capsule_id`, an evidence request a `subject`), not
+/// the signature.
 pub const DOMAIN_TAG: &[u8] = b"evidence-request/1/requester-auth";
 
 /// How far ahead a signed request's deadline may be, in seconds. A later
@@ -136,23 +143,40 @@ pub fn sign(
     *request = Value::Object(map);
 }
 
-fn signer() -> &'static OnceLock<SigningKey> {
-    static SIGNER: OnceLock<SigningKey> = OnceLock::new();
+/// The key this node signs its requests with, once its host took it.
+#[derive(Default)]
+pub struct AskerKey(OnceLock<SigningKey>);
+
+impl AskerKey {
+    /// This node's host took its key (`peer_keys::own::Announced::Sent`):
+    /// from now on, every request it sends is signed with `key`.
+    pub fn set_announced(&self, key: SigningKey) {
+        let _ = self.0.set(key);
+    }
+
+    /// Sign an outgoing request to the node `audience` ([`sign`]) when this
+    /// node's key is announced; otherwise leave it unsigned, as before.
+    pub fn sign_outgoing(&self, request: &mut Value, audience: &str) {
+        if let Some(key) = self.0.get() {
+            sign(request, key, chrono::Utc::now(), audience);
+        }
+    }
+
+    /// Whether requests this node sends are signed.
+    pub fn is_announced(&self) -> bool {
+        self.0.get().is_some()
+    }
+}
+
+/// The one [`AskerKey`] this node's requests are signed with.
+pub fn asker_key() -> &'static AskerKey {
+    static SIGNER: AskerKey = AskerKey(OnceLock::new());
     &SIGNER
 }
 
-/// This node's host took its key (`peer_keys::own::Announced::Sent`): from
-/// now on, every evidence request it sends is signed with `key`.
-pub fn set_announced(key: SigningKey) {
-    let _ = signer().set(key);
-}
-
-/// Sign an outgoing request to the node `audience` ([`sign`]) when this
-/// node's key is announced; otherwise leave it unsigned, as before.
+/// [`AskerKey::sign_outgoing`] on [`asker_key`].
 pub fn sign_outgoing(request: &mut Value, audience: &str) {
-    if let Some(key) = signer().get() {
-        sign(request, key, chrono::Utc::now(), audience);
-    }
+    asker_key().sign_outgoing(request, audience);
 }
 
 /// What a request's [`MEMBER`] says, by form alone.
@@ -473,6 +497,53 @@ pub fn check(
     })
 }
 
+/// Why a request on another of this plugin's channels (`ledger-fetch/1`, a
+/// referee's `adjudicate`) is refused by who asks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refused {
+    /// A malformed [`MEMBER`], a signed request with no text [`AUDIENCE`],
+    /// nonce or deadline, or a deadline that is not an RFC 3339 UTC time.
+    Malformed,
+    /// Its deadline has passed, a check in [`check`] failed, or it is
+    /// unsigned where the answer needs an identity.
+    NotAuthorized,
+}
+
+/// Who asks, for a request on another of this plugin's channels, by the
+/// rules `evidence_answer` applies to an evidence request, before anything
+/// is looked up: a signed request past its deadline or failing [`check`] is
+/// refused; a valid signature under a key no host binds reads as unsigned
+/// where the answer needs no identity (`needed` false); an unsigned request
+/// is refused where it does. `Ok(None)` is an asker that proved nothing.
+pub fn principal(
+    map: &Map<String, Value>,
+    now: UtcTime,
+    keys: Keys<'_>,
+    replay: &ReplayCache,
+    own_node: Option<&str>,
+    needed: bool,
+) -> Result<Option<Principal>, Refused> {
+    let (key_id, sig) = match form(map) {
+        Form::Malformed => return Err(Refused::Malformed),
+        Form::Unsigned if needed => return Err(Refused::NotAuthorized),
+        Form::Unsigned => return Ok(None),
+        Form::Signed { key_id, sig } => (key_id, sig),
+    };
+    let deadline = map
+        .get("deadline")
+        .and_then(Value::as_str)
+        .and_then(capsule_emit_evidence_request::time::parse_utc)
+        .ok_or(Refused::Malformed)?;
+    if deadline < now {
+        return Err(Refused::NotAuthorized);
+    }
+    match check(map, &key_id, &sig, deadline, now, keys, replay, own_node) {
+        Ok(principal) => Ok(Some(principal)),
+        Err(failure) if failure.reads_as_unsigned() && !needed => Ok(None),
+        Err(_) => Err(Refused::NotAuthorized),
+    }
+}
+
 /// Whether a signed request's [`AUDIENCE`] is this node, compared as exact
 /// strings. A node that does not know its own id yet matches nothing.
 fn audience_matches(audience: Option<&str>, own_node: Option<&str>) -> bool {
@@ -767,11 +838,12 @@ mod tests {
     /// request it sends.
     #[test]
     fn an_asker_signs_only_once_its_key_is_announced() {
+        let asker = AskerKey::default();
         let mut request = json!({"subject": {"checkpoints": null}});
-        sign_outgoing(&mut request, "node-r");
+        asker.sign_outgoing(&mut request, "node-r");
         assert_eq!(form(request.as_object().unwrap()), Form::Unsigned);
-        set_announced(key(3));
-        sign_outgoing(&mut request, "node-r");
+        asker.set_announced(key(3));
+        asker.sign_outgoing(&mut request, "node-r");
         assert_eq!(
             request[AUDIENCE],
             json!("node-r"),

@@ -32,6 +32,15 @@
 //! `mesh_evidence_bridge`'s requester always sends `None`. Anything other
 //! than the exact tag falls through to the evidence-request path, so this is
 //! purely additive -- no existing behavior changes.
+//!
+//! **Who asks** is proven as for an evidence request: the asker signs its
+//! request (`requester_auth`, once its host took its key), addressed to the
+//! node it fetches from, and the responder checks that signature, its
+//! `audience`, its deadline and nonce, and the key's binding before it looks
+//! anything up ([`answer`]). A record goes only to the node the signature
+//! proves, never to the `requester_id` an asker states; unless the operator
+//! serves records to any peer (`peers`), an unsigned request is refused
+//! before the ledger is read.
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -97,14 +106,24 @@ pub async fn handle_open_stream(
     request: OpenStreamRequest,
     _context: &mut PluginContext<'_>,
     capsules: Arc<CapsuleState>,
+    self_peer: crate::self_peer::SelfPeer,
 ) -> PluginResult<Option<OpenStreamResponse>> {
     let listener = bind_side_stream(crate::PLUGIN_ID, &request.stream_id)
         .await
         .map_err(|error| PluginError::internal(error.to_string()))?;
     let response = listener.open_stream_response(&request);
+    // The id askers address this node by, as for an evidence request
+    // (`mesh_evidence_bridge::handle_open_stream`).
+    let own_node = self_peer.learned();
+    if own_node.is_none() {
+        tracing::warn!(
+            "this node's own mesh id is not known yet: signed ledger-fetch requests are refused \
+             until the host reports it"
+        );
+    }
 
     tokio::spawn(async move {
-        if let Err(error) = bridge_inbound_ledger_fetch_stream(listener, capsules).await {
+        if let Err(error) = bridge_inbound_ledger_fetch_stream(listener, capsules, own_node).await {
             tracing::warn!(%error, "mesh ledger-fetch responder bridge failed");
         }
     });
@@ -115,11 +134,6 @@ pub async fn handle_open_stream(
 #[derive(Debug, Deserialize)]
 struct LedgerFetchRequest {
     capsule_id: String,
-    /// The asking node's own mesh peer id, as it states it. The host does not
-    /// tell a stream's responder who opened it, so this is the asker's word:
-    /// it narrows who is answered, it is not access control.
-    #[serde(default)]
-    requester_id: Option<String>,
 }
 
 /// Every shape the responder can answer with -- deliberately explicit rather
@@ -140,7 +154,8 @@ enum LedgerFetchResponse {
         capsule_id: String,
     },
     /// The record exists or not; either way this node does not give it to
-    /// this asker (see [`may_serve`]).
+    /// this asker (see [`may_serve`]), or the asker proved nothing where it
+    /// had to ([`answer`]).
     NotAuthorized {
         capsule_id: String,
     },
@@ -157,6 +172,7 @@ enum LedgerFetchResponse {
 async fn bridge_inbound_ledger_fetch_stream(
     listener: LocalListener,
     capsules: Arc<CapsuleState>,
+    own_node: Option<String>,
 ) -> anyhow::Result<()> {
     let local = tokio::time::timeout(responder_timeout(), listener.accept()).await??;
     let (mut read_half, mut write_half) = local.into_split();
@@ -171,10 +187,23 @@ async fn bridge_inbound_ledger_fetch_stream(
     )
     .await??;
 
+    let now = crate::evidence_answer::now_utc();
+    let announced = crate::peer_keys::announced::snapshot();
+    let configured = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
+    let door = Door {
+        now: &now,
+        keys: crate::requester_auth::Keys {
+            announced: &announced,
+            configured: configured.as_deref(),
+        },
+        replay: crate::requester_auth::replay_cache(),
+        own_node: own_node.as_deref(),
+    };
     let response = answer(
         &capsules,
         &request_bytes,
         crate::share_policy::history_segments(),
+        &door,
     );
 
     let response_bytes = serde_json::to_vec(&response)?;
@@ -186,14 +215,12 @@ async fn bridge_inbound_ledger_fetch_stream(
     Ok(())
 }
 
-/// The pure lookup-to-response step, split out of the async I/O wrapper so
-/// it is directly unit-testable (found / not-found / malformed) without a
-/// live mesh stream.
 /// Whether `record` goes to the asker under the node's `history_segments`
 /// switch. `off` serves nothing. A local block and an owner-maintenance
 /// record never leave this node. Under `peers` any other record goes to any
 /// node; otherwise a record goes only to the node it names as the other side
 /// of its exchange, so a record that names no other side is not served.
+/// `requester_id` is the node the request's signature proved ([`answer`]).
 fn may_serve(record: &Value, requester_id: Option<&str>, history_segments: &str) -> bool {
     if history_segments == "off"
         || crate::evidence_panes::is_local_routing_choice(record)
@@ -208,31 +235,88 @@ fn may_serve(record: &Value, requester_id: Option<&str>, history_segments: &str)
         return true;
     }
     crate::evidence_panes::full_counterparty_node_id(record)
-        .is_some_and(|other_side| requester_id.map(str::trim) == Some(other_side.as_str()))
+        .is_some_and(|other_side| requester_id == Some(other_side.as_str()))
 }
 
+/// What a request is checked against before the ledger is read.
+struct Door<'a> {
+    /// Now, RFC 3339 UTC.
+    now: &'a str,
+    keys: crate::requester_auth::Keys<'a>,
+    replay: &'a crate::requester_auth::ReplayCache,
+    /// This node's own mesh id, as the host reported it.
+    own_node: Option<&'a str>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static LOOKUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has looked a record up: a test shows a
+/// refusal came before the ledger was read.
+#[cfg(test)]
+fn lookups() -> u64 {
+    LOOKUPS.with(std::cell::Cell::get)
+}
+
+/// The pure request-to-response step, split out of the async I/O wrapper
+/// so it is directly unit-testable without a live mesh stream. In order:
+/// parse; the switch `off` serves nothing; who asks
+/// (`requester_auth::principal`: a signature that fails its deadline,
+/// window, key, `audience`, nonce or stated id is refused, and an unsigned
+/// request is refused unless records go to any peer); and only then the
+/// lookup, served to the proven node alone.
 fn answer(
     capsules: &CapsuleState,
     request_bytes: &[u8],
     history_segments: &str,
+    door: &Door<'_>,
 ) -> LedgerFetchResponse {
+    let malformed = |error: &dyn std::fmt::Display| LedgerFetchResponse::Error {
+        message: format!("malformed ledger-fetch request: {error}"),
+    };
     let parsed = match serde_json::from_slice::<LedgerFetchRequest>(request_bytes) {
         Ok(parsed) => parsed,
-        Err(error) => {
-            return LedgerFetchResponse::Error {
-                message: format!("malformed ledger-fetch request: {error}"),
-            }
-        }
+        Err(error) => return malformed(&error),
     };
+    let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(request_bytes) else {
+        return malformed(&"not a JSON object");
+    };
+    if crate::requester_auth::form(&map) == crate::requester_auth::Form::Malformed {
+        return malformed(&crate::requester_auth::MEMBER);
+    }
+    let not_authorized = LedgerFetchResponse::NotAuthorized {
+        capsule_id: parsed.capsule_id.clone(),
+    };
+    if history_segments == "off" {
+        return not_authorized;
+    }
+    let Some(now) = capsule_emit_evidence_request::time::parse_utc(door.now) else {
+        return LedgerFetchResponse::Error {
+            message: "this node's clock is not an RFC 3339 UTC time".into(),
+        };
+    };
+    let principal = match crate::requester_auth::principal(
+        &map,
+        now,
+        door.keys,
+        door.replay,
+        door.own_node,
+        history_segments != "peers",
+    ) {
+        Ok(principal) => principal,
+        Err(crate::requester_auth::Refused::Malformed) => {
+            return malformed(&crate::requester_auth::MEMBER)
+        }
+        Err(crate::requester_auth::Refused::NotAuthorized) => return not_authorized,
+    };
+    let requester_id = principal.as_ref().map(|p| p.node_id.as_str());
 
+    #[cfg(test)]
+    LOOKUPS.with(|n| n.set(n.get() + 1));
     match capsules.lookup(&parsed.capsule_id) {
-        Ok(Some(entry))
-            if !may_serve(
-                &entry.capsule,
-                parsed.requester_id.as_deref(),
-                history_segments,
-            ) =>
-        {
+        Ok(Some(entry)) if !may_serve(&entry.capsule, requester_id, history_segments) => {
             LedgerFetchResponse::NotAuthorized {
                 capsule_id: parsed.capsule_id,
             }
@@ -293,9 +377,17 @@ pub async fn handle_mesh_ledger_fetch(
         return Err(PluginError::invalid_params("capsule_id must not be empty"));
     }
 
+    // One form of the id, for the stream and for the audience it is signed
+    // for (`mesh_evidence_bridge::send_evidence_request`).
+    let peer_id = args.peer_id.trim();
+    let peer_id = if peer_id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        peer_id.to_ascii_lowercase()
+    } else {
+        peer_id.to_string()
+    };
     let open_request = OpenMeshStreamRequest {
         stream_id: next_stream_id("ledger-fetch"),
-        target_peer_id: args.peer_id.clone(),
+        target_peer_id: peer_id.clone(),
         plugin_id: String::new(), // host fills this in from the connection.
         channel: LEDGER_FETCH_CHANNEL.to_string(),
         purpose: mesh_llm_plugin::proto::StreamPurpose::Generic as i32,
@@ -314,10 +406,11 @@ pub async fn handle_mesh_ledger_fetch(
         .map_err(|error| PluginError::internal(format!("could not reach peer: {error}")))?;
     let (mut read_half, mut write_half) = stream.into_split();
 
-    let request_bytes = serde_json::to_vec(
-        &serde_json::json!({ "capsule_id": args.capsule_id, "requester_id": self_id }),
-    )
-    .expect("a two-field static-shape object always serializes");
+    // Signed as this node once its key is announced; the responder serves a
+    // record only to the node the signature proves.
+    let mut request = serde_json::json!({ "capsule_id": args.capsule_id, "requester_id": self_id });
+    crate::requester_auth::sign_outgoing(&mut request, &peer_id);
+    let request_bytes = serde_json::to_vec(&request).expect("a map of strings always serializes");
 
     let write_and_read = async {
         write_half.write_all(&request_bytes).await?;
@@ -350,6 +443,69 @@ pub async fn handle_mesh_ledger_fetch(
 mod tests {
     use super::*;
     use crate::capsule_emit::ExchangeRecord;
+    use crate::evidence_request_parity::{announced_keys, asker_key, RESPONDER_NODE};
+    use crate::requester_auth::{Keys, ReplayCache};
+    use ed25519_dalek::SigningKey;
+    use serde_json::json;
+
+    const NOW: &str = "2026-10-14T00:00:00Z";
+
+    fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().into()
+    }
+
+    /// `request` signed with `key` at [`NOW`], addressed to `audience`.
+    fn signed_with(key: &SigningKey, audience: &str, request: Value) -> Vec<u8> {
+        let mut request = request;
+        crate::requester_auth::sign(&mut request, key, at(NOW), audience);
+        serde_json::to_vec(&request).unwrap()
+    }
+
+    /// A fetch of `capsule_id` by `node`, stating its id, signed by it.
+    fn signed_by(node: &str, capsule_id: &str) -> Vec<u8> {
+        signed_with(
+            &asker_key(node),
+            RESPONDER_NODE,
+            json!({"capsule_id": capsule_id, "requester_id": node}),
+        )
+    }
+
+    /// `bytes` asked at `now` of a node switched to `tier`, with `replay`.
+    fn answer_at(
+        state: &CapsuleState,
+        bytes: &[u8],
+        tier: &str,
+        now: &str,
+        replay: &ReplayCache,
+    ) -> LedgerFetchResponse {
+        let announced = announced_keys();
+        let door = Door {
+            now,
+            keys: Keys {
+                announced: &announced,
+                configured: None,
+            },
+            replay,
+            own_node: Some(RESPONDER_NODE),
+        };
+        answer(state, bytes, tier, &door)
+    }
+
+    /// `bytes` asked at [`NOW`] with a fresh replay cache.
+    fn answer_now(state: &CapsuleState, bytes: &[u8], tier: &str) -> LedgerFetchResponse {
+        answer_at(state, bytes, tier, NOW, &ReplayCache::default())
+    }
+
+    /// `answer_now`, and whether it looked anything up.
+    fn answer_counted(
+        state: &CapsuleState,
+        bytes: &[u8],
+        tier: &str,
+    ) -> (LedgerFetchResponse, bool) {
+        let before = lookups();
+        let response = answer_now(state, bytes, tier);
+        (response, lookups() != before)
+    }
 
     /// Same convention `capsule_emit`'s own tests use -- a process-id-suffixed
     /// dir under the OS temp root, wiped before open -- rather than adding a
@@ -360,7 +516,8 @@ mod tests {
         CapsuleState::open(&dir, "ledger-fetch-test").expect("open capsule state")
     }
 
-    const ASKER: &str = "e5ba9d1001e5ba9d1001e5ba9d1001e5ba9d1001e5ba9d1001e5ba9d1001aaaa";
+    /// The record's other side: a node whose key the host announced.
+    const ASKER: &str = "node-a";
 
     fn seal_one(state: &CapsuleState) -> String {
         seal_for(state, Some(ASKER))
@@ -390,11 +547,7 @@ mod tests {
         let state = open_state("found");
         let capsule_id = seal_one(&state);
 
-        let request = serde_json::to_vec(
-            &serde_json::json!({ "capsule_id": capsule_id, "requester_id": ASKER }),
-        )
-        .unwrap();
-        let response = answer(&state, &request, "prospective");
+        let response = answer_now(&state, &signed_by(ASKER, &capsule_id), "counterparties");
 
         match response {
             LedgerFetchResponse::Found {
@@ -417,9 +570,7 @@ mod tests {
         let state = open_state("not-found");
         seal_one(&state); // ledger is non-empty, but the id below is not in it.
 
-        let request =
-            serde_json::to_vec(&serde_json::json!({ "capsule_id": "not-a-real-id" })).unwrap();
-        let response = answer(&state, &request, "prospective");
+        let response = answer_now(&state, &signed_by(ASKER, "not-a-real-id"), "counterparties");
 
         assert_eq!(
             response,
@@ -429,21 +580,26 @@ mod tests {
         );
     }
 
+    /// A fetch signed by `node`, or unsigned with no stated id.
     fn ask(
         state: &CapsuleState,
         capsule_id: &str,
-        requester_id: Option<&str>,
+        node: Option<&str>,
         tier: &str,
     ) -> LedgerFetchResponse {
-        let request = serde_json::to_vec(
-            &serde_json::json!({ "capsule_id": capsule_id, "requester_id": requester_id }),
-        )
-        .unwrap();
-        answer(state, &request, tier)
+        let request = match node {
+            Some(node) => signed_by(node, capsule_id),
+            None => serde_json::to_vec(&json!({ "capsule_id": capsule_id })).unwrap(),
+        };
+        answer_now(state, &request, tier)
     }
 
     fn is_found(response: &LedgerFetchResponse) -> bool {
         matches!(response, LedgerFetchResponse::Found { .. })
+    }
+
+    fn is_refused(response: &LedgerFetchResponse) -> bool {
+        matches!(response, LedgerFetchResponse::NotAuthorized { .. })
     }
 
     /// Only the other side of the exchange gets the record: another node, or
@@ -453,16 +609,17 @@ mod tests {
     fn a_record_goes_only_to_the_node_it_names_as_the_other_side() {
         let state = open_state("counterparty");
         let id = seal_one(&state);
-        for tier in ["counterparties", "prospective"] {
+        {
+            let tier = "counterparties";
             assert!(is_found(&ask(&state, &id, Some(ASKER), tier)));
-            let other = ask(&state, &id, Some("b0b0b0b0"), tier);
+            let other = ask(&state, &id, Some("node-y"), tier);
             assert_eq!(
                 other,
                 LedgerFetchResponse::NotAuthorized {
                     capsule_id: id.clone()
                 }
             );
-            assert!(!is_found(&ask(&state, &id, None, tier)));
+            assert!(is_refused(&ask(&state, &id, None, tier)));
         }
     }
 
@@ -470,8 +627,15 @@ mod tests {
     fn the_sharing_switch_decides_off_serves_nothing_and_peers_serves_any_node() {
         let state = open_state("switch");
         let id = seal_one(&state);
-        assert!(!is_found(&ask(&state, &id, Some(ASKER), "off")));
-        assert!(is_found(&ask(&state, &id, Some("b0b0b0b0"), "peers")));
+        assert!(is_refused(&ask(&state, &id, Some(ASKER), "off")));
+        // Refused before the lookup: a record it never sealed gets the same.
+        assert_eq!(
+            ask(&state, "never-sealed", Some(ASKER), "off"),
+            LedgerFetchResponse::NotAuthorized {
+                capsule_id: "never-sealed".into()
+            }
+        );
+        assert!(is_found(&ask(&state, &id, Some("node-y"), "peers")));
         assert!(is_found(&ask(&state, &id, None, "peers")));
     }
 
@@ -489,7 +653,7 @@ mod tests {
                 None,
             )
             .expect("seal block");
-        for tier in ["counterparties", "prospective", "peers"] {
+        for tier in ["counterparties", "peers"] {
             let response = ask(&state, &block.capsule_id, Some(ASKER), tier);
             assert_eq!(
                 response,
@@ -506,7 +670,7 @@ mod tests {
     fn a_record_naming_no_other_side_is_declined() {
         let state = open_state("no-side");
         let id = seal_for(&state, None);
-        assert!(!is_found(&ask(&state, &id, Some(ASKER), "prospective")));
+        assert!(is_refused(&ask(&state, &id, Some(ASKER), "counterparties")));
     }
 
     /// (negative) Malformed request bytes must produce an explicit `Error`,
@@ -517,13 +681,147 @@ mod tests {
     fn malformed_request_bytes_are_reported_as_error_not_not_found() {
         let state = open_state("malformed");
 
-        let response = answer(&state, b"not json at all", "prospective");
+        let response = answer_now(&state, b"not json at all", "counterparties");
 
         match response {
             LedgerFetchResponse::Error { message } => {
                 assert!(message.contains("malformed"), "message was: {message}");
             }
             other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    /// R-13 on this channel (PRD T3): node-y fetches node-a's record
+    /// claiming to be node-a, unsigned, with its own key, or with node-a's
+    /// key id over its own signature. Each is `not_authorized` before
+    /// anything is looked up. The same fetch signed by node-a is served.
+    /// MUTANT: serve on the stated `requester_id` and node-y reads it.
+    #[test]
+    fn a_node_claiming_to_be_the_other_side_is_refused_before_the_ledger_is_read() {
+        let state = open_state("claims-other-side");
+        let id = seal_one(&state);
+        let request = json!({"capsule_id": id, "requester_id": ASKER});
+        let unsigned = serde_json::to_vec(&request).unwrap();
+        let own_key_claims_a = signed_with(&asker_key("node-y"), RESPONDER_NODE, request);
+        let mut a_key_y_sig: Value = serde_json::from_slice(&own_key_claims_a).unwrap();
+        a_key_y_sig["requester_auth"]["key_id"] =
+            json!(hex::encode(asker_key(ASKER).verifying_key().to_bytes()));
+        let a_key_y_sig = serde_json::to_vec(&a_key_y_sig).unwrap();
+        {
+            let tier = "counterparties";
+            for bytes in [&unsigned, &own_key_claims_a, &a_key_y_sig] {
+                let (response, looked) = answer_counted(&state, bytes, tier);
+                assert_eq!(
+                    response,
+                    LedgerFetchResponse::NotAuthorized {
+                        capsule_id: id.clone()
+                    },
+                    "{tier}"
+                );
+                assert!(!looked, "the ledger was read ({tier})");
+            }
+            assert!(is_found(&answer_now(&state, &signed_by(ASKER, &id), tier)));
+        }
+    }
+
+    /// A fetch node-a signed for another node, relayed here, is refused
+    /// before anything is looked up: the signature covers its `audience`.
+    #[test]
+    fn a_fetch_addressed_to_another_node_is_refused_before_the_ledger_is_read() {
+        let state = open_state("audience");
+        let id = seal_one(&state);
+        let relayed = signed_with(
+            &asker_key(ASKER),
+            "node-x",
+            json!({"capsule_id": id, "requester_id": ASKER}),
+        );
+        for tier in ["counterparties", "peers"] {
+            let (response, looked) = answer_counted(&state, &relayed, tier);
+            assert_eq!(
+                response,
+                LedgerFetchResponse::NotAuthorized {
+                    capsule_id: id.clone()
+                }
+            );
+            assert!(!looked, "the ledger was read ({tier})");
+        }
+    }
+
+    /// A signed fetch is answered once: the same bytes again before their
+    /// deadline, or any time after it, are refused before the ledger is read.
+    #[test]
+    fn a_replayed_or_late_fetch_is_refused_before_the_ledger_is_read() {
+        let state = open_state("replay");
+        let id = seal_one(&state);
+        let bytes = signed_by(ASKER, &id);
+        let replay = ReplayCache::default();
+        assert!(is_found(&answer_at(
+            &state,
+            &bytes,
+            "counterparties",
+            NOW,
+            &replay
+        )));
+        let before = lookups();
+        assert!(is_refused(&answer_at(
+            &state,
+            &bytes,
+            "counterparties",
+            NOW,
+            &replay
+        )));
+        let late = "2026-10-14T00:02:01Z";
+        let fresh = ReplayCache::default();
+        assert!(is_refused(&answer_at(
+            &state,
+            &bytes,
+            "counterparties",
+            late,
+            &fresh
+        )));
+        assert_eq!(lookups(), before, "the ledger was read");
+    }
+
+    /// Where records go to any peer no identity is needed, yet a signature
+    /// that fails is still refused (never read as unsigned); a valid one under
+    /// a key no host binds reads as unsigned, as an unsigned fetch does.
+    #[test]
+    fn under_peers_a_failed_signature_is_refused_and_an_unbound_key_reads_as_unsigned() {
+        let state = open_state("peers-signed");
+        let id = seal_one(&state);
+        let mut tampered: Value = serde_json::from_slice(&signed_by(ASKER, &id)).unwrap();
+        tampered["capsule_id"] = json!("another-id");
+        let tampered = serde_json::to_vec(&tampered).unwrap();
+        let (response, looked) = answer_counted(&state, &tampered, "peers");
+        assert!(matches!(
+            response,
+            LedgerFetchResponse::NotAuthorized { .. }
+        ));
+        assert!(!looked, "the ledger was read");
+        let unbound = signed_with(
+            &SigningKey::from_bytes(&[9; 32]),
+            RESPONDER_NODE,
+            json!({"capsule_id": id}),
+        );
+        assert!(is_found(&answer_now(&state, &unbound, "peers")));
+        let (response, looked) = answer_counted(&state, &unbound, "counterparties");
+        assert!(is_refused(&response), "{response:?}");
+        assert!(!looked, "the ledger was read");
+    }
+
+    /// A malformed `requester_auth` is an `Error`, never served.
+    #[test]
+    fn a_malformed_signature_member_is_an_error() {
+        let state = open_state("malformed-auth");
+        let id = seal_one(&state);
+        let bytes = serde_json::to_vec(&json!({"capsule_id": id, "requester_auth": "x"})).unwrap();
+        for tier in ["counterparties", "peers", "off"] {
+            let (response, looked) = answer_counted(&state, &bytes, tier);
+            assert!(
+                matches!(response, LedgerFetchResponse::Error { .. }),
+                "{response:?}"
+            );
+            assert!(!looked);
         }
     }
 
