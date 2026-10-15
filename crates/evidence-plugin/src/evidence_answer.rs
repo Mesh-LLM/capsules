@@ -359,6 +359,7 @@ fn requester(
                 .and_then(Value::as_str)
                 .map(str::to_string);
             let checked = requester_auth::check(
+                requester_auth::Channel::EvidenceRequest,
                 map,
                 &key_id,
                 &sig,
@@ -983,7 +984,13 @@ mod tests {
     /// `request` signed with `key` at [`NOW`] (`requester_auth::sign`).
     fn signed_with(key: &SigningKey, request: &Value) -> Vec<u8> {
         let mut request = request.clone();
-        requester_auth::sign(&mut request, key, now(), RESPONDER);
+        requester_auth::sign(
+            requester_auth::Channel::EvidenceRequest,
+            &mut request,
+            key,
+            now(),
+            RESPONDER,
+        );
         serde_json::to_vec(&request).unwrap()
     }
 
@@ -1983,6 +1990,48 @@ mod tests {
         }
     }
 
+    /// node-a's request for its own record, addressed here but signed for
+    /// another channel (a `ledger-fetch/1` fetch, a referee's `adjudicate`),
+    /// is refused `not_authorized` before the ledger is read, even where an
+    /// unsigned request would be answered: the signature fails on the
+    /// Evidence Request's tag (ruling u338), and a failed signature is never
+    /// read as unsigned. MUTANT: one tag shared by every channel and it is
+    /// answered.
+    #[test]
+    fn a_request_signed_for_another_channel_is_refused_before_the_ledger_is_read() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let record = node_a_record(&ledger);
+        for channel in [
+            requester_auth::Channel::LedgerFetch,
+            requester_auth::Channel::RefereeAdjudicate,
+        ] {
+            let mut request = record.clone();
+            requester_auth::sign(
+                channel,
+                &mut request,
+                &asker_key("node-a"),
+                now(),
+                RESPONDER,
+            );
+            let bytes = serde_json::to_vec(&request).unwrap();
+            for segments in ["counterparties", "peers"] {
+                let reads = evidence_log::index_reads();
+                let outcome = ask_with(dir.path(), &bytes, segments, false);
+                assert_eq!(evidence_log::index_reads(), reads, "the ledger was read");
+                assert_eq!(
+                    outcome.wire_bytes(),
+                    Some(refusal_of(&bytes, Reason::NotAuthorized)),
+                    "{channel:?} ({segments})"
+                );
+            }
+        }
+        assert!(matches!(
+            ask_by_default(dir.path(), &signed_by("node-a", &record)),
+            Outcome::Answered { .. }
+        ));
+    }
+
     /// The relay (ruling addendum §1): node-a's request to node-x, forwarded
     /// by node-x to this node, names node-x as its audience. It is refused
     /// `not_authorized` before the ledger is read, even where an unsigned
@@ -1994,7 +2043,13 @@ mod tests {
         let record = node_a_record(&ledger);
         let mut to_x = record.clone();
         to_x["nonce"] = json!("relayed");
-        requester_auth::sign(&mut to_x, &asker_key("node-a"), now(), "node-x");
+        requester_auth::sign(
+            requester_auth::Channel::EvidenceRequest,
+            &mut to_x,
+            &asker_key("node-a"),
+            now(),
+            "node-x",
+        );
         let to_x = serde_json::to_vec(&to_x).unwrap();
         for segments in ["counterparties", "peers"] {
             let reads = evidence_log::index_reads();
@@ -2060,7 +2115,13 @@ mod tests {
             let mut no_audience = signed.clone();
             no_audience.as_object_mut().unwrap().remove("audience");
             let mut to_x = record.clone();
-            requester_auth::sign(&mut to_x, &key, now(), "node-x");
+            requester_auth::sign(
+                requester_auth::Channel::EvidenceRequest,
+                &mut to_x,
+                &key,
+                now(),
+                "node-x",
+            );
             let cases: Vec<(&str, Vec<u8>, Reason)> = vec![
                 (
                     "malformed requester_auth",

@@ -162,6 +162,16 @@ jobs:
           fi
           grep -q "a_failed_request_is_never_answered_as_unsigned ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the never-downgraded case"; exit 1; }
 
+      - name: The requester-auth tests catch one domain tag shared by every channel
+        shell: bash
+        run: |
+          cargo test --locked --bin capsules --features mutant-requester-auth-shared-tag --no-run
+          if out=$(cargo test --locked --bin capsules --features mutant-requester-auth-shared-tag -- requester_auth:: 2>&1); then
+            echo "::error::the requester-auth tests passed one domain tag shared by every channel"
+            exit 1
+          fi
+          grep -q "a_request_signed_for_one_channel_fails_on_every_other ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the cross-channel case"; exit 1; }
+
       # The referee's mutants (vectors/parity/referee/mutants.json): each build
       # with one deliberate fault must fail the referee parity run on every
       # case listed for it.

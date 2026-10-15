@@ -298,7 +298,10 @@ pub(crate) enum SendError {
 
 /// Send `request` to `peer_id` over the evidence stream and read the answer:
 /// `(the request bytes sent, the peer's JSON)`. Signed as this node
-/// (`requester_auth::sign_outgoing`) once its key is announced.
+/// (`requester_auth::sign_outgoing`) once its key is announced: under the
+/// referee's tag when it is an `adjudicate` request, which the referee's
+/// door on the far end checks it against, and the Evidence Request's
+/// otherwise.
 pub(crate) async fn send_evidence_request(
     context: &mut PluginContext<'_>,
     peer_id: &str,
@@ -332,7 +335,12 @@ pub(crate) async fn send_evidence_request(
         .map_err(|error| SendError::NotOpened(error.to_string()))?;
     let (mut read_half, mut write_half) = stream.into_split();
     let mut request = request.clone();
-    crate::requester_auth::sign_outgoing(&mut request, &peer_id);
+    let channel = if crate::referee::service::is_adjudicate_request(&request) {
+        crate::requester_auth::Channel::RefereeAdjudicate
+    } else {
+        crate::requester_auth::Channel::EvidenceRequest
+    };
+    crate::requester_auth::sign_outgoing(channel, &mut request, &peer_id);
     let request_bytes =
         serde_json::to_vec(&request).map_err(|error| SendError::Malformed(error.to_string()))?;
     let write_and_read = async {
@@ -634,13 +642,15 @@ mod tests {
 
     /// The stream's referee door is the one that checks who asks: a signed
     /// adjudicate request addressed to another node is refused
-    /// `not_authorized`; the same request unsigned gets past that check and
-    /// is refused for something else (this node is named by no key here).
+    /// `not_authorized`, and so is one addressed here but signed under the
+    /// Evidence Request's tag; the same request unsigned, or signed under the
+    /// referee's tag, gets past that check and is refused for something else
+    /// (this node is named by no key here).
     #[test]
     fn the_stream_checks_an_adjudicate_requests_signature() {
         let dir = tempfile::tempdir().unwrap();
         let capsules = crate::capsule_emit::CapsuleState::open(dir.path(), "referee-door").unwrap();
-        let mut request = serde_json::json!({
+        let request = serde_json::json!({
             "subject": {"kind": "adjudicate"},
             "selection_tier": 2,
             "halves": [{"capsule": {"capsule_id": "a"}}, {"capsule": {"capsule_id": "b"}}],
@@ -649,8 +659,15 @@ mod tests {
         let at = chrono::DateTime::parse_from_rfc3339(&now).unwrap().into();
         let key = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
         let unsigned = serde_json::to_vec(&request).unwrap();
-        crate::requester_auth::sign(&mut request, &key, at, "node-x");
-        let relayed = serde_json::to_vec(&request).unwrap();
+        let signed = |channel, audience| {
+            let mut request = request.clone();
+            crate::requester_auth::sign(channel, &mut request, &key, at, audience);
+            serde_json::to_vec(&request).unwrap()
+        };
+        use crate::requester_auth::Channel;
+        let relayed = signed(Channel::RefereeAdjudicate, "node-x");
+        let mistagged = signed(Channel::EvidenceRequest, "node-r");
+        let tagged = signed(Channel::RefereeAdjudicate, "node-r");
         let reason = |bytes: &[u8]| {
             let reply = referee_answer(&capsules, bytes, &now, Some("node-r"))
                 .flatten()
@@ -661,8 +678,16 @@ mod tests {
             reason(&relayed),
             crate::referee::service::REASON_NOT_AUTHORIZED
         );
+        assert_eq!(
+            reason(&mistagged),
+            crate::referee::service::REASON_NOT_AUTHORIZED
+        );
         assert_ne!(
             reason(&unsigned),
+            crate::referee::service::REASON_NOT_AUTHORIZED
+        );
+        assert_ne!(
+            reason(&tagged),
             crate::referee::service::REASON_NOT_AUTHORIZED
         );
     }

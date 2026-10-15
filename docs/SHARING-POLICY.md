@@ -103,6 +103,14 @@ the key its host announces for it (mesh-llm `plugin_keys.v1`), in a
 the request. A signed request also carries an `audience` (the mesh id of the
 node it is sent to), a `nonce` and a `deadline`.
 
+Each kind of request signs under its own tag, so a request signed as one never
+verifies as another: `ledger-fetch/1/requester-auth` for a record fetched by
+id, `referee-adjudicate/1/requester-auth` for a referee's `adjudicate` request
+(it travels on the evidence stream, and has no channel name of its own), and
+`evidence-request/1/requester-auth` for every other evidence request. The
+answering node picks the tag from where the request came in, never from a tag
+the request names.
+
 Before it looks anything up, the answering node checks, in order:
 
 - the deadline is no more than 5 minutes ahead;

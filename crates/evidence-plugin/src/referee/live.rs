@@ -657,9 +657,11 @@ mod tests {
 
     /// The referee's door checks the requester's signature before it reads
     /// anything: a request signed for another node (relayed), one changed
-    /// after signing, or one replayed is refused `not_authorized`, even about
-    /// a pair it already ruled on, where it would otherwise return the held
-    /// verdict. Unsigned, or signed for this node, it is answered.
+    /// after signing, one signed for another channel (an Evidence Request, a
+    /// `ledger-fetch/1` fetch: ruling u338), or one replayed is refused
+    /// `not_authorized`, even about a pair it already ruled on, where it
+    /// would otherwise return the held verdict. Unsigned, or signed for this
+    /// node under the referee's tag, it is answered.
     #[test]
     fn the_referee_refuses_a_failed_signature_before_it_reads_anything() {
         use crate::referee::service::{
@@ -685,11 +687,13 @@ mod tests {
         let asker = crate::evidence_request_parity::asker_key("node-y");
         let at: chrono::DateTime<chrono::Utc> =
             chrono::DateTime::parse_from_rfc3339(NOW).unwrap().into();
-        let signed_for = |audience: &str| {
+        use crate::requester_auth::Channel;
+        let signed_on = |channel: Channel, audience: &str| {
             let mut request = request.clone();
-            crate::requester_auth::sign(&mut request, &asker, at, audience);
+            crate::requester_auth::sign(channel, &mut request, &asker, at, audience);
             request
         };
+        let signed_for = |audience: &str| signed_on(Channel::RefereeAdjudicate, audience);
         let announced = crate::evidence_request_parity::announced_keys();
         let replay = ReplayCache::default();
         let asked = Asked {
@@ -709,6 +713,8 @@ mod tests {
             .join(crate::referee::service::ISSUED_ADJUDICATIONS_FILENAME);
 
         let relayed = signed_for("node-x");
+        let as_evidence = signed_on(Channel::EvidenceRequest, &own_node);
+        let as_fetch = signed_on(Channel::LedgerFetch, &own_node);
         let mut changed = signed_for(&own_node);
         changed["selection_tier"] = json!(1);
         let mut malformed = request.clone();
@@ -716,6 +722,8 @@ mod tests {
         for (request, reason) in [
             (&relayed, REASON_NOT_AUTHORIZED),
             (&changed, REASON_NOT_AUTHORIZED),
+            (&as_evidence, REASON_NOT_AUTHORIZED),
+            (&as_fetch, REASON_NOT_AUTHORIZED),
             (&malformed, REASON_REQUEST_MALFORMED),
         ] {
             let reply = ask(request);
@@ -729,7 +737,7 @@ mod tests {
         assert!(issued.exists());
         // The pair is ruled on now: each of these would get the held verdict
         // back if the door read the ledger before the signature.
-        for request in [&signed, &relayed, &changed] {
+        for request in [&signed, &relayed, &changed, &as_evidence, &as_fetch] {
             let reply = ask(request);
             assert_eq!(reply["reason"], json!(REASON_NOT_AUTHORIZED), "{reply}");
         }
@@ -741,7 +749,13 @@ mod tests {
         let unbound = {
             let mut request = request.clone();
             let key = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
-            crate::requester_auth::sign(&mut request, &key, at, &own_node);
+            crate::requester_auth::sign(
+                Channel::RefereeAdjudicate,
+                &mut request,
+                &key,
+                at,
+                &own_node,
+            );
             request
         };
         assert_eq!(

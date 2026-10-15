@@ -1529,7 +1529,11 @@ mod own_key_tests {
         let announced =
             announce_own_key(announces, public, key, &asker, |_| async move { host }).await;
         let mut request = json!({"subject": {"checkpoints": null}});
-        asker.sign_outgoing(&mut request, "node-r");
+        asker.sign_outgoing(
+            requester_auth::Channel::EvidenceRequest,
+            &mut request,
+            "node-r",
+        );
         let signed =
             requester_auth::form(request.as_object().unwrap()) != requester_auth::Form::Unsigned;
         assert_eq!(signed, asker.is_announced());
