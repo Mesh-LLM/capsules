@@ -195,23 +195,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "capsule-emit-evidence-request"
-version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10cc7c4a8e643a934927712acd47daff4841c2ecfa2db3a29c4b633252eef0bd"
-dependencies = [
- "base64 0.22.1",
- "checkpointed-local-log",
- "ciborium",
- "coset",
- "ed25519-dalek",
- "hex",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "cc"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -626,11 +609,11 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "capsule-emit",
- "capsule-emit-evidence-request",
  "checkpointed-local-log",
  "chrono",
  "coset",
  "ed25519-dalek",
+ "evidence-request",
  "hex",
  "libc",
  "mesh-llm-plugin",
@@ -651,6 +634,23 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "x509-cert",
+]
+
+[[package]]
+name = "evidence-request"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb3587833cd210019ceb1f2b4a8380686d1d0d448ea3bd34f626484b8bb714cc"
+dependencies = [
+ "base64 0.22.1",
+ "checkpointed-local-log",
+ "ciborium",
+ "coset",
+ "ed25519-dalek",
+ "hex",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
