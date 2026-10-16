@@ -134,7 +134,7 @@ network: payment legs record observations, they do not move money.
 
 Today the checkpoint list, `history_card/1` and `served_summary/1` are
 answered under every `share_history_segments` value, including `off`
-(SHARING-POLICY; parity cases in `vectors/parity/evidence_request/`). They
+(SHARING-POLICY; parity cases in `evidence_request_parity.rs`). They
 carry no record bodies, but they are not harmless:
 
 - checkpoint `log_size` and `issued_at` over time give the node's **cadence
@@ -274,9 +274,9 @@ settlement legs, verdict bodies and any TEE quote sidecar.
   discovery (only under R-7): an A2A Agent Card extension naming the draft,
   the supported subjects and derivations and their versions; no history and no
   per-exchange ids in discovery.
-- **R-23 Wire alignment.** The Mesh carrier today is JSON (answer
-  `{"artifact","material","envelope"}` as RFC 8785 text) and "plugin-internal,
-  not a standardized wire" (`evidence_answer.rs` module doc), whereas draft
+- **R-23 Wire alignment.** The Mesh carrier today is the interop profile's
+  reply in its JSON binding (agent-action-capsule `spec/interop-profile-v0.md`
+  §6.2, `evidence-interop/0`; `evidence_answer.rs` module doc), whereas draft
   -00's peer-to-peer binding uses the same `evidence-request/1` identifier with
   deterministic CBOR frames. One normative encoding is chosen, and Mesh either
   conforms or uses a distinct identifier (§9).
@@ -486,7 +486,7 @@ interoperability (M1–M5).
 | 0.1.4 release | **Released** 2026-10-12 22:41Z (#22) | releases |
 | #23 (model ids vs weights; unblocks Hugging Face twins) | Merged 2026-10-13 00:22Z, **unreleased** | #23; CHANGELOG "Unreleased" |
 | #8 settlement legs; #5, #15 referee | Merged | PRs |
-| `capsule-emit-evidence-request` 0.0.3 (receipts, deterministic refusal encoding) | Pinned `=0.0.3` from crates.io | #21; CHANGELOG 0.1.4 |
+| `evidence-request` 0.2.0 (the interop profile's envelope; was `capsule-emit-evidence-request` 0.0.3), `capsule-emit` 0.0.8, `checkpointed-local-log` 0.3.1 | Pinned `=0.2.0` from crates.io; one CLL line, no evidencebook | #21, #32; CHANGELOG "Unreleased" |
 | mesh-llm #2138 (exchange names both nodes) | Merged 2026-10-03 | README |
 | mesh-llm #2169 (wallet credited/fee on settlement) | Merged 2026-10-03 | mesh-llm #2169 |
 | mesh-llm #2299 (plugin key announced, bound to node key) | Merged 2026-10-08, **after v0.78.1** (latest release, 2026-10-05) | mesh-llm #2299; releases |
@@ -549,7 +549,7 @@ interoperability (M1–M5).
   [PROTOCOL-NOTE.md](PROTOCOL-NOTE.md), `CHANGELOG.md`,
   `crates/evidence-plugin/src/evidence_answer.rs`, `served_summary.rs`,
   `verdict_counts.rs`, `producer/capsule.rs`, `capsule_emit.rs`,
-  `vectors/parity/evidence_request/`; PRs #1–#23; releases v0.1.3, v0.1.4.
+  `evidence_request_parity.rs`; PRs #1–#23; releases v0.1.3, v0.1.4.
 - `Mesh-LLM/mesh-llm`: `plugin.proto`; PRs #2138, #2169, #2299; issue #2264;
   issue #1331; release v0.78.1.
 - `capsule-emit-evidence-request` 0.0.3 on crates.io.
