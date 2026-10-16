@@ -237,7 +237,9 @@ async fn answer_in_process(
         // Past the in-flight cap, an adjudicate request is declined like any
         // other (below), before any work on it.
         if permit.is_ok() {
-            if let Some(verdict_or_refusal) = referee_answer(&capsules, &request_bytes, &now) {
+            if let Some(verdict_or_refusal) =
+                referee_answer(&capsules, &request_bytes, &now, own_node.as_deref())
+            {
                 drop(permit);
                 return verdict_or_refusal;
             }
@@ -358,6 +360,7 @@ fn referee_answer(
     capsules: &crate::capsule_emit::CapsuleState,
     request_bytes: &[u8],
     now: &str,
+    own_node: Option<&str>,
 ) -> Option<Option<Vec<u8>>> {
     let parsed: serde_json::Value = serde_json::from_slice(request_bytes).ok()?;
     if !crate::referee::service::is_adjudicate_request(&parsed) {
@@ -369,10 +372,21 @@ fn referee_answer(
         signing_key: capsules.signing_key(),
         peer_keys: peer_keys.as_deref(),
     };
-    let reply = match crate::referee::service::handle_adjudicate_request(
+    let announced = crate::peer_keys::announced::snapshot();
+    let configured = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
+    let asked = crate::referee::service::Asked {
+        keys: crate::requester_auth::Keys {
+            announced: &announced,
+            configured: configured.as_deref(),
+        },
+        replay: crate::requester_auth::replay_cache(),
+        own_node,
+    };
+    let reply = match crate::referee::service::handle_asked_adjudicate_request(
         &referee,
         request_bytes,
         now,
+        &asked,
     ) {
         Ok(reply) => reply,
         Err(error) => {
@@ -616,6 +630,41 @@ mod tests {
             .expect_err("over-cap must be refused");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("side-stream cap"), "{err}");
+    }
+
+    /// The stream's referee door is the one that checks who asks: a signed
+    /// adjudicate request addressed to another node is refused
+    /// `not_authorized`; the same request unsigned gets past that check and
+    /// is refused for something else (this node is named by no key here).
+    #[test]
+    fn the_stream_checks_an_adjudicate_requests_signature() {
+        let dir = tempfile::tempdir().unwrap();
+        let capsules = crate::capsule_emit::CapsuleState::open(dir.path(), "referee-door").unwrap();
+        let mut request = serde_json::json!({
+            "subject": {"kind": "adjudicate"},
+            "selection_tier": 2,
+            "halves": [{"capsule": {"capsule_id": "a"}}, {"capsule": {"capsule_id": "b"}}],
+        });
+        let now = crate::evidence_answer::now_utc();
+        let at = chrono::DateTime::parse_from_rfc3339(&now).unwrap().into();
+        let key = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
+        let unsigned = serde_json::to_vec(&request).unwrap();
+        crate::requester_auth::sign(&mut request, &key, at, "node-x");
+        let relayed = serde_json::to_vec(&request).unwrap();
+        let reason = |bytes: &[u8]| {
+            let reply = referee_answer(&capsules, bytes, &now, Some("node-r"))
+                .flatten()
+                .expect("a signed reply");
+            serde_json::from_slice::<serde_json::Value>(&reply).unwrap()["reason"].clone()
+        };
+        assert_eq!(
+            reason(&relayed),
+            crate::referee::service::REASON_NOT_AUTHORIZED
+        );
+        assert_ne!(
+            reason(&unsigned),
+            crate::referee::service::REASON_NOT_AUTHORIZED
+        );
     }
 
     #[test]
