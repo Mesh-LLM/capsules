@@ -298,6 +298,7 @@ fn answer(
         };
     };
     let principal = match crate::requester_auth::principal(
+        crate::requester_auth::Channel::LedgerFetch,
         &map,
         now,
         door.keys,
@@ -409,7 +410,11 @@ pub async fn handle_mesh_ledger_fetch(
     // Signed as this node once its key is announced; the responder serves a
     // record only to the node the signature proves.
     let mut request = serde_json::json!({ "capsule_id": args.capsule_id, "requester_id": self_id });
-    crate::requester_auth::sign_outgoing(&mut request, &peer_id);
+    crate::requester_auth::sign_outgoing(
+        crate::requester_auth::Channel::LedgerFetch,
+        &mut request,
+        &peer_id,
+    );
     let request_bytes = serde_json::to_vec(&request).expect("a map of strings always serializes");
 
     let write_and_read = async {
@@ -457,7 +462,13 @@ mod tests {
     /// `request` signed with `key` at [`NOW`], addressed to `audience`.
     fn signed_with(key: &SigningKey, audience: &str, request: Value) -> Vec<u8> {
         let mut request = request;
-        crate::requester_auth::sign(&mut request, key, at(NOW), audience);
+        crate::requester_auth::sign(
+            crate::requester_auth::Channel::LedgerFetch,
+            &mut request,
+            key,
+            at(NOW),
+            audience,
+        );
         serde_json::to_vec(&request).unwrap()
     }
 
@@ -745,6 +756,41 @@ mod tests {
             );
             assert!(!looked, "the ledger was read ({tier})");
         }
+    }
+
+    /// A fetch the record's other side signed for another channel (an
+    /// Evidence Request, a referee's `adjudicate`) is refused before anything
+    /// is looked up, though its body is a fetch addressed here: the door
+    /// checks it under `ledger-fetch/1`'s tag (ruling u338). MUTANT: one
+    /// tag shared by every channel and it is served.
+    #[test]
+    fn a_fetch_signed_for_another_channel_is_refused_before_the_ledger_is_read() {
+        use crate::requester_auth::Channel;
+        let state = open_state("channel");
+        let id = seal_one(&state);
+        for channel in [Channel::EvidenceRequest, Channel::RefereeAdjudicate] {
+            let mut request = json!({"capsule_id": id, "requester_id": ASKER});
+            crate::requester_auth::sign(
+                channel,
+                &mut request,
+                &asker_key(ASKER),
+                at(NOW),
+                RESPONDER_NODE,
+            );
+            let bytes = serde_json::to_vec(&request).unwrap();
+            for tier in ["counterparties", "peers"] {
+                let (response, looked) = answer_counted(&state, &bytes, tier);
+                assert_eq!(
+                    response,
+                    LedgerFetchResponse::NotAuthorized {
+                        capsule_id: id.clone()
+                    },
+                    "{channel:?} ({tier})"
+                );
+                assert!(!looked, "the ledger was read: {channel:?} ({tier})");
+            }
+        }
+        assert!(is_found(&ask(&state, &id, Some(ASKER), "counterparties")));
     }
 
     /// A signed fetch is answered once: the same bytes again before their

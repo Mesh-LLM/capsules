@@ -9,26 +9,27 @@
 //!
 //! ```text
 //! requester_auth = {"key_id": <64 lowercase hex>, "sig": <128 lowercase hex>}
-//! sig = Ed25519(UTF8("evidence-request/1/requester-auth") || 0x00
+//! sig = Ed25519(UTF8("<channel>/requester-auth") || 0x00
 //!               || UTF8(JCS(the request map without requester_auth)))
 //! ```
 //!
 //! `key_id` is the key this node's records are signed with, the one it
 //! announces through its host (`peer_keys::own`). The domain tag keeps a
 //! request signature from ever verifying as a record or anything else that
-//! key signs. Every other member is covered. A signed request carries an
+//! key signs, and each [`Channel`] has its own, so a request signed for one
+//! never verifies as a request on another. Every other member is covered. A signed request carries an
 //! `audience`, the node it is addressed to, so a node it was sent to cannot
 //! forward it to another; and a `nonce` and a `deadline`, so a responder
 //! refuses it once that deadline has passed, and a second time before then
 //! while it runs (the replay cache is in memory, and for a key no host binds
 //! it is best-effort: [`MAX_UNBOUND_NONCES`]). The spec ruling is
 //! `svc-ev-m1-request-signing-ruling` with its u289 addendum, as amended by
-//! em-spec u290.
+//! em-spec u290 and u338 (one tag per channel).
 //!
 //! **The asker** ([`sign_outgoing`]) signs only once its host took its key
 //! ([`AskerKey::set_announced`]): a key no host announced is bound to no
 //! node. `ledger-fetch/1` and a referee's `adjudicate` requests are signed
-//! and checked the same way ([`principal`]).
+//! and checked the same way ([`principal`]), each under its own tag.
 //!
 //! **The responder** ([`check`]) runs before anything is looked up: window,
 //! signature, audience, replay, then the key's binding and the stated id
@@ -55,13 +56,47 @@ pub const MEMBER: &str = "requester_auth";
 /// [`MEMBER`] is present.
 pub const AUDIENCE: &str = "audience";
 
-/// The domain tag: the carrier's own identifier, then the profile member.
-/// The same tag signs this plugin's `ledger-fetch/1` requests and a
-/// referee's `adjudicate` requests: what keeps one channel's signed request
-/// from being taken on another is its [`AUDIENCE`] and its shape (a fetch
-/// carries a top-level `capsule_id`, an evidence request a `subject`), not
-/// the signature.
-pub const DOMAIN_TAG: &[u8] = b"evidence-request/1/requester-auth";
+/// What a signed request asks for, which picks its domain tag: the
+/// carrier's own identifier, then `/requester-auth` (ruling u338). A
+/// responder takes it from the door the request came in at, never from a
+/// member of the request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Channel {
+    /// An Evidence Request (`mesh_evidence_bridge::EVIDENCE_REQUEST_CHANNEL`).
+    /// Its tag is the one M1 signed under.
+    EvidenceRequest,
+    /// A record fetch by id (`ledger_fetch_bridge::LEDGER_FETCH_CHANNEL`).
+    LedgerFetch,
+    /// A referee's `adjudicate` request. It travels on the evidence stream
+    /// and has no channel identifier of its own, so its tag names one:
+    /// `referee-adjudicate/1`. Both ends tell it by its `subject.kind`
+    /// (`referee::service::is_adjudicate_request`), which the signature
+    /// covers.
+    RefereeAdjudicate,
+}
+
+impl Channel {
+    /// Every channel, for the tests that sign for one and verify as another.
+    #[cfg(test)]
+    pub const ALL: [Channel; 3] = [
+        Channel::EvidenceRequest,
+        Channel::LedgerFetch,
+        Channel::RefereeAdjudicate,
+    ];
+
+    /// This channel's domain tag, except in the deliberately broken build
+    /// CI uses to show the tests catch one tag shared by every channel.
+    pub fn tag(self) -> &'static str {
+        if cfg!(feature = "mutant-requester-auth-shared-tag") {
+            return "evidence-request/1/requester-auth";
+        }
+        match self {
+            Channel::EvidenceRequest => "evidence-request/1/requester-auth",
+            Channel::LedgerFetch => "ledger-fetch/1/requester-auth",
+            Channel::RefereeAdjudicate => "referee-adjudicate/1/requester-auth",
+        }
+    }
+}
 
 /// How far ahead a signed request's deadline may be, in seconds. A later
 /// deadline is refused: the replay cache holds each nonce until its deadline.
@@ -89,27 +124,29 @@ pub const MAX_NONCES_PER_KEY: usize = 4096;
 /// deny every upgraded asker, and an unsigned request gets the same answer.
 pub const MAX_UNBOUND_NONCES: usize = 16_384;
 
-/// The signing input for `map`: the domain tag, a zero byte, and the map
-/// without [`MEMBER`] in the protocol crate's canonical JSON (RFC 8785 for
-/// strings, maps and integers; it encodes no non-integer number). `None`
-/// when the map has none.
-pub fn signing_input(map: &Map<String, Value>) -> Option<Vec<u8>> {
+/// The signing input for `map` on `channel`: its domain tag, a zero byte,
+/// and the map without [`MEMBER`] in the protocol crate's canonical JSON
+/// (RFC 8785 for strings, maps and integers; it encodes no non-integer
+/// number). `None` when the map has none.
+pub fn signing_input(channel: Channel, map: &Map<String, Value>) -> Option<Vec<u8>> {
     let mut covered = map.clone();
     covered.remove(MEMBER);
     let body = jcs::to_string(&Value::Object(covered)).ok()?;
-    let mut input = Vec::with_capacity(DOMAIN_TAG.len() + 1 + body.len());
-    input.extend_from_slice(DOMAIN_TAG);
+    let tag = channel.tag().as_bytes();
+    let mut input = Vec::with_capacity(tag.len() + 1 + body.len());
+    input.extend_from_slice(tag);
     input.push(0);
     input.extend_from_slice(body.as_bytes());
     Some(input)
 }
 
-/// Sign `request` as `key`, addressed to the node `audience`: set
-/// [`AUDIENCE`], add a fresh `nonce` and a `deadline` [`ASKER_DEADLINE_SECS`]
+/// Sign `request` for `channel` as `key`, addressed to the node `audience`:
+/// set [`AUDIENCE`], add a fresh `nonce` and a `deadline` [`ASKER_DEADLINE_SECS`]
 /// after `now` unless it carries them, then [`MEMBER`] over the rest. A
 /// request that already carries [`MEMBER`], is not a map, or has no JSON
 /// form to sign is left exactly as it is.
 pub fn sign(
+    channel: Channel,
     request: &mut Value,
     key: &SigningKey,
     now: chrono::DateTime<chrono::Utc>,
@@ -129,7 +166,7 @@ pub fn sign(
         let deadline = now + chrono::Duration::seconds(ASKER_DEADLINE_SECS);
         json!(deadline.format("%Y-%m-%dT%H:%M:%SZ").to_string())
     });
-    let Some(input) = signing_input(&map) else {
+    let Some(input) = signing_input(channel, &map) else {
         return;
     };
     let sig = key.sign(&input);
@@ -154,11 +191,12 @@ impl AskerKey {
         let _ = self.0.set(key);
     }
 
-    /// Sign an outgoing request to the node `audience` ([`sign`]) when this
-    /// node's key is announced; otherwise leave it unsigned, as before.
-    pub fn sign_outgoing(&self, request: &mut Value, audience: &str) {
+    /// Sign an outgoing request on `channel` to the node `audience`
+    /// ([`sign`]) when this node's key is announced; otherwise leave it
+    /// unsigned, as before.
+    pub fn sign_outgoing(&self, channel: Channel, request: &mut Value, audience: &str) {
         if let Some(key) = self.0.get() {
-            sign(request, key, chrono::Utc::now(), audience);
+            sign(channel, request, key, chrono::Utc::now(), audience);
         }
     }
 
@@ -175,8 +213,8 @@ pub fn asker_key() -> &'static AskerKey {
 }
 
 /// [`AskerKey::sign_outgoing`] on [`asker_key`].
-pub fn sign_outgoing(request: &mut Value, audience: &str) {
-    asker_key().sign_outgoing(request, audience);
+pub fn sign_outgoing(channel: Channel, request: &mut Value, audience: &str) {
+    asker_key().sign_outgoing(channel, request, audience);
 }
 
 /// What a request's [`MEMBER`] says, by form alone.
@@ -431,12 +469,13 @@ impl Failure {
     }
 }
 
-/// Check a [`Form::Signed`] request, before anything else is read: its
-/// window, its signature, its [`AUDIENCE`] against `own_node` (this node's
+/// Check a [`Form::Signed`] request received on `channel`, before anything
+/// else is read: its window, its signature under that channel's tag, its [`AUDIENCE`] against `own_node` (this node's
 /// id), its nonce, then its key's binding and its stated id against the
 /// bound one. `deadline` is the parsed request's.
 #[allow(clippy::too_many_arguments)]
 pub fn check(
+    channel: Channel,
     map: &Map<String, Value>,
     key_id: &str,
     sig: &str,
@@ -449,7 +488,7 @@ pub fn check(
     if deadline.seconds > now.seconds.saturating_add(MAX_WINDOW_SECS) {
         return Err(Failure::OutsideWindow);
     }
-    if !verifies(map, key_id, sig) {
+    if !verifies(channel, map, key_id, sig) {
         return Err(Failure::BadSignature);
     }
     let audience = map.get(AUDIENCE).and_then(Value::as_str);
@@ -509,13 +548,14 @@ pub enum Refused {
     NotAuthorized,
 }
 
-/// Who asks, for a request on another of this plugin's channels, by the
-/// rules `evidence_answer` applies to an evidence request, before anything
+/// Who asks, for a request received on `channel`, another of this plugin's
+/// channels, by the rules `evidence_answer` applies to an evidence request, before anything
 /// is looked up: a signed request past its deadline or failing [`check`] is
 /// refused; a valid signature under a key no host binds reads as unsigned
 /// where the answer needs no identity (`needed` false); an unsigned request
 /// is refused where it does. `Ok(None)` is an asker that proved nothing.
 pub fn principal(
+    channel: Channel,
     map: &Map<String, Value>,
     now: UtcTime,
     keys: Keys<'_>,
@@ -537,7 +577,9 @@ pub fn principal(
     if deadline < now {
         return Err(Refused::NotAuthorized);
     }
-    match check(map, &key_id, &sig, deadline, now, keys, replay, own_node) {
+    match check(
+        channel, map, &key_id, &sig, deadline, now, keys, replay, own_node,
+    ) {
         Ok(principal) => Ok(Some(principal)),
         Err(failure) if failure.reads_as_unsigned() && !needed => Ok(None),
         Err(_) => Err(Refused::NotAuthorized),
@@ -553,10 +595,11 @@ fn audience_matches(audience: Option<&str>, own_node: Option<&str>) -> bool {
     matches!((audience, own_node), (Some(a), Some(own)) if a == own)
 }
 
-/// Whether `sig` verifies over [`signing_input`] of `map` under `key_id`,
+/// Whether `sig` verifies over [`signing_input`] of `map` on `channel` under
+/// `key_id`,
 /// except in the deliberately broken build CI uses to show the tests catch
 /// a responder that skips it.
-fn verifies(map: &Map<String, Value>, key_id: &str, sig: &str) -> bool {
+fn verifies(channel: Channel, map: &Map<String, Value>, key_id: &str, sig: &str) -> bool {
     if cfg!(feature = "mutant-requester-auth-skips-verify") {
         return true;
     }
@@ -568,7 +611,7 @@ fn verifies(map: &Map<String, Value>, key_id: &str, sig: &str) -> bool {
         .ok()
         .and_then(|b| <[u8; 64]>::try_from(b).ok())
         .map(|b| Signature::from_bytes(&b));
-    match (key, sig, signing_input(map)) {
+    match (key, sig, signing_input(channel, map)) {
         (Some(key), Some(sig), Some(input)) => key.verify_strict(&input, &sig).is_ok(),
         _ => false,
     }
@@ -589,6 +632,7 @@ mod tests {
     fn signed(seed: u8) -> Map<String, Value> {
         let mut request = json!({"subject": {"checkpoints": null}, "coverage": {"min_freshness": 60}, "nonce": "n-1"});
         sign(
+            Channel::EvidenceRequest,
             &mut request,
             &key(seed),
             at("2026-10-13T00:00:00Z"),
@@ -608,7 +652,13 @@ mod tests {
         assert_eq!(map["deadline"], json!("2026-10-13T00:02:00Z"));
         assert_eq!(map[AUDIENCE], json!("node-r"));
         let mut fresh = json!({"subject": {"checkpoints": null}});
-        sign(&mut fresh, &key(1), at("2026-10-13T00:00:00Z"), "node-r");
+        sign(
+            Channel::EvidenceRequest,
+            &mut fresh,
+            &key(1),
+            at("2026-10-13T00:00:00Z"),
+            "node-r",
+        );
         assert!(is_lower_hex(fresh["nonce"].as_str().unwrap(), 64));
     }
 
@@ -618,13 +668,124 @@ mod tests {
         let Form::Signed { key_id, sig } = form(&map) else {
             panic!()
         };
-        assert!(verifies(&map, &key_id, &sig));
+        assert!(verifies(Channel::EvidenceRequest, &map, &key_id, &sig));
         // The same map signed without the tag does not verify.
         let mut covered = map.clone();
         covered.remove(MEMBER);
         let body = jcs::to_string(&Value::Object(covered)).unwrap();
         let untagged = hex::encode(key(1).sign(body.as_bytes()).to_bytes());
-        assert!(!verifies(&map, &key_id, &untagged));
+        assert!(!verifies(
+            Channel::EvidenceRequest,
+            &map,
+            &key_id,
+            &untagged
+        ));
+    }
+
+    /// Each channel's tag is its carrier's identifier, then the profile
+    /// member (ruling u338). The Evidence Request's is the one M1 signed
+    /// under, so those signatures still verify.
+    #[test]
+    fn each_channel_signs_under_its_own_identifier() {
+        let tags = Channel::ALL.map(Channel::tag);
+        assert_eq!(
+            tags,
+            [
+                format!(
+                    "{}/requester-auth",
+                    crate::mesh_evidence_bridge::EVIDENCE_REQUEST_CHANNEL
+                ),
+                format!(
+                    "{}/requester-auth",
+                    crate::ledger_fetch_bridge::LEDGER_FETCH_CHANNEL
+                ),
+                "referee-adjudicate/1/requester-auth".to_string(),
+            ]
+        );
+        assert_eq!(tags[0], "evidence-request/1/requester-auth");
+    }
+
+    /// A request signed for one channel never verifies as a request on
+    /// another, even when its body would be read there: for every pair, the
+    /// signature fails on the tag, and a valid signature on the wrong
+    /// channel is refused, never read as unsigned.
+    #[test]
+    fn a_request_signed_for_one_channel_fails_on_every_other() {
+        let now = capsule_emit_evidence_request::time::parse_utc("2026-10-13T00:00:00Z").unwrap();
+        let node = "node-a";
+        let announced = BTreeMap::from([(
+            node.to_string(),
+            hex::encode(key(4).verifying_key().to_bytes()),
+        )]);
+        let keys = Keys {
+            announced: &announced,
+            configured: None,
+        };
+        for signed_for in Channel::ALL {
+            // One body every channel reads: a fetch's capsule_id, an
+            // adjudicate subject, the asker's stated id.
+            let mut request = json!({
+                "capsule_id": "cap-1",
+                "subject": {"kind": "adjudicate"},
+                "requester_id": node,
+            });
+            sign(
+                signed_for,
+                &mut request,
+                &key(4),
+                at("2026-10-13T00:00:00Z"),
+                "node-r",
+            );
+            let map = request.as_object().unwrap();
+            let Form::Signed { key_id, sig } = form(map) else {
+                panic!("not signed: {request}");
+            };
+            let deadline =
+                capsule_emit_evidence_request::time::parse_utc(map["deadline"].as_str().unwrap())
+                    .unwrap();
+            for received_on in Channel::ALL {
+                let replay = ReplayCache::default();
+                let checked = check(
+                    received_on,
+                    map,
+                    &key_id,
+                    &sig,
+                    deadline,
+                    now,
+                    keys,
+                    &replay,
+                    Some("node-r"),
+                );
+                let asked = principal(
+                    received_on,
+                    map,
+                    now,
+                    keys,
+                    &ReplayCache::default(),
+                    Some("node-r"),
+                    false,
+                );
+                if received_on == signed_for {
+                    assert_eq!(
+                        checked.map(|p| p.node_id),
+                        Ok(node.to_string()),
+                        "{signed_for:?} as itself"
+                    );
+                    assert!(matches!(asked, Ok(Some(_))), "{signed_for:?} as itself");
+                } else {
+                    assert_eq!(
+                        checked,
+                        Err(Failure::BadSignature),
+                        "signed for {signed_for:?}, received on {received_on:?}"
+                    );
+                    assert_eq!(
+                        asked,
+                        Err(Refused::NotAuthorized),
+                        "signed for {signed_for:?}, received on {received_on:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -827,7 +988,13 @@ mod tests {
         let mut request =
             json!({"subject": {"checkpoints": null}, "coverage": {"min_freshness": 1.5}});
         let given = request.clone();
-        sign(&mut request, &key(1), at("2026-10-13T00:00:00Z"), "node-r");
+        sign(
+            Channel::EvidenceRequest,
+            &mut request,
+            &key(1),
+            at("2026-10-13T00:00:00Z"),
+            "node-r",
+        );
         assert_eq!(
             request, given,
             "no nonce or deadline added to an unsigned request"
@@ -840,10 +1007,10 @@ mod tests {
     fn an_asker_signs_only_once_its_key_is_announced() {
         let asker = AskerKey::default();
         let mut request = json!({"subject": {"checkpoints": null}});
-        asker.sign_outgoing(&mut request, "node-r");
+        asker.sign_outgoing(Channel::EvidenceRequest, &mut request, "node-r");
         assert_eq!(form(request.as_object().unwrap()), Form::Unsigned);
         asker.set_announced(key(3));
-        asker.sign_outgoing(&mut request, "node-r");
+        asker.sign_outgoing(Channel::EvidenceRequest, &mut request, "node-r");
         assert_eq!(
             request[AUDIENCE],
             json!("node-r"),
@@ -853,6 +1020,11 @@ mod tests {
             panic!("not signed: {request}");
         };
         assert_eq!(key_id, hex::encode(key(3).verifying_key().to_bytes()));
-        assert!(verifies(request.as_object().unwrap(), &key_id, &sig));
+        assert!(verifies(
+            Channel::EvidenceRequest,
+            request.as_object().unwrap(),
+            &key_id,
+            &sig
+        ));
     }
 }

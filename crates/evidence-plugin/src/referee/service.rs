@@ -256,6 +256,7 @@ pub fn handle_asked_adjudicate_request(
             .ok_or(crate::requester_auth::Refused::NotAuthorized)
             .and_then(|now| {
                 crate::requester_auth::principal(
+                    crate::requester_auth::Channel::RefereeAdjudicate,
                     &map,
                     now,
                     asked.keys,

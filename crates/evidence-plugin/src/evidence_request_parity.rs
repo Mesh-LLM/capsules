@@ -71,7 +71,13 @@ pub(crate) fn announced_keys() -> BTreeMap<String, String> {
 fn signed_as(key: &SigningKey, name: &str, mut request: Value) -> Value {
     request["nonce"] = json!(hex::encode(Sha256::digest(name.as_bytes())));
     let now = chrono::DateTime::parse_from_rfc3339(NOW).unwrap().into();
-    crate::requester_auth::sign(&mut request, key, now, RESPONDER_NODE);
+    crate::requester_auth::sign(
+        crate::requester_auth::Channel::EvidenceRequest,
+        &mut request,
+        key,
+        now,
+        RESPONDER_NODE,
+    );
     request
 }
 
@@ -411,7 +417,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CheckpointRecord]) -> Vec<Value> {
                 let mut r = req(json!({"record": id(0)}), &latest);
                 r["nonce"] = json!(hex::encode(Sha256::digest(b"record_relayed_from_another_audience")));
                 let now = chrono::DateTime::parse_from_rfc3339(NOW).unwrap().into();
-                crate::requester_auth::sign(&mut r, &asker_key("node-a"), now, "node-x");
+                crate::requester_auth::sign(crate::requester_auth::Channel::EvidenceRequest, &mut r, &asker_key("node-a"), now, "node-x");
                 r
             },
         ),

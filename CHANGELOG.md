@@ -56,6 +56,10 @@
   request addressed to another node, changed after signing, past its deadline or replayed is
   refused `not_authorized`. A verdict does not depend on who asks, so an unsigned request is
   answered as before.
+- **Each kind of signed request has its own domain tag:** `ledger-fetch/1/requester-auth` for a
+  fetch and `referee-adjudicate/1/requester-auth` for an `adjudicate` request, so a signature
+  made for one is refused on any other, even where its body would be read there. An evidence
+  request's tag is unchanged (`evidence-request/1/requester-auth`).
 - **The records status (`evidence_records_status`) says whether this node's requests are
   signed** (`requests_signed`). They are not when its host refused its key or lacks
   `plugin_keys.v1`; its requests then go out unsigned.
