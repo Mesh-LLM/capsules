@@ -1497,15 +1497,16 @@ mod tests {
         assert!(v["witnessed"].as_u64().unwrap() > 0);
     }
 
-    /// Asked of a node with the default settings, read the way the plugin
-    /// reads them (no test sets these two): records to counterparties,
-    /// Standard History not shared.
+    /// Asked of a node with the default settings: both switches unset,
+    /// resolved by the plugin's own readers but not from this process's env
+    /// or config file, so an operator's settings cannot change the result.
+    /// Records to counterparties, Standard History not shared.
     fn ask_by_default(dir: &Path, bytes: &[u8]) -> Outcome {
         ask_with(
             dir,
             bytes,
-            crate::share_policy::history_segments(),
-            crate::share_policy::shares_standard_history(),
+            crate::share_policy::history_segments_for(None),
+            crate::share_policy::shares_standard_history_for(None),
         )
     }
 
@@ -1771,7 +1772,7 @@ mod tests {
         let dir = node(&ledger);
         let bytes = signed_by("node-a", &node_a_record(&ledger));
         let replay = ReplayCache::default();
-        let segments = crate::share_policy::history_segments();
+        let segments = crate::share_policy::history_segments_for(None);
         assert!(matches!(
             ask_cached(dir.path(), &bytes, segments, false, &replay),
             Outcome::Answered { .. }

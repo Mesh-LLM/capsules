@@ -49,6 +49,11 @@ impl Harness {
             .env("CAPSULES_BLOCKED_MODELS", "blocked-test-model")
             .env("CAPSULES_LEDGER_FETCH_TIMEOUT_MS", "1500")
             .env("CAPSULES_DATA_DIR", &data_dir)
+            // Never the operator's mesh config or sharing switches: a test
+            // that wants one sets it.
+            .env("MESH_LLM_CONFIG", data_dir.join("no-mesh-config.toml"))
+            .env_remove("CAPSULES_SHARE_HISTORY_SEGMENTS")
+            .env_remove("CAPSULES_SHARE_STANDARD_HISTORY")
             // Same `/tmp` override `mesh_evidence_bridge_interop.rs` uses --
             // keeps the derived local-listener socket path under
             // `sockaddr_un`'s ~104-byte `sun_path` limit on macOS.

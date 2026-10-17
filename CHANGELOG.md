@@ -67,7 +67,7 @@
   `history_card/1` and `served_summary/1` now go only to a counterparty (a node one of its records
   names as the other side of an exchange). Every other node gets a signed `policy_declined` that
   carries nothing about the asker: it is signed over the request's digest, the reason and the
-  time, so the same request gets the same refusal whoever sends it. Until 0.1.5 any node could
+  time, so the same request gets the same refusal whoever sends it. Before 0.1.6 any node could
   read them. **After upgrading, a node you have never exchanged with can no longer read your
   checkpoints, history card or served summary** until you set the new `share_standard_history`
   switch to `on` (console: Sharing policy › Standard history; or
