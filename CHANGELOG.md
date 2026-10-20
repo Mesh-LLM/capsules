@@ -195,6 +195,12 @@
 - **A start that stopped while moving the ledger to a new history finishes the same move next
   time.** It used to pick the next archive slot and seal `history_started` with the wrong archive
   path and a prior record count of zero.
+- **A `served_summary/1` answer no longer changes as the log grows past its checkpoint.**
+  `adjudications_received` counted every verdict in the log, and took a record as this node's own
+  wherever it sat, so a verdict appended after the newest checkpoint changed the summary answered
+  for that checkpoint. It now counts only verdicts the checkpoint covers that name a record it
+  covers, as the Python reference does. Its note also now reads as the reference's does, so the
+  two answer the same bytes.
 
 ## 0.1.4
 
