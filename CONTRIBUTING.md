@@ -77,9 +77,8 @@ Once, on Linux:
   from the pull request (it reads the files as text with the base branch's
   scanner). The rules are written at the top of the workflow file.
 
-Changes to the sealing crates (`capsule-emit`, `checkpointed-local-log`,
-`evidencebook`) are tested in their own repositories and reach this one as
-version bumps.
+Changes to the sealing crates (`capsule-emit`, `checkpointed-local-log`) are
+tested in their own repositories and reach this one as version bumps.
 
 ### Tier 2: nightly, and on the `run-e2e` label
 

@@ -4,6 +4,51 @@
 
 ### Changed
 
+- **An evidence answer is now the interop profile's signed envelope. Upgrade both nodes.** The
+  protocol crate is `evidence-request` `=0.2.0` (what `capsule-emit-evidence-request` became when it
+  moved to agent-action-capsule), which signs and checks the envelope of agent-action-capsule's
+  `spec/interop-profile-v0.md` §6.2 (`evidence-interop/0`), as the Go, Python and evidencebook
+  implementations do. Before, the answer was a pre-profile `{artifact, material, envelope}` that
+  no other implementation signed. A node on an older version cannot read the new answer, and this
+  node cannot read the old one.
+  - **What an anchor is.** A checkpoint is pinned by the SHA-256 of its COSE wire statement (the
+    `checkpoint_cose` the checkpointer already writes beside each checkpoint), not by the digest of
+    its JSON form. A checkpoint line without its own statement ends the evidence chain there, as
+    any checkpoint the index cannot take does: nothing after it is served.
+  - **Earlier digests and pins no longer reproduce.** The artifact octets and the anchor both
+    changed, so every `artifact_digest` and every anchor pin taken from an earlier version stops
+    reproducing. An old anchor names none of this node's checkpoints, so a request pinned to one,
+    which would otherwise have been answered, is refused `coverage_unsatisfiable`.
+  - **A record answer** is now the record's ledger line itself, with the profile's Checkpointed
+    Local Log material for its `capsule_id` (the anchor's statement, the inclusion proof, and the
+    consistency proof when the checkpoint extends another). The line is not the `capsule_id`
+    preimage, so a profile verifier reports that check `NOT_CHECKED`, never `FAIL`; this node's
+    requester recomputes the `capsule_id` and checks the proofs, and also accepts a record served as
+    its own octets, which the profile's check passes. The line keeps the producer's signature, which
+    the page's "Ask them for their record" checks. The page reads the artifact as the profile
+    carries it, unpadded base64url. Before, a record answer was the canonical JSON (RFC 8785) of
+    `{anchor, evidence_stream, records, subject}`.
+  - **The other answers** take evidencebook's artifact forms (record sets, the checkpoint list,
+    `history_card/1`) and `served_summary/1` the same shape. The profile has no material for them
+    and no carrier for witness receipts, so this node also sends, where a profile verifier reads
+    nothing: the anchor's statement and one inclusion proof per record for a record set, and the
+    witness receipts of the checkpoints it carries in a `witness_receipts` member beside the
+    envelope. The requester checks all of it as before.
+  - The builder stays in the plugin (`evidence_artifact`): evidencebook's builder works over its
+    own `CllSubstrate`, which would open the node store the checkpointer owns.
+  - A `served_summary/1` answer's verification now reports `records: []`, like every other
+    answer, not `0`.
+- **`capsule-emit` 0.0.8 and `checkpointed-local-log` 0.3.1**, one CLL line in the build, and no
+  `evidencebook`. capsule-emit 0.0.8 turns on `serde_json`'s `arbitrary_precision` for the whole
+  binary; the strict parser for pushed bodies (`strict_json`) now reads numbers in that form, still
+  refuses a float that overflows, and refuses a key that spells `serde_json`'s private number
+  token.
+- **The evidence-request parity run is judged by agent-action-capsule's vectors.** The
+  self-generated corpus and golden answers are gone from `vectors/parity/evidence_request/`; the
+  draft's conformance vectors are copied into `vectors/aac-evidence-request/` (tag
+  `crates/evidence-request-v0.2.0`), and the responder and requester are run against them. The
+  sharing-policy cases, which no vector states, keep their reviewed expected answers in the
+  runner.
 - **Who asks for evidence is now proven, not stated. Upgrade both nodes.** Each evidence request
   this node sends is signed with the key its host announces for it. The request carries
   `requester_auth` (`key_id`, `sig`), an `audience` (the node it is sent to), a `nonce` and a
@@ -150,6 +195,12 @@
 - **A start that stopped while moving the ledger to a new history finishes the same move next
   time.** It used to pick the next archive slot and seal `history_started` with the wrong archive
   path and a prior record count of zero.
+- **A `served_summary/1` answer no longer changes as the log grows past its checkpoint.**
+  `adjudications_received` counted every verdict in the log, and took a record as this node's own
+  wherever it sat, so a verdict appended after the newest checkpoint changed the summary answered
+  for that checkpoint. It now counts only verdicts the checkpoint covers that name a record it
+  covers, as the Python reference does. Its note also now reads as the reference's does, so the
+  two answer the same bytes.
 
 ## 0.1.4
 
