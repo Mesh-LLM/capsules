@@ -26,5 +26,5 @@
     "client_nonce_source",
     "any member naming the requester"
   ],
-  "spec": "https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/crates/mesh-llm-capsules-plugin/docs/PRD-SERVICE-EVIDENCE.md"
+  "spec": "https://github.com/Mesh-LLM/capsules/blob/main/docs/PRD-SERVICE-EVIDENCE.md"
 }

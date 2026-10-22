@@ -58,7 +58,7 @@ pub const DEFINITION_DOCUMENT: &str =
 /// SHA-256 over the RFC 8785 bytes of [`DEFINITION_DOCUMENT`]: the
 /// derivation's name on the wire. Pinned to the file by a test.
 pub const DEFINITION_DIGEST: &str =
-    "7fed77bebd92247302067dc9eda0c34f96497b6521fd473a19c0fafec0993a0b";
+    "c545ac977a0bb17f297a5fb4857909d3d81aa63ea7127ab149caa00e470feeb8";
 
 /// The members every entry carries, and nothing else.
 const ENTRY_MEMBERS: [&str; 6] = [
