@@ -82,8 +82,8 @@ export type IdentityRow = { label: string; yours: IdentityCell; theirs: Identity
  *  defaulting to. */
 function theirsIdentityNote(theirsRecompute: PeerRecomputeState | undefined): string {
   if (theirsActuallyRecomputed(theirsRecompute)) {
-    if (theirsRecompute?.idMatch === true) return '✓ recomputed here, matches'
-    if (theirsRecompute?.idMatch === false) return '✕ recomputed here, MISMATCH'
+    if (theirsRecompute?.idMatch === true) return '✓ checked in your browser, matches'
+    if (theirsRecompute?.idMatch === false) return '✕ checked in your browser, doesn’t match'
   }
   if (theirsRecompute?.status === 'fetching') return 'fetching…'
   if (theirsRecompute?.status === 'not_found') return 'they have no such record'
@@ -98,9 +98,9 @@ export function buildIdentityRow(
 ): IdentityRow {
   const yoursNote =
     identity.idMatch === true
-      ? '✓ recomputed here, matches'
+      ? '✓ checked in your browser, matches'
       : identity.idMatch === false
-        ? '✕ recomputed here, MISMATCH'
+        ? '✕ checked in your browser, doesn’t match'
         : 'not yet recomputed'
   // Finding 5: a peer-asserted id that isn't digest-shaped (a chat-
   // completion id forwarded as-is, `capsule-chatcmpl-…`) is not a capsule
@@ -432,8 +432,8 @@ const CHECKPOINT_DEPENDENT = new Set(['local_inclusion', 'checkpoint_signature',
 
 function yoursDetailFor(key: string, state: string, text: string | undefined, actuallyRecomputed: boolean): string {
   if (text) return text
-  if (actuallyRecomputed) return 'recomputed here'
-  if (RECOMPUTED_PROPERTIES.has(key)) return 'not yet recomputed here'
+  if (actuallyRecomputed) return 'checked in your browser'
+  if (RECOMPUTED_PROPERTIES.has(key)) return 'not yet checked in your browser'
   if (state === 'NOT_PRESENT') {
     // once-per-node checkpoint/registration
     // facts live on the Integrity section, never repeated per row -- this
@@ -447,7 +447,7 @@ function yoursDetailFor(key: string, state: string, text: string | undefined, ac
 
 function theirsDetailFor(key: string, theirsRecompute: PeerRecomputeState | undefined): string {
   if (RECOMPUTED_PROPERTIES.has(key)) {
-    if (theirsActuallyRecomputed(theirsRecompute)) return 'recomputed here'
+    if (theirsActuallyRecomputed(theirsRecompute)) return 'checked in your browser'
     if (theirsRecompute?.status === 'fetching') return 'fetching…'
     if (theirsRecompute?.status === 'not_found') return 'they have no such record'
     if (theirsRecompute?.status === 'error') return `fetch failed: ${theirsRecompute.errorMessage ?? 'unknown error'}`

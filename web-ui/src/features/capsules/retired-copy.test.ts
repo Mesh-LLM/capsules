@@ -46,7 +46,7 @@ const RETIRED_PHRASES = [
   // + look findings (2026-09-26): one
   // term per thing, plain words, no designer notation on the face.
   'Closed by the other side', // -> "Confirmed by the other side"
-  'recomputed in browser', // -> "recomputed here"
+  'recomputed in browser', // -> "checked in your browser"
   'none sealed', // Disputes judged -> "none"
   '{ yours ', // bracket strip -> "Yours ● sealed —— Theirs ● same"
   '✓ same request and answer as yours', // -> "✓ They recorded the same request and answer"
@@ -116,7 +116,8 @@ const RETIRED_PHRASES = [
   'not recomputable',
   'NOT recompute',
   'Not adjudicated',
-  'Your side is sealed'
+  'Your side is sealed',
+  'recomputed here'
 ] as const
 
 const HERE = dirname(fileURLToPath(import.meta.url))

@@ -311,11 +311,11 @@ describe('buildChecksRows — L-M: recomputed-here and from-sidecar are never th
     expect(byKey.outcome_corroboration.yours?.recomputed).toBe(false)
   })
 
-  it('recomputed properties always say "recomputed here", never a sidecar phrase', () => {
+  it('recomputed properties always say "checked in your browser", never a sidecar phrase', () => {
     const rows = buildChecksRows(paneCRow(), RECOMPUTED_MATCH)
     const byKey = Object.fromEntries(rows.map((r) => [r.key, r]))
-    expect(byKey.content_binding.yours?.detail).toBe('recomputed here')
-    expect(byKey.producer_signature.yours?.detail).toBe('recomputed here')
+    expect(byKey.content_binding.yours?.detail).toBe('checked in your browser')
+    expect(byKey.producer_signature.yours?.detail).toBe('checked in your browser')
   })
 
   it('content_binding reflects idMatch, never upgraded to established when unrecomputed', () => {
@@ -336,10 +336,10 @@ describe('buildChecksRows — forbidden mutant: never NOT_CHECKED together with 
     expect(byKey.producer_signature.yours?.recomputed).toBe(false)
   })
 
-  it('says "not yet recomputed here", not "recomputed here", while unrecomputed', () => {
+  it('says "not yet checked in your browser", not "checked in your browser", while unrecomputed', () => {
     const rows = buildChecksRows(paneCRow(), NOT_RECOMPUTED)
     const byKey = Object.fromEntries(rows.map((r) => [r.key, r]))
-    expect(byKey.content_binding.yours?.detail).toBe('not yet recomputed here')
+    expect(byKey.content_binding.yours?.detail).toBe('not yet checked in your browser')
   })
 
   it('no row, in any identity state, ever pairs NOT_CHECKED with recomputed:true', () => {
@@ -430,12 +430,12 @@ describe('buildChecksRows — THEIRS column reflects a real peer recompute once 
     fetch: () => {}
   }
 
-  it('a found+matching peer fetch renders content_binding/producer_signature as PASS, recomputed:true, "recomputed here"', () => {
+  it('a found+matching peer fetch renders content_binding/producer_signature as PASS, recomputed:true, "checked in your browser"', () => {
     const rows = buildChecksRows(paneCRow(), NOT_RECOMPUTED, FOUND_MATCH)
     const byKey = Object.fromEntries(rows.map((r) => [r.key, r]))
     expect(byKey.content_binding.theirs?.state).toBe('PASS')
     expect(byKey.content_binding.theirs?.recomputed).toBe(true)
-    expect(byKey.content_binding.theirs?.detail).toBe('recomputed here')
+    expect(byKey.content_binding.theirs?.detail).toBe('checked in your browser')
     expect(byKey.producer_signature.theirs?.state).toBe('PASS')
     expect(byKey.producer_signature.theirs?.recomputed).toBe(true)
   })
@@ -537,7 +537,7 @@ describe('buildIdentityRow', () => {
   it('yours reflects the actual recompute result, never a hardcoded match', () => {
     const mismatch: RecomputedIdentity = { idMatch: false, signatureOk: null }
     const identityRow = buildIdentityRow(paneCRow(), mismatch)
-    expect(identityRow.yours.note).toMatch(/MISMATCH/)
+    expect(identityRow.yours.note).toMatch(/doesn’t match/)
   })
 
   it('theirs is absent (null) when theirs.state is absent', () => {
@@ -548,7 +548,7 @@ describe('buildIdentityRow', () => {
 
   it('theirs never claims "recomputed" when no peer recompute was supplied -- it was never recomputed', () => {
     const identityRow = buildIdentityRow(paneCRow(), RECOMPUTED_MATCH)
-    expect(identityRow.theirs?.note).not.toMatch(/recomputed here, matches/)
+    expect(identityRow.theirs?.note).not.toMatch(/checked in your browser, matches/)
   })
 
   it('theirs renders the REAL recomputed match once a peer fetch actually found and verified', () => {
@@ -560,7 +560,7 @@ describe('buildIdentityRow', () => {
       fetch: () => {}
     }
     const identityRow = buildIdentityRow(paneCRow(), NOT_RECOMPUTED, found)
-    expect(identityRow.theirs?.note).toBe('✓ recomputed here, matches')
+    expect(identityRow.theirs?.note).toBe('✓ checked in your browser, matches')
   })
 
   it('theirs renders a real MISMATCH, never silently upgraded to a match', () => {
@@ -572,7 +572,7 @@ describe('buildIdentityRow', () => {
       fetch: () => {}
     }
     const identityRow = buildIdentityRow(paneCRow(), NOT_RECOMPUTED, found)
-    expect(identityRow.theirs?.note).toBe('✕ recomputed here, MISMATCH')
+    expect(identityRow.theirs?.note).toBe('✕ checked in your browser, doesn’t match')
   })
 
   // (negative, R4 other half) a fetch that found nothing or errored must

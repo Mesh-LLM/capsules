@@ -248,6 +248,17 @@ describe('rowAskControls', () => {
   it('names the other side from our record, whichever role we had', () => {
     expect(otherSideNodeId(ourRequestedRecord())).toBe(FIXTURE_PROVIDER_NODE)
     expect(otherSideNodeId(fixtureHalfBody({ servedBy: 'unknown' }))).toBeNull()
+    const asker = 'ab'.repeat(32)
+    const served = (provenance: Record<string, unknown>) => ({
+      model_attestation: {
+        compute_attestation: { 'x-mesh-poc-v1': { role: 'served', serving_provenance: provenance } }
+      }
+    })
+    // The plugin seals the node that asked as `requesting_party`.
+    expect(otherSideNodeId(served({ requesting_party: asker, served_by_node_id: 'cd'.repeat(32) }))).toBe(asker)
+    // A record carrying the host's raw field still names it.
+    expect(otherSideNodeId(served({ requested_by_node_id: asker }))).toBe(asker)
+    expect(otherSideNodeId(served({ requesting_party: 'unknown' }))).toBeNull()
   })
 })
 

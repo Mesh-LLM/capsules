@@ -131,7 +131,7 @@ describe('SecurityChecksView — p2 item 2: chip-only rows, each sentence moved 
   it('every sentence is in its chip’s tooltip, never printed beside the chip', () => {
     render(<SecurityChecksView identity={RECOMPUTED_MATCH} localRecord={null} row={ledgerRow(paneCRow())} />)
     for (const detail of [
-      'recomputed here',
+      'checked in your browser',
       'No checkpoint covers this record — see Integrity.',
       'no checkpoint covers this record',
       'no receipt covers this record',
@@ -183,7 +183,7 @@ describe('SecurityChecksView — p2 item 2: chip-only rows, each sentence moved 
 describe('SecurityChecksView — L-M: recomputed-here vs from-sidecar are visually distinct', () => {
   it('content_binding/producer_signature carry a different class + data-source than a sidecar property', () => {
     render(<SecurityChecksView identity={RECOMPUTED_MATCH} localRecord={null} row={ledgerRow(paneCRow())} />)
-    const recomputedCell = cellWithDetail('recomputed here')
+    const recomputedCell = cellWithDetail('checked in your browser')
     const sidecarCell = cellWithDetail('No checkpoint covers this record — see Integrity.')
     expect(recomputedCell).not.toBeNull()
     expect(sidecarCell).not.toBeNull()
@@ -194,9 +194,9 @@ describe('SecurityChecksView — L-M: recomputed-here vs from-sidecar are visual
 
   it('says the source in words (no coloured bar), with the legend once under the header', () => {
     render(<SecurityChecksView identity={RECOMPUTED_MATCH} localRecord={null} row={ledgerRow(paneCRow())} />)
-    const recomputedCell = cellWithDetail('recomputed here')
+    const recomputedCell = cellWithDetail('checked in your browser')
     expect(recomputedCell?.className).not.toMatch(/border-l-2/)
-    expect(recomputedCell?.textContent).toContain('checked here')
+    expect(recomputedCell?.textContent).toContain('checked in your browser')
     expect(screen.getAllByText(/checked here = your browser redid this check just now/)).toHaveLength(1)
   })
 })

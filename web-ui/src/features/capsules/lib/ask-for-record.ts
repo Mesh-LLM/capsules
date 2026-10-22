@@ -82,7 +82,13 @@ function pocBlock(record: unknown): Record<string, unknown> | null {
 export function otherSideNodeId(record: CapsuleRecord | Record<string, unknown> | null | undefined): string | null {
   const poc = pocBlock(record)
   const provenance = obj(poc?.serving_provenance)
-  const other = poc?.role === 'served' ? str(provenance?.requested_by_node_id) : str(provenance?.served_by_node_id)
+  // A served record names the node that asked as `requesting_party` (sealed
+  // from the host's `requested_by_node_id`); older records may carry the raw
+  // host field instead.
+  const other =
+    poc?.role === 'served'
+      ? (str(provenance?.requesting_party) ?? str(provenance?.requested_by_node_id))
+      : str(provenance?.served_by_node_id)
   const peerId = other?.toLowerCase() ?? null
   return peerId && FULL_ID.test(peerId) ? peerId : null
 }
