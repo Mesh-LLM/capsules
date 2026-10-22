@@ -204,6 +204,11 @@ is the same for every node it is given to.
 
 Either way, a half that never leaves this node is never answered.
 
+A node that checks an earlier exchange between two others (the
+`historical_reference` operation) asks each side for its half. If the node
+has exchanged with neither of them, both sides must have this switch on;
+otherwise both refuse it.
+
 ## Advertising evidence requests (`advertise_evidence_requests`)
 
 Off by default: this node does not tell other nodes that it answers evidence

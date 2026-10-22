@@ -132,6 +132,14 @@
 
 ### Added
 
+- **Exchange corroboration (`exchange_corroboration/1`), behind a new switch that is off by
+  default.** A node can ask whether this node holds a half of one earlier exchange, named by the
+  SHA-256 of its client nonce. The answer carries each matching half's id, role and two digests,
+  never the record or who was on the other side, and is the same for every node it is given to.
+  The new `historical_reference` operation uses it to compare two nodes' halves of one exchange.
+  `share_exchange_corroboration` (`CAPSULES_SHARE_EXCHANGE_CORROBORATION`) releases it to a node
+  no record names as a counterparty; turning on Standard History does not. See
+  `docs/SHARING-POLICY.md`.
 - **Witness receipts on an answer are checked under the witness keys you configured:** when this
   node asks another for evidence, each witness receipt carried on the answer's checkpoints is
   checked under the key set for that witness's URL in `CAPSULES_CHECKPOINT_WITNESS_KEYS` (URLs
