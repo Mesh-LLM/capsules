@@ -1687,9 +1687,9 @@ describe('LedgerPageContent — Part B3: windowed paging + sticky header', () =>
     // these fixture rows carry no evidence_outcome, so the their-content side
     // honestly degrades to the never-asked sub-state (L-C).
     await user.keyboard('o')
-    expect(await screen.findByText('Not compared. They would be expected to hold none.')).toBeInTheDocument()
+    expect(await screen.findByText('Not compared: they aren’t expected to keep the text of what was said.')).toBeInTheDocument()
     await user.keyboard('o')
-    expect(screen.queryByText('Not compared. They would be expected to hold none.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Not compared: they aren’t expected to keep the text of what was said.')).not.toBeInTheDocument()
 
     await user.keyboard('c')
     expect(await screen.findByRole('region', { name: /Security checks for exch-0/ })).toBeInTheDocument()
@@ -1710,9 +1710,9 @@ describe('LedgerPageContent — Part B3: windowed paging + sticky header', () =>
     expect(screen.queryByRole('region', { name: /Security checks/ })).not.toBeInTheDocument()
 
     await user.keyboard('o')
-    expect(await screen.findByText('Not compared. They would be expected to hold none.')).toBeInTheDocument()
+    expect(await screen.findByText('Not compared: they aren’t expected to keep the text of what was said.')).toBeInTheDocument()
     await user.keyboard('{Escape}')
-    expect(screen.queryByText('Not compared. They would be expected to hold none.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Not compared: they aren’t expected to keep the text of what was said.')).not.toBeInTheDocument()
 
     // Escape with nothing expanded is a no-op -- doesn't error, doesn't
     // swallow the event (nothing else to assert here beyond "it didn't throw").

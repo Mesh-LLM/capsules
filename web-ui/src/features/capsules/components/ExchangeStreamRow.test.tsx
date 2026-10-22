@@ -983,7 +983,7 @@ describe('ExchangeStreamRow — toggle ① content', () => {
       },
       {
         contentToggleState: { your: { kind: 'populated', date: null }, their: { kind: 'not_asked', date: null } },
-        text: 'Not compared. They would be expected to hold none.'
+        text: 'Not compared: they aren’t expected to keep the text of what was said.'
       },
       {
         contentToggleState: { your: { kind: 'populated', date: null }, their: { kind: 'unanswered', date: '3 Sep' } },
