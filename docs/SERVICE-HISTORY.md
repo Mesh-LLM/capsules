@@ -8,7 +8,7 @@ the digest covers. This page explains it and changes nothing it says: a change o
 ## Identifier
 
 - **A request names it by the digest of its definition:**
-  `6f8d6d058322b909e249e49bbeaae921abcff63b828c36c41202c75e392ba834`. That is SHA-256 over the RFC
+  `2a2af0b978757c2298d276f5367f6725239d1fe28ab8b8fb1ea5aaf5f1cb3576`. That is SHA-256 over the RFC
   8785 bytes of `service-history-1.json`.
 - `service_history/1` is the document's name, not a token. A request naming it is refused
   `derivation_unsupported`.

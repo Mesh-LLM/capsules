@@ -75,7 +75,7 @@ pub const DEFINITION_DOCUMENT: &str = include_str!("../../../derivations/service
 /// SHA-256 over the RFC 8785 bytes of [`DEFINITION_DOCUMENT`]: the
 /// derivation's name on the wire, and the artifact's `projection`.
 pub const DEFINITION_DIGEST: &str =
-    "6f8d6d058322b909e249e49bbeaae921abcff63b828c36c41202c75e392ba834";
+    "2a2af0b978757c2298d276f5367f6725239d1fe28ab8b8fb1ea5aaf5f1cb3576";
 
 /// The keys every artifact carries, whatever it declares.
 const FIXED_KEYS: [&str; 5] = [

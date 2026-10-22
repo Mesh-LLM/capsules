@@ -71,7 +71,7 @@ pub const DEFINITION_DOCUMENT: &str = include_str!("../../../derivations/served-
 /// SHA-256 over the RFC 8785 bytes of [`DEFINITION_DOCUMENT`]: the
 /// derivation's name on the wire, and the artifact's `derivation`.
 pub const SERVED_SUMMARY_DEFINITION_DIGEST: &str =
-    "d494544ca59a4d7f997e4d59f87a83670d08f555cae65fb3752614f669757260";
+    "e65bdec106b70a1d12baac9e251e26b0a3bbd8ec83bd7f348552326b52c32c85";
 
 /// The fixed statements every summary carries, exactly as the definition
 /// document states them.

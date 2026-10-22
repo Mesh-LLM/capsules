@@ -30,7 +30,7 @@
     {
       "name": "served_summary",
       "required": false,
-      "derivation": "d494544ca59a4d7f997e4d59f87a83670d08f555cae65fb3752614f669757260",
+      "derivation": "e65bdec106b70a1d12baac9e251e26b0a3bbd8ec83bd7f348552326b52c32c85",
       "reads": [
         "record: record_type",
         "record: effect.status",
@@ -94,5 +94,5 @@
     "requester identity",
     "per-recipient release state"
   ],
-  "spec": "https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/crates/mesh-llm-capsules-plugin/docs/SERVICE-HISTORY.md"
+  "spec": "https://github.com/Mesh-LLM/capsules/blob/main/docs/SERVICE-HISTORY.md"
 }

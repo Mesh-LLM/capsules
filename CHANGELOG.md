@@ -50,7 +50,7 @@
   sharing-policy cases, which no vector states, keep their reviewed expected answers in the
   runner.
 - **The served summary is asked for by the digest of its definition,**
-  `d494544ca59a4d7f997e4d59f87a83670d08f555cae65fb3752614f669757260`
+  `e65bdec106b70a1d12baac9e251e26b0a3bbd8ec83bd7f348552326b52c32c85`
   (`derivations/served-summary-1.json`, `docs/SERVED-SUMMARY.md`), and its answer names that
   digest as its `derivation`.
   - The bare token `served_summary/1` is still answered through 0.1.8. From 0.1.9 it is refused

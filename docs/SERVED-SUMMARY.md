@@ -9,7 +9,7 @@ the digest covers. This page explains it and changes nothing it says: a change o
 
 | Identifier | What it names | Where it appears |
 |---|---|---|
-| `d494544ca59a4d7f997e4d59f87a83670d08f555cae65fb3752614f669757260` | `served_summary/1`: the whole artifact. This is SHA-256 over the RFC 8785 bytes of `served-summary-1.json`. | A request's `derivation`, and the artifact's top-level `derivation` |
+| `e65bdec106b70a1d12baac9e251e26b0a3bbd8ec83bd7f348552326b52c32c85` | `served_summary/1`: the whole artifact. This is SHA-256 over the RFC 8785 bytes of `served-summary-1.json`. | A request's `derivation`, and the artifact's top-level `derivation` |
 | `6eb6f1870dbcee613573c60692b79ab979e2a6188a0f4c6191d4af65a7b773b8` | `mesh.served_summary_fold/1`: only the per-model fold. This is SHA-256 over the RFC 8785 bytes of [`served-summary-fold-1.json`](../derivations/served-summary-fold-1.json). | Inside the summary, as `derivation.definition_digest`. **Never a request's `derivation`:** a request naming it is refused `derivation_unsupported`. |
 | `served_summary/1` (token) | A legacy alias for the first row | Accepted on requests through 0.1.8, and refused `derivation_unsupported` from 0.1.9. It is not registered. |
 

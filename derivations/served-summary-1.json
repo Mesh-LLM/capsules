@@ -125,5 +125,5 @@
     "requester identity",
     "per-recipient release state"
   ],
-  "spec": "https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/crates/mesh-llm-capsules-plugin/docs/SERVED-SUMMARY.md"
+  "spec": "https://github.com/Mesh-LLM/capsules/blob/main/docs/SERVED-SUMMARY.md"
 }
