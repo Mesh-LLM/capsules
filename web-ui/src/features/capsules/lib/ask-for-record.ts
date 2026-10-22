@@ -42,7 +42,9 @@ export type AskOutcome =
   | { kind: 'no_reply'; at: string; detail: string; plain?: boolean }
   | { kind: 'refused'; at: string; reason: string }
   | { kind: 'no_record'; at: string }
-  | { kind: 'record'; at: string; evidence: PeerRecomputeState }
+  /** `saved`: whether the plugin kept this record on the node (its id is in
+   *  the tool's `held`). Absent where nothing said either way. */
+  | { kind: 'record'; at: string; evidence: PeerRecomputeState; saved?: boolean }
   /** Their verified reply carried more than one record that could be their
    *  half of this exchange, and nothing picks one: none is shown as theirs. */
   | { kind: 'ambiguous'; at: string; count: number }
@@ -337,9 +339,11 @@ export async function judgeAskReply(
       if (candidates.length > 1) return { kind: 'ambiguous', at: askedAt, count: candidates.length }
       const receipt = candidates[0]
       const idMatch = await judges.recomputeIdMatch(receipt, str(receipt.capsule_id))
+      const receiptId = str(receipt.capsule_id)
       return {
         kind: 'record',
         at: askedAt,
+        saved: receiptId !== null && reply.held.includes(receiptId),
         evidence: {
           status: 'found',
           idMatch,

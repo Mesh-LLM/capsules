@@ -82,14 +82,15 @@ function signedRefusal(reason: string, { secret = PEER_SECRET, requestDigest = S
 function answer(
   body: Record<string, unknown>,
   announcedKeyId: string | null = ANNOUNCED,
-  verification?: EvidenceVerification
+  verification?: EvidenceVerification,
+  held: string[] = []
 ) {
   const found: EvidenceVerification =
     verification ??
     (typeof body.reason === 'string'
       ? { state: 'refusal', reason: body.reason }
       : { state: 'artifact', records: artifactLeafIndices(body) })
-  return { kind: 'answer' as const, answer: body, verification: found, requestDigest: SENT, announcedKeyId }
+  return { kind: 'answer' as const, answer: body, verification: found, requestDigest: SENT, announcedKeyId, held }
 }
 
 /** An artifact answer carrying `records` (the interop profile's reply the
@@ -373,6 +374,15 @@ describe('judgeAskReply', () => {
       expect(recordRefusalWords(reason)).not.toContain('_')
     }
     expect(recordRefusalWords('made_up_token')).toBe('for a reason this page can’t name')
+  })
+
+  it('marks a record saved only when the tool held its id', async () => {
+    const theirs = { ...fixtureHalfBody({ capsuleId: 'theirs-1' }), signature: 'aa', key_id: 'bb' }
+    const judge = (held: string[]) =>
+      judgeAskReply(answer(artifact([theirs]), ANNOUNCED, undefined, held), FIXTURE_REQUEST_DIGEST, ASKED_AT, trustingJudges)
+    expect(await judge(['theirs-1'])).toMatchObject({ kind: 'record', saved: true })
+    expect(await judge([])).toMatchObject({ kind: 'record', saved: false })
+    expect(await judge(['someone-else'])).toMatchObject({ kind: 'record', saved: false })
   })
 
   it('says a verified reply is verified', async () => {

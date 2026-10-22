@@ -330,6 +330,7 @@ describe('tooltip census -- the copy itself', () => {
       ...Object.values(COPY.ENTRY_CHIP_RESULT_TOOLTIPS).flatMap((byMark) => Object.values(byMark)),
       COPY.OWN_RECORD_FAILS_WARNING,
       COPY.SAVED_BECAUSE_YOU_ASKED,
+      COPY.CONFIRMED_NOT_KEPT,
       ...Object.values(COPY.TWIN_TOOLTIPS),
       ...Object.values(COPY.TWIN_VERDICT_TOOLTIPS),
       COPY.SETUP_STEPS_TOOLTIP,

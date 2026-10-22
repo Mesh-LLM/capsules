@@ -18,7 +18,7 @@ function signedRefusal(reason: string, secret = PEER_SECRET) {
 }
 
 function reply(answer: unknown, verification: EvidenceVerification, announcedKeyId: string | null = ANNOUNCED): EvidenceAskReply {
-  return { kind: 'answer', answer, verification, requestDigest: SENT, announcedKeyId }
+  return { kind: 'answer', answer, verification, requestDigest: SENT, announcedKeyId, held: [] }
 }
 
 describe('judgeHistoryReply', () => {

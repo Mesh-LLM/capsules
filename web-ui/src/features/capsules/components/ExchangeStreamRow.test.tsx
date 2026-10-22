@@ -10,6 +10,7 @@ import { settleRowAsk as settleRowAskWith, type AskOutcome, type RowAsk } from '
 import { exchangeRowDomId } from '@/features/capsules/lib/exchange-pages'
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import {
+  CONFIRMED_NOT_KEPT,
   SAVED_BECAUSE_YOU_ASKED,
   OWN_RECORD_FAILS_WARNING,
   SEE_IN_LOGS_NOT_ON_THIS_PAGE,
@@ -1400,6 +1401,40 @@ describe('ExchangeStreamRow — §3A model identity + short/copyable ids', () =>
     expect(shortEl).toHaveAttribute('title', longKey)
     await user.click(shortEl)
     expect(writeText).toHaveBeenCalledWith(longKey)
+  })
+})
+
+describe('ExchangeStreamRow — whether the record an ask brought was saved on this node', () => {
+  const askedRecord = (saved: boolean | undefined) => {
+    const theirs = { ...LOCAL_RECORD_WITH_DIGESTS, capsule_id: 'theirs-1' } as Record<string, unknown>
+    return settleRowAsk(null, {
+      kind: 'record',
+      at: '2026-09-28T23:00:00Z',
+      evidence: { status: 'found', idMatch: true, signatureOk: true, peerRecord: theirs, fetch: vi.fn() },
+      ...(saved === undefined ? {} : { saved })
+    })
+  }
+
+  it('saved (its id in the tool’s held): Confirmed, and no "couldn’t save" line', () => {
+    render(<ExchangeStreamRow {...toggleProps()} askOutcome={askedRecord(true)} rail={NO_RAIL} row={makeRow('open_not_given')} />)
+    expect(screen.getByText('Confirmed')).toBeInTheDocument()
+    expect(screen.queryByText(new RegExp(CONFIRMED_NOT_KEPT))).not.toBeInTheDocument()
+  })
+
+  it('not saved (held empty or missing): still Confirmed on the face, and its (i) says a reload won’t keep it', () => {
+    render(<ExchangeStreamRow {...toggleProps()} askOutcome={askedRecord(false)} rail={NO_RAIL} row={makeRow('open_not_given')} />)
+    expect(screen.getByText('Confirmed')).toBeInTheDocument()
+    expect(document.querySelector('[data-row-verdict-text]')).toHaveTextContent('recorded the same exchange')
+    expect(document.querySelector('[data-verdict-detail]')).toHaveTextContent(CONFIRMED_NOT_KEPT)
+    expect(screen.queryByText(SAVED_BECAUSE_YOU_ASKED)).not.toBeInTheDocument()
+  })
+
+  it('a record the node holds (pushed) is never said to be unsaved, even beside an unsaved ask', () => {
+    const base = makeRow('open_not_asked')
+    const pushed = { ...base, raw: { ...base.raw, mine: fixtureMineCell(), theirs: { ...fixtureTheirsCell('agrees'), via: 'ask' } } }
+    render(<ExchangeStreamRow {...toggleProps()} askOutcome={askedRecord(false)} rail={NO_RAIL} row={pushed} />)
+    expect(document.querySelector('[data-verdict-detail]')).toHaveTextContent(SAVED_BECAUSE_YOU_ASKED)
+    expect(document.querySelector('[data-verdict-detail]')?.textContent).not.toContain(CONFIRMED_NOT_KEPT)
   })
 })
 

@@ -58,20 +58,33 @@ describe('askForRecord', () => {
       answer: { reason: 'no_such_subject', request_digest: DIGEST },
       verification: { state: 'refusal', reason: 'no_such_subject' },
       requestDigest: DIGEST,
-      announcedKeyId: 'ab'.repeat(32)
+      announcedKeyId: 'ab'.repeat(32),
+      // The tool didn't say what it saved: nothing.
+      held: []
     })
   })
 
   it('unwraps an artifact answer and keeps what the verification proved', async () => {
     const answer = { profile: 'evidence-interop/0', artifact: 'eyJyZWNvcmRzIjpbXX0' }
-    stubRoutes({ answer, request_digest: DIGEST, verification: { state: 'artifact', anchor: 'x', records: [3, 4], checkpoints: 0 } }, null)
+    stubRoutes(
+      { answer, request_digest: DIGEST, verification: { state: 'artifact', anchor: 'x', records: [3, 4], checkpoints: 0 }, held: ['theirs-1'] },
+      null
+    )
     expect(await askForRecord(PEER, BY_NONCE)).toEqual({
       kind: 'answer',
       answer,
       verification: { state: 'artifact', records: [3, 4], checkpoints: 0 },
       requestDigest: DIGEST,
-      announcedKeyId: null
+      announcedKeyId: null,
+      held: ['theirs-1']
     })
+  })
+
+  it('reads a missing or malformed `held` as nothing saved', async () => {
+    for (const held of [undefined, null, 'theirs-1', [1], ['ok', ''], { id: 'x' }]) {
+      stubRoutes({ answer: {}, request_digest: DIGEST, verification: { state: 'artifact', records: [] }, held }, null)
+      expect(await askForRecord(PEER, BY_NONCE)).toMatchObject({ kind: 'answer', held: [] })
+    }
   })
 
   it('carries an unverified reply as unverified, with the reason', async () => {

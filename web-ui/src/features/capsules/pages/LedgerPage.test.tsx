@@ -75,7 +75,8 @@ vi.mock('@/features/capsules/api/evidenceRequestClient', () => ({
     answer: {},
     verification: { state: 'artifact', records: [], checkpoints: 2 },
     requestDigest: 'f'.repeat(64),
-    announcedKeyId: 'e'.repeat(64)
+    announcedKeyId: 'e'.repeat(64),
+    held: []
   })
 }))
 // The real judge, spied on so one test can hand the page a verified record.

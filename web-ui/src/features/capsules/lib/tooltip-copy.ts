@@ -223,6 +223,12 @@ export const ROW_VERDICT_UNNAMED_PEER = 'the other side'
  *  "ask"`), said behind the verdict's (i) (Sherlock2's acceptance). */
 export const SAVED_BECAUSE_YOU_ASKED = 'Saved on this node because you asked them for it.'
 
+/** A row confirmed from a record an ask brought that the plugin couldn't
+ *  save (its id isn't in the tool's `held`), said behind the verdict's (i)
+ *  in place of `SAVED_BECAUSE_YOU_ASKED`. */
+export const CONFIRMED_NOT_KEPT =
+  'Confirmed from the record you asked for, but this node couldn’t save it, so a reload won’t keep it.'
+
 /** The three steps under each row, in order. */
 export const ROW_STEP_LABELS = {
   sealed: 'Sealed',

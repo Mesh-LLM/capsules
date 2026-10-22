@@ -43,6 +43,11 @@ export type EvidenceAskReply =
       verification: EvidenceVerification
       requestDigest: string
       announcedKeyId: string | null
+      /** The `capsule_id`s of their records the plugin saved on this node from
+       *  this reply (the tool's `held`): `[]` when it saved none (a store
+       *  failure, a receiver refusal, or no single matching record), and
+       *  when the tool didn't say. */
+      held: string[]
     }
   | { kind: 'no_answer'; message: string }
 
@@ -116,6 +121,12 @@ function parseVerification(value: unknown): EvidenceVerification {
   }
 }
 
+/** The tool's `held`: only a list of non-empty strings counts; anything
+ *  else is "saved nothing". */
+function heldIds(value: unknown): string[] {
+  return Array.isArray(value) && value.every((id) => typeof id === 'string' && id.length > 0) ? (value as string[]) : []
+}
+
 /** The key this node was told `peerId` signs with, or `null` when none is
  *  announced or the route can't say: an unknown key is never a guess. The
  *  plugin's `peer-key` route reads the host's announced keys (on a host with
@@ -187,6 +198,7 @@ async function ask(peerId: string, request: Record<string, unknown>): Promise<Ev
     answer,
     verification: parseVerification(reply?.verification),
     requestDigest,
-    announcedKeyId: await announcedKeyFor(peerId)
+    announcedKeyId: await announcedKeyFor(peerId),
+    held: heldIds(reply?.held)
   }
 }

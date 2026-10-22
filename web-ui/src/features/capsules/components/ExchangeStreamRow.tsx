@@ -71,6 +71,7 @@ import { rowCombinationText } from '@/features/capsules/lib/row-combination'
 import { NO_PEER_NAMES, peerName as namePeer } from '@/features/capsules/lib/peer-names'
 import { rowSteps, rowVerdictText, type RowStep } from '@/features/capsules/lib/row-verdict'
 import {
+  CONFIRMED_NOT_KEPT,
   LOCAL_ONLY_TOOLTIP,
   OWN_RECORD_FAILS_WARNING,
   SAVED_BECAUSE_YOU_ASKED,
@@ -337,7 +338,12 @@ export function ExchangeStreamRow({
     : rowVerdictText(state, otherSide ? peerName(otherSide) : null, notOnMesh)
   // A confirmation from the record the node holds because this node asked
   // for it (the pane's `via: "ask"`; a pushed one is `"push"`) says so.
-  const savedByAsk = state.kind === 'closed' && row.raw.theirs.via === 'ask' ? SAVED_BECAUSE_YOU_ASKED : null
+  // One the ask brought but the plugin couldn't save says that instead.
+  const savedByAsk = judged.confirmedUnsaved
+    ? CONFIRMED_NOT_KEPT
+    : state.kind === 'closed' && row.raw.theirs.via === 'ask'
+      ? SAVED_BECAUSE_YOU_ASKED
+      : null
   // Nothing the face already says is repeated behind the (i).
   const verdictDetail = [cellText, savedByAsk, askNote ? askNote.text : null, retryNote]
     .filter((text): text is string => text !== null)

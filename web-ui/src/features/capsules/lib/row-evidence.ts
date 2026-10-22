@@ -74,6 +74,9 @@ export type RowJudgement = {
   askNote: { verified: boolean; text: string } | null
   /** The latest ask, when the row shows something else verified. */
   retryNote: string | null
+  /** Confirmed from a record an ask brought that the plugin couldn't save
+   *  on this node: a reload won't keep the confirmation. */
+  confirmedUnsaved: boolean
 }
 
 type RecordCandidate = {
@@ -231,6 +234,8 @@ export function judgeRow(
     evidence: evidenceRecord?.evidence ?? null,
     source: evidenceRecord?.source ?? null,
     askNote,
-    retryNote
+    retryNote,
+    confirmedUnsaved:
+      state.kind === 'closed' && shown?.source === 'asked' && shown.outcome?.kind === 'record' && shown.outcome.saved === false
   }
 }
