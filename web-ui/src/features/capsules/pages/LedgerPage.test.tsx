@@ -1513,6 +1513,8 @@ describe('LedgerPageContent — Part B3: windowed paging + sticky header', () =>
     vi.clearAllMocks()
   })
 
+  // Renders 120 rows and pages through them: about 5 s on a 4-vCPU box, which
+  // is the default timeout, so it gets its own.
   it('windows into pages of 50 with an honest full-range banner, Older/Newer paging the rest', async () => {
     const { fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
     vi.mocked(fetchPaneCList).mockResolvedValue(b3PaneCPayload(makeManyPaneCRows(120)))
@@ -1542,7 +1544,7 @@ describe('LedgerPageContent — Part B3: windowed paging + sticky header', () =>
 
     await user.click(screen.getByRole('button', { name: 'Newer exchanges' }))
     expect(await screen.findByRole('group', { name: 'Exchange exch-0' })).toBeInTheDocument()
-  })
+  }, 20_000)
 
   it('the YOUR RECORD / THEIR RECORD column header is a single sticky header, never repeated per row', async () => {
     const { fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')

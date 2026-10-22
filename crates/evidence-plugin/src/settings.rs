@@ -380,11 +380,17 @@ pub fn origin(name: &str) -> Option<&'static str> {
 /// `std::env::var` for a plugin setting: `name` is the setting's current
 /// name; its old name is read when `name` is unset, then the console's value.
 pub fn var(name: &str) -> Result<String, VarError> {
+    var_in(name, |n| std::env::var(n))
+}
+
+/// [`var`] over the environment `env` reads, so the tests never set a
+/// process variable.
+fn var_in(name: &str, env: impl Fn(&str) -> Result<String, VarError>) -> Result<String, VarError> {
     let Some(legacy) = legacy_name(name) else {
-        return std::env::var(name);
+        return env(name);
     };
     // An empty value is no value: `export X=` never overrides the console.
-    let set = |n: &str| match std::env::var(n) {
+    let set = |n: &str| match env(n) {
         Ok(value) if value.trim().is_empty() => None,
         Ok(value) => Some(Ok(value)),
         Err(VarError::NotPresent) => None,
@@ -402,10 +408,15 @@ pub fn var(name: &str) -> Result<String, VarError> {
 
 /// `std::env::var_os` for a plugin setting, with the same fallback as [`var`].
 pub fn var_os(name: &str) -> Option<OsString> {
+    var_os_in(name, |n| std::env::var_os(n))
+}
+
+/// [`var_os`] over the environment `env` reads.
+fn var_os_in(name: &str, env: impl Fn(&str) -> Option<OsString>) -> Option<OsString> {
     let Some(legacy) = legacy_name(name) else {
-        return std::env::var_os(name);
+        return env(name);
     };
-    let set = |n: &str| std::env::var_os(n).filter(|v| !v.to_string_lossy().trim().is_empty());
+    let set = |n: &str| env(n).filter(|v| !v.to_string_lossy().trim().is_empty());
     match pick(set(name), set(&legacy)) {
         Some((value, source)) => {
             log_once(name, &legacy, source);
@@ -419,23 +430,40 @@ pub fn var_os(name: &str) -> Option<OsString> {
 mod tests {
     use super::*;
 
-    // Each test uses its own setting names, so tests running in parallel never
-    // see each other's variables.
+    // Each test reads its own environment, never the process's, and uses its
+    // own setting names (the old-name log is once per name, process-wide).
+
+    fn env(vars: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        vars.iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    fn var(
+        name: &str,
+        env: &std::collections::HashMap<String, String>,
+    ) -> Result<String, VarError> {
+        var_in(name, |n| env.get(n).cloned().ok_or(VarError::NotPresent))
+    }
+
+    fn var_os(name: &str, env: &std::collections::HashMap<String, String>) -> Option<OsString> {
+        var_os_in(name, |n| env.get(n).map(OsString::from))
+    }
 
     #[test]
     fn the_current_name_is_read() {
         let name = "CAPSULES_TEST_SETTINGS_CURRENT";
-        std::env::set_var(name, "new");
-        assert_eq!(var(name).as_deref(), Ok("new"));
-        assert_eq!(var_os(name), Some(OsString::from("new")));
+        let env = env(&[(name, "new")]);
+        assert_eq!(var(name, &env).as_deref(), Ok("new"));
+        assert_eq!(var_os(name, &env), Some(OsString::from("new")));
     }
 
     #[test]
     fn the_old_name_is_read_when_the_current_one_is_unset() {
         let name = "CAPSULES_TEST_SETTINGS_LEGACY";
-        std::env::set_var("CAPSULE_EMIT_MESH_TEST_SETTINGS_LEGACY", "old");
-        assert_eq!(var(name).as_deref(), Ok("old"));
-        assert_eq!(var_os(name), Some(OsString::from("old")));
+        let env = env(&[("CAPSULE_EMIT_MESH_TEST_SETTINGS_LEGACY", "old")]);
+        assert_eq!(var(name, &env).as_deref(), Ok("old"));
+        assert_eq!(var_os(name, &env), Some(OsString::from("old")));
     }
 
     /// Reading a setting from its old name says so, once, naming both names.
@@ -459,10 +487,10 @@ mod tests {
             .with_ansi(false)
             .finish();
         let name = "CAPSULES_TEST_SETTINGS_LOGGED";
-        std::env::set_var("CAPSULE_EMIT_MESH_TEST_SETTINGS_LOGGED", "old");
+        let env = env(&[("CAPSULE_EMIT_MESH_TEST_SETTINGS_LOGGED", "old")]);
         tracing::subscriber::with_default(subscriber, || {
-            assert_eq!(var(name).as_deref(), Ok("old"));
-            assert_eq!(var(name).as_deref(), Ok("old"));
+            assert_eq!(var(name, &env).as_deref(), Ok("old"));
+            assert_eq!(var(name, &env).as_deref(), Ok("old"));
         });
         let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
         assert_eq!(log.lines().count(), 1, "{log}");
@@ -477,17 +505,20 @@ mod tests {
     #[test]
     fn the_current_name_wins_over_the_old_one() {
         let name = "CAPSULES_TEST_SETTINGS_BOTH";
-        std::env::set_var(name, "new");
-        std::env::set_var("CAPSULE_EMIT_MESH_TEST_SETTINGS_BOTH", "old");
-        assert_eq!(var(name).as_deref(), Ok("new"));
-        assert_eq!(var_os(name), Some(OsString::from("new")));
+        let env = env(&[
+            (name, "new"),
+            ("CAPSULE_EMIT_MESH_TEST_SETTINGS_BOTH", "old"),
+        ]);
+        assert_eq!(var(name, &env).as_deref(), Ok("new"));
+        assert_eq!(var_os(name, &env), Some(OsString::from("new")));
     }
 
     #[test]
     fn neither_name_set_is_not_present() {
         let name = "CAPSULES_TEST_SETTINGS_NEITHER";
-        assert_eq!(var(name), Err(VarError::NotPresent));
-        assert_eq!(var_os(name), None);
+        let env = env(&[]);
+        assert_eq!(var(name, &env), Err(VarError::NotPresent));
+        assert_eq!(var_os(name, &env), None);
     }
 
     #[test]
@@ -689,12 +720,15 @@ witness = [
     #[test]
     fn an_empty_value_is_no_value() {
         let name = "CAPSULES_TEST_SETTINGS_EMPTY";
-        std::env::set_var(name, "  ");
-        assert_eq!(var(name), Err(VarError::NotPresent));
-        assert_eq!(var_os(name), None);
-        std::env::set_var("CAPSULE_EMIT_MESH_TEST_SETTINGS_EMPTY", "old");
+        let blank = env(&[(name, "  ")]);
+        assert_eq!(var(name, &blank), Err(VarError::NotPresent));
+        assert_eq!(var_os(name, &blank), None);
+        let both = env(&[
+            (name, "  "),
+            ("CAPSULE_EMIT_MESH_TEST_SETTINGS_EMPTY", "old"),
+        ]);
         assert_eq!(
-            var(name).as_deref(),
+            var(name, &both).as_deref(),
             Ok("old"),
             "an empty new name does not hide the old one"
         );
