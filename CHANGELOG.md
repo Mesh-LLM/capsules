@@ -77,6 +77,13 @@
 - **`share_history_segments` defaults to `counterparties`.** `prospective`, the old default, is
   deprecated and read as `counterparties`: it always served exactly the same nodes, so nothing
   changes for a node using it. A log line says when it is read. Set `counterparties` instead.
+- **Evidence requests use `capsule-emit-evidence-request` 0.0.4 (was 0.0.3), and witness receipts
+  are checked by `scitt-cose-receipt` 0.1.1 from crates.io instead of a git pin.** 0.0.4 changes
+  only how a request sent as CBOR is read. This plugin reads requests as JSON, so its answers do not
+  change. The receipt check now tries every well-formed inclusion proof in a receipt, not only the
+  first, so a receipt that was refused only because of the order of its proofs can now count as
+  witnessed on the Evidence page. A proof with an impossible tree size, index or path is refused
+  as malformed before any is tried.
 
 ### Added
 
