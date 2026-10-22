@@ -789,7 +789,7 @@ pub fn verify_response(
         return not_evidence("the request sent is not a -00 request".into());
     };
     if crate::exchange_corroboration::is_derivation(req.derivation.as_ref()) {
-        return match crate::exchange_corroboration::verify(sent, response, key) {
+        return match crate::exchange_corroboration::verify(sent, response, key, witness_keys) {
             crate::exchange_corroboration::Verified::Halves { anchor, halves } => {
                 json!({"state": "artifact", "anchor": anchor, "halves": halves.len()})
             }
@@ -852,7 +852,7 @@ pub fn verify_response(
 /// The key the operator configured for the witness at `ts_url`: the entry
 /// whose URL is the same once normalized (`witness_status::normalize_url`).
 /// A value that is not an Ed25519 key is no key.
-fn configured_witness_key(
+pub(crate) fn configured_witness_key(
     witness_keys: &std::collections::BTreeMap<String, String>,
     ts_url: &str,
 ) -> Option<ed25519_dalek::VerifyingKey> {
@@ -866,7 +866,7 @@ fn configured_witness_key(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::evidence_request_parity::{
         announced_keys as announced, asker_key, corpus_checkpoints, corpus_ledger, sealed,
@@ -1225,11 +1225,11 @@ mod tests {
         );
     }
 
-    const WITNESS: &str = "https://witness.example";
+    pub(crate) const WITNESS: &str = "https://witness.example";
 
     /// A real witness receipt for `entry` under `key`: a COSE_Sign1 (EdDSA)
     /// over the root of a one-leaf RFC 9162 tree, with its inclusion proof.
-    fn mint_receipt(entry: &[u8; 32], key: &SigningKey) -> String {
+    pub(crate) fn mint_receipt(entry: &[u8; 32], key: &SigningKey) -> String {
         use base64::Engine as _;
         use coset::cbor::Value as Cbor;
         use coset::{iana, CoseSign1Builder, HeaderBuilder, TaggedCborSerializable};
