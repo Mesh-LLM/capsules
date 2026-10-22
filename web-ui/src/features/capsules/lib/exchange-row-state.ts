@@ -44,6 +44,15 @@ const EVIDENCE_OUTCOME_TO_KIND: Record<string, RightCellStateKind> = {
   not_asked: 'open_not_asked'
 }
 
+/** The state the pane's own evidence outcome names (a door-checked claims
+ *  refusal, their signed refusal or "no record", an unanswered ask), or
+ *  `null` when the row carries none. */
+export function paneOutcomeState(row: PaneCRow): RightCellState | null {
+  const outcome = row.theirs.evidence_outcome
+  const kind = outcome ? EVIDENCE_OUTCOME_TO_KIND[outcome] : undefined
+  return kind ? { kind, date: row.theirs.evidence_outcome_date ?? null } : null
+}
+
 /**
  * Derives the right-cell state from a Pane C row (`deriveRightCellState`,
  * below the helpers).
@@ -53,22 +62,23 @@ const EVIDENCE_OUTCOME_TO_KIND: Record<string, RightCellStateKind> = {
  * counterparty recorded at all (`theirs.state === 'absent'`) is
  * `open_not_asked`.
  *
- * Otherwise CLOSED/CONTRADICTED come from ONE predicate
- * (`counterpartyHalfState`), whichever way the counterparty's bytes arrived:
+ * Otherwise CLOSED/CONTRADICTED come from ONE predicate (`recordVerdict`),
+ * whichever way the counterparty's bytes arrived:
  *   - a live `mesh_ledger_fetch` this browser ran (`theirsRecompute`), or
  *   - the half the peer PUSHED, correlated by the pane from our own citing
  *     record (`pushedHalfRecompute`: the held body, the door's signature
- *     verdict, and the `capsule_id` recompute done before the pane query
+ *     verdict, and the `capsule_id` check done before the pane query
  *     resolved).
- * CLOSED needs all four: the signature verified against the peer's announced
- * key, the body recomputes to its `capsule_id`, both `effect` digests equal
- * ours (§6.2/L-G), and the provider check (`providerMatches`, provisional).
- * CONTRADICTED: the body does not recompute to its id, both sides carry
- * real digests that differ, or the provider's half names other model weights
- * than it served us under (`modelSwapped`). A PUSHED half from a node that did not serve the
- * exchange is never CONTRADICTED (any peer can push). Anything else -- not recomputed yet, unsigned,
- * a missing digest, a different or unnamed provider -- stays OPEN
- * (`open_not_held`): never a verdict we did not check.
+ * Only a VERIFIED record gives a verdict: its body produces its `capsule_id`
+ * and its signature holds under the key this node has for the peer. CLOSED
+ * also needs both `effect` digests equal to ours (§6.2/L-G) and the provider
+ * check (`providerMatches`, provisional). CONTRADICTED: a verified provider
+ * record whose digests differ from ours, or that names other model weights
+ * than it served us under (`modelSwapped`). Anything else -- not checked yet,
+ * unsigned, an id that doesn't match, a missing digest, a different or
+ * unnamed provider -- stays OPEN (`open_not_held`): never a verdict we did
+ * not check. How this combines with asks and the pane's own claims is
+ * `row-evidence.ts`.
  *
  * With no evidence at all, a digest-shaped peer id is `open_not_held` (known,
  * fetchable) and a non-digest correlation marker is `open_not_given`
@@ -212,34 +222,50 @@ export function pushedHalfRecompute(row: PaneCRow): PeerRecomputeState | null {
   }
 }
 
-/** THE gate. CLOSED iff all four hold for provider-signed bytes this node
- *  holds (pushed or fetched): the signature verified against the peer's
- *  announced key, the body recomputes to its `capsule_id`, both digests equal
- *  ours, and it came from the provider (`providerMatches`). */
+/** A record of theirs is evidence only when it is VERIFIED: its contents
+ *  produce its id, and its signature holds under the key this node has for
+ *  them. Anything less -- unsigned, a bad signature, an id that doesn't match,
+ *  a check that didn't run -- proves nothing either way. */
+export function isVerifiedRecord(evidence: PeerRecomputeState): boolean {
+  return evidence.idMatch === true && evidence.signatureOk === true
+}
+
+/** What a verified record of theirs says about OUR record, or why it says
+ *  nothing: it is not from the node that served this exchange, or it names
+ *  neither our request and answer nor different ones. */
+export type RecordVerdict =
+  | { kind: 'closed' }
+  | { kind: 'contradicted' }
+  | { kind: 'no_verdict'; why: 'not_verified' | 'other_provider' | 'other_exchange' }
+
+/** THE gate. Only a verified record (`isVerifiedRecord`) gives a verdict.
+ *  CLOSED iff it came from the provider (`providerMatches`) and both digests
+ *  equal ours; CONTRADICTED iff it came from the provider and its digests
+ *  differ from ours, or it names other model weights (`modelSwapped`). A
+ *  record whose id doesn't match its contents is never CONTRADICTED: unsigned
+ *  or not, it is not a signed record that disagrees with ours. */
+export function recordVerdict(
+  evidence: PeerRecomputeState,
+  localRecord: CapsuleRecord | null | undefined
+): RecordVerdict {
+  if (!isVerifiedRecord(evidence)) return { kind: 'no_verdict', why: 'not_verified' }
+  // Any peer can push or answer with a record. One from a node that did not
+  // serve this exchange says nothing about it.
+  if (!providerMatches(localRecord, evidence.peerRecord)) return { kind: 'no_verdict', why: 'other_provider' }
+  if (digestsDisagree(localRecord, evidence.peerRecord)) return { kind: 'contradicted' }
+  // Matching digests prove the two sides saw the same bytes, not which model
+  // made them: a provider record naming other weights is never CLOSED.
+  if (modelSwapped(localRecord, evidence.peerRecord)) return { kind: 'contradicted' }
+  if (digestsCiteOurHalf(localRecord, evidence.peerRecord)) return { kind: 'closed' }
+  return { kind: 'no_verdict', why: 'other_exchange' }
+}
+
 function counterpartyHalfState(
   evidence: PeerRecomputeState,
-  localRecord: CapsuleRecord | null | undefined,
-  source: 'fetched' | 'pushed'
+  localRecord: CapsuleRecord | null | undefined
 ): RightCellStateKind {
-  // Recompute not run / could not run: inconclusive, never a verdict.
-  if (evidence.idMatch === null) return 'open_not_held'
-  const fromProvider = providerMatches(localRecord, evidence.peerRecord)
-  // Any peer can push a half. One from a node that did not serve this
-  // exchange says nothing about it: never a contradiction, never a close. A
-  // fetched half came from the peer this browser asked.
-  if (source === 'pushed' && !fromProvider) return 'open_not_held'
-  // The peer's own bytes don't produce the id claimed for them.
-  if (!evidence.idMatch) return 'contradicted'
-  // Unauthenticated bytes prove nothing either way.
-  if (evidence.signatureOk !== true) return 'open_not_held'
-  if (!fromProvider) return 'open_not_held'
-  if (digestsDisagree(localRecord, evidence.peerRecord)) return 'contradicted'
-  // Matching digests prove the two sides saw the same bytes, not which model
-  // made them: a provider half naming other weights is never CLOSED.
-  if (modelSwapped(localRecord, evidence.peerRecord)) return 'contradicted'
-  if (digestsCiteOurHalf(localRecord, evidence.peerRecord)) return 'closed'
-
-  return 'open_not_held'
+  const verdict = recordVerdict(evidence, localRecord)
+  return verdict.kind === 'no_verdict' ? 'open_not_held' : verdict.kind
 }
 
 /** A real sealed capsule id is 64 lower-hex (`capsule-emit-mesh`
@@ -260,7 +286,7 @@ export function stateFromFetchedHalf(
   evidence: PeerRecomputeState,
   localRecord: CapsuleRecord | null | undefined
 ): RightCellState {
-  return { kind: counterpartyHalfState(evidence, localRecord, 'fetched'), date: null }
+  return { kind: counterpartyHalfState(evidence, localRecord), date: null }
 }
 
 export function deriveRightCellState(
@@ -293,7 +319,7 @@ export function deriveRightCellState(
   const evidence = fetchedHalf ?? pushedHalfRecompute(row)
   if (evidence) {
     const ours = localRecord ?? (row.mine.record as CapsuleRecord | undefined) ?? null
-    return { kind: counterpartyHalfState(evidence, ours, fetchedHalf ? 'fetched' : 'pushed'), date: null }
+    return { kind: counterpartyHalfState(evidence, ours), date: null }
   }
 
   // No confirmed fetch yet. A peer id is "known but not fetched" (fetchable)

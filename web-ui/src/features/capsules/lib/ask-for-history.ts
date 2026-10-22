@@ -82,7 +82,7 @@ export function historyNote(outcome: HistoryOutcome): { verified: boolean; text:
       const listed = n === null ? 'the checkpoints' : `${n} checkpoint${n === 1 ? '' : 's'}`
       return {
         verified: true,
-        text: `Their history is verified: ${listed} of their log, each signed with their signing key and each extending the one before.`
+        text: `Their history is verified: ${listed} of their log, each signed with the key this node has for them and each extending the one before.`
       }
     }
     case 'refused':

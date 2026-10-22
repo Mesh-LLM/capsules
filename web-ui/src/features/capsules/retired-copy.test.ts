@@ -106,6 +106,11 @@ const RETIRED_PHRASES = [
   'key they announced',
   'key this peer announces',
   'no announced key for them',
+  // Review round 2 of #44: "the key this node has for them" (wording owner);
+  // a record whose id doesn't match is unverified, never a disagreement.
+  'signed with their signing key',
+  'doesn’t match its own id',
+  'not matching its own id',
   // "recompute" is an internal term on screen (Sherlock2, #45)
   'does not recompute',
   'could not be recomputed',

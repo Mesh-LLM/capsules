@@ -1,0 +1,207 @@
+// What one Exchanges row shows about the other side: its state, the record of
+// theirs the badge, the checks panel and Compare all use, and the lines about
+// asking. Every source is weighed here, by these rules and nothing else:
+//
+//   1. Candidates. Records: the live fetch this browser ran, the record the
+//      pane correlated from a push, and the record an ask returned (the
+//      latest one, or the last verified one when a later ask returned none).
+//      Claims:
+//      the pane's own outcome (their signed refusal or "no record", or the
+//      door's refusal of a pushed record that named another server or model)
+//      and an ask's verified refusal or "no record".
+//   2. A record counts only when it is VERIFIED: its contents produce its id
+//      and its signature holds under the key this node has for them
+//      (`isVerifiedRecord`). An unverified record never sets Confirmed or
+//      Disagree, whatever its id or digests say.
+//   3. Among verified records (and the door's refusal), any Disagree wins,
+//      and that record is the one shown; otherwise any Confirmed wins.
+//      Disagree beats Confirmed whatever the source, so a confirming record
+//      can never hide a contradicting one.
+//   4. With no verdict, the newest verified claim stands: the pane's or the
+//      ask's, compared by the claim's signed time when both carry a full
+//      RFC 3339 time; otherwise the pane's wins over the ask's.
+//   5. The latest ask is always visible. When it isn't what the row shows, a
+//      line says what it returned ("Asked again {time}: …").
+//   6. A note never says "verified" for something the badge doesn't show: a
+//      verified record that reaches no verdict says what it is instead.
+//   7. With no verdict and no claim: "asked" once an ask was sent, else the
+//      pane's own state (not held / not given / not asked).
+//
+// The record shown (`evidence`) is the verdict's record, else the first record
+// held in the order above, so the checks panel always compares the record the
+// row is talking about.
+import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
+import type { CapsuleRecord } from '@/features/capsules/api/types'
+import { askReplyNote, recordProblems, type AskOutcome, type RowAsk } from '@/features/capsules/lib/ask-for-record'
+import {
+  deriveRightCellState,
+  isVerifiedRecord,
+  paneOutcomeState,
+  pushedHalfRecompute,
+  recordVerdict,
+  type RecordVerdict,
+  type RightCellState
+} from '@/features/capsules/lib/exchange-row-state'
+import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
+import type { PeerRecomputeState } from '@/features/capsules/lib/recompute-identity'
+
+export type EvidenceSource = 'fetched' | 'pushed' | 'asked'
+
+export type RowJudgement = {
+  state: RightCellState
+  /** The record of theirs the badge, the checks panel and Compare use. */
+  evidence: PeerRecomputeState | null
+  source: EvidenceSource | null
+  /** What an ask returned, when it is what the row shows, or when nothing
+   *  verified is shown: `verified` only for what the badge shows. */
+  askNote: { verified: boolean; text: string } | null
+  /** The latest ask, when the row shows something else verified. */
+  retryNote: string | null
+}
+
+type RecordCandidate = {
+  source: EvidenceSource
+  evidence: PeerRecomputeState
+  verdict: RecordVerdict
+  /** The ask outcome this record came from, for an asked record. */
+  outcome: AskOutcome | null
+}
+
+const RFC3339_WITH_ZONE = /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/
+
+function instant(date: string | null): number | null {
+  return date && RFC3339_WITH_ZONE.test(date) ? Date.parse(date) : null
+}
+
+const NO_VERDICT_WHY: Record<Exclude<RecordVerdict, { kind: 'closed' } | { kind: 'contradicted' }>['why'], string> = {
+  not_verified: 'it didn’t check out',
+  other_provider: 'it isn’t from the node that served you',
+  other_exchange: 'it doesn’t name your request and answer'
+}
+
+/** What the latest ask returned, in a few words, for the line under the row. */
+function attemptText(outcome: AskOutcome, verdict: RecordVerdict | null): string | null {
+  switch (outcome.kind) {
+    case 'asking':
+      return null
+    case 'no_reply':
+      return `no verified reply (${outcome.detail})`
+    case 'ambiguous':
+      return `their reply carried ${outcome.count} records that could be theirs; none is shown as theirs`
+    case 'refused':
+      return 'they declined, and signed the refusal'
+    case 'no_record':
+      return 'they say they have no record of this, signed'
+    case 'record': {
+      if (!verdict || verdict.kind === 'no_verdict') {
+        if (!isVerifiedRecord(outcome.evidence)) return `their record didn’t check out (${recordProblems(outcome.evidence)})`
+        const why = verdict?.kind === 'no_verdict' ? NO_VERDICT_WHY[verdict.why] : NO_VERDICT_WHY.other_exchange
+        return `their record checks out but doesn’t confirm this exchange: ${why}`
+      }
+      return verdict.kind === 'closed' ? 'their record matches yours' : 'their record disagrees with yours'
+    }
+  }
+}
+
+export function judgeRow(
+  row: PaneCRow,
+  localRecord: CapsuleRecord | null | undefined,
+  fetched: PeerRecomputeState | null,
+  ask: RowAsk | null
+): RowJudgement {
+  const ours = localRecord ?? (row.mine.record as CapsuleRecord | undefined) ?? null
+
+  // 1. Candidates.
+  const records: RecordCandidate[] = []
+  if (fetched?.status === 'found') {
+    records.push({ source: 'fetched', evidence: fetched, verdict: recordVerdict(fetched, ours), outcome: null })
+  }
+  const pushed = pushedHalfRecompute(row)
+  if (pushed) records.push({ source: 'pushed', evidence: pushed, verdict: recordVerdict(pushed, ours), outcome: null })
+  const askedRecord = ask?.latest.kind === 'record' ? ask.latest : (ask?.record ?? null)
+  if (askedRecord?.kind === 'record') {
+    records.push({
+      source: 'asked',
+      evidence: askedRecord.evidence,
+      verdict: recordVerdict(askedRecord.evidence, ours),
+      outcome: askedRecord
+    })
+  }
+  const pane = paneOutcomeState(row)
+  const askClaim = ask?.claim ?? null
+
+  // 2 + 3. Verified records only; Disagree beats Confirmed.
+  const contradicting = records.find((r) => r.verdict.kind === 'contradicted')
+  const confirming = records.find((r) => r.verdict.kind === 'closed')
+  const doorRefused = pane?.kind === 'contradicted' ? pane : null
+  let state: RightCellState
+  let shown: RecordCandidate | null = null
+  let shownAsk: AskOutcome | null = null
+  if (contradicting || doorRefused) {
+    shown = contradicting ?? null
+    state = contradicting ? { kind: 'contradicted', date: null } : (doorRefused as RightCellState)
+  } else if (confirming) {
+    shown = confirming
+    state = { kind: 'closed', date: null }
+  } else {
+    // 4. The newest verified claim.
+    const paneClaim = pane && (pane.kind === 'open_refused' || pane.kind === 'open_absent') ? pane : null
+    const askState: RightCellState | null = askClaim
+      ? { kind: askClaim.kind === 'refused' ? 'open_refused' : 'open_absent', date: askClaim.at }
+      : null
+    const paneAt = instant(paneClaim?.date ?? null)
+    const askAt = instant(askState?.date ?? null)
+    const askNewer = askState !== null && (paneClaim === null || (paneAt !== null && askAt !== null && askAt > paneAt))
+    if (askNewer && askState) {
+      state = askState
+      shownAsk = askClaim
+    } else if (paneClaim) {
+      state = paneClaim
+    } else if (ask) {
+      // 7. Asked, nothing verified to show.
+      state = { kind: 'open_asked', date: ask.latest.at }
+    } else {
+      state = deriveRightCellState(row, undefined, localRecord)
+      // The pane's own state without its records judged again: a held
+      // record that gave no verdict leaves the row waiting.
+      if (state.kind === 'closed' || state.kind === 'contradicted') state = { kind: 'open_not_held', date: null }
+    }
+  }
+  if (shown?.source === 'asked') shownAsk = shown.outcome
+
+  const evidenceRecord = shown ?? records[0] ?? null
+
+  // 5 + 6. The ask lines.
+  let askNote: RowJudgement['askNote'] = null
+  let retryNote: string | null = null
+  if (ask) {
+    const latest = ask.latest
+    // "Asked again" after an earlier answer that verified; else "Asked".
+    const earlier = [ask.claim, ask.record].some((o) => o !== null && o !== latest)
+    const asked = earlier ? 'Asked again' : 'Asked'
+    const latestVerdict = latest.kind === 'record' ? recordVerdict(latest.evidence, ours) : null
+    if (shownAsk) {
+      askNote = askReplyNote(shownAsk)
+      if (latest !== shownAsk) {
+        const text = attemptText(latest, latestVerdict)
+        if (text) retryNote = `${asked} ${formatExchangeTimestamp(latest.at)}: ${text}.`
+      }
+    } else {
+      const showsVerified = state.kind === 'closed' || state.kind === 'contradicted' || state.kind === 'open_refused' || state.kind === 'open_absent'
+      const text = attemptText(latest, latestVerdict)
+      if (text && showsVerified) {
+        retryNote = `${asked} ${formatExchangeTimestamp(latest.at)}: ${text}.`
+      } else if (text) {
+        askNote = { verified: false, text: `${text.charAt(0).toUpperCase()}${text.slice(1)}.` }
+      }
+    }
+  }
+
+  return {
+    state,
+    evidence: evidenceRecord?.evidence ?? null,
+    source: evidenceRecord?.source ?? null,
+    askNote,
+    retryNote
+  }
+}

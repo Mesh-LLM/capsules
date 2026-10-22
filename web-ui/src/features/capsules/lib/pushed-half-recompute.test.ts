@@ -138,8 +138,8 @@ describe('the ONE gate on a pushed half (list-path call, verdict ready on first 
     expect(await gate(await pushedPairRow({ theirs }))).toBe('contradicted')
   })
 
-  it('a body that does not recompute to its claimed id -> CONTRADICTED, never CLOSED', async () => {
-    expect(await gate(await pushedPairRow({ claimedId: 'f'.repeat(64) }))).toBe('contradicted')
+  it('a body whose id does not match its contents is not verified -> neither CLOSED nor CONTRADICTED', async () => {
+    expect(await gate(await pushedPairRow({ claimedId: 'f'.repeat(64) }))).toBe('open_not_held')
   })
 
   it('a door verdict other than true -> not CLOSED', async () => {

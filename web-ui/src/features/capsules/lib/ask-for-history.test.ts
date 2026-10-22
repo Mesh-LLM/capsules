@@ -26,7 +26,7 @@ describe('judgeHistoryReply', () => {
     expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: 3 })
     expect(historyNote(outcome)).toEqual({
       verified: true,
-      text: 'Their history is verified: 3 checkpoints of their log, each signed with their signing key and each extending the one before.'
+      text: 'Their history is verified: 3 checkpoints of their log, each signed with the key this node has for them and each extending the one before.'
     })
   })
 
@@ -35,7 +35,7 @@ describe('judgeHistoryReply', () => {
     expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: null })
     const text = historyNote(outcome)?.text ?? ''
     expect(text).toBe(
-      'Their history is verified: the checkpoints of their log, each signed with their signing key and each extending the one before.'
+      'Their history is verified: the checkpoints of their log, each signed with the key this node has for them and each extending the one before.'
     )
     expect(text).not.toMatch(/\b0 checkpoints/)
   })

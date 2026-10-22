@@ -34,8 +34,10 @@ function boolToWireState(value: boolean | null): string {
  *  it must never gate a `✓ same` claim (that requires `peerRecordFor`
  *  below to return non-null) -- conflating the two was finding 2 of the
  *  2026-09-23 assessment. */
-function theirsHeld(row: PaneCRow): boolean {
-  return row.theirs.state !== 'absent'
+function theirsHeld(row: PaneCRow, theirsRecompute?: PeerRecomputeState): boolean {
+  // A record of theirs this page holds (fetched, or brought by an ask) counts
+  // even where the pane recorded no other side (`row-evidence.ts`).
+  return row.theirs.state !== 'absent' || theirsRecompute?.status === 'found'
 }
 
 /** True only when `theirsRecompute` carries a REAL, arrived result for
@@ -105,11 +107,13 @@ export function buildIdentityRow(
   // id -- never rendered as their identity, and never fetchable
   // (`peerFetchJoinKey` already refuses it, so `theirsFetchable` disables
   // the fetch action for exactly this row).
-  const theirsCapsuleId = row.theirs.capsule_id && isDigestShaped(row.theirs.capsule_id) ? row.theirs.capsule_id : null
+  const heldId = peerRecordFor(theirsRecompute)?.capsule_id
+  const paneId = row.theirs.capsule_id && isDigestShaped(row.theirs.capsule_id) ? row.theirs.capsule_id : null
+  const theirsCapsuleId = paneId ?? (typeof heldId === 'string' && isDigestShaped(heldId) ? heldId : null)
   return {
     label: 'record id',
     yours: { value: row.mine.capsule_id ?? '—', note: yoursNote },
-    theirs: theirsHeld(row)
+    theirs: theirsHeld(row, theirsRecompute)
       ? { value: theirsCapsuleId ?? 'not given', note: theirsIdentityNote(theirsRecompute) }
       : null
   }
@@ -153,7 +157,7 @@ export function buildHeaderRows(
   theirsRecompute?: PeerRecomputeState
 ): HeaderRow[] {
   const keyId = localRecord && typeof localRecord.key_id === 'string' ? (localRecord.key_id as string) : null
-  const held = theirsHeld(row)
+  const held = theirsHeld(row, theirsRecompute)
   const peerRecord = peerRecordFor(theirsRecompute)
   const peerTimestamp = peerRecord && typeof peerRecord.timestamp === 'string' ? peerRecord.timestamp : null
   const peerKeyId = peerRecord && typeof peerRecord.key_id === 'string' ? peerRecord.key_id : null
@@ -291,7 +295,7 @@ export function buildCommitsToRows(
   const effect = (localRecord?.effect ?? null) as { request_digest?: string; response_digest?: string } | null
   const taskBindingCell = row.properties?.task_binding ?? null
   const modelId = localRecord?.model_attestation?.model_id ?? null
-  const held = theirsHeld(row)
+  const held = theirsHeld(row, theirsRecompute)
   const peerRecord = peerRecordFor(theirsRecompute)
 
   /** `theirs` is `null` (no cell at all) only when `!held` -- no
@@ -577,7 +581,7 @@ export function buildChecksRows(
   { gateKind, checkpointCovered = null, ownerLinked = null }: ChecksContext = {}
 ): ChecksRow[] {
   const gateOutcome = gateOutcomeCell(gateKind)
-  const held = theirsHeld(row)
+  const held = theirsHeld(row, theirsRecompute)
   const checkpointSignatureState = row.properties?.checkpoint_signature?.state ?? 'NOT_PRESENT'
 
   return Object.keys(NINE_PROPERTY_LABELS).map((key) => {

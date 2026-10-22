@@ -100,7 +100,14 @@ function fixturesFor(kind: RightCellStateKind): { theirs: PaneCRow['theirs']; re
     case 'contradicted':
       return {
         theirs: { state: 'NOT_CHECKED', capsule_id: 'a'.repeat(64), peer_id: 'peer-1' },
-        recompute: { ...NOT_FETCHED, status: 'found', idMatch: false, signatureOk: false, peerRecord: {} }
+        // A verified record from the node that served us, with another answer.
+        recompute: {
+          ...NOT_FETCHED,
+          status: 'found',
+          idMatch: true,
+          signatureOk: true,
+          peerRecord: fixtureHalfBody({ capsuleId: 'a'.repeat(64), responseDigest: 'e'.repeat(64) })
+        }
       }
     case 'open_refused':
       return {
@@ -664,6 +671,7 @@ describe('ExchangeStreamRow — the two row toggles replace the modal', () => {
     const row = makeRow('contradicted')
     render(
       <ExchangeStreamRow
+        localRecord={LOCAL_RECORD_WITH_DIGESTS}
         onAskForRecord={onAskForRecord}
         onToggleChecks={onToggleChecks}
         onToggleContent={vi.fn()}
@@ -1372,7 +1380,7 @@ describe('ExchangeStreamRow — whether their reply to "Ask them for their recor
     )
     const note = document.querySelector('[data-ask-reply-verified]') as HTMLElement
     expect(note).toHaveAttribute('data-ask-reply-verified', 'false')
-    expect(note).toHaveTextContent('Their reply is not verified: their reply did not verify: a proof does not verify')
+    expect(note).toHaveTextContent('No verified reply (their reply did not verify: a proof does not verify against the anchor).')
   })
 
   it('says a record the plugin proved in their log is verified', () => {
@@ -1410,7 +1418,7 @@ describe('ExchangeStreamRow — whether their reply to "Ask them for their recor
     )
     const note = document.querySelector('[data-ask-reply-verified]') as HTMLElement
     expect(note).toHaveAttribute('data-ask-reply-verified', 'false')
-    expect(note).toHaveTextContent('it is not signed with their signing key')
+    expect(note).toHaveTextContent('it is not signed with the key this node has for them')
   })
 
   it('shows no note while the ask is in flight', () => {
@@ -1520,5 +1528,30 @@ describe('ExchangeStreamRow — the record an ask returned feeds the state, the 
     render(<ExchangeStreamRow {...toggleProps()} askOutcome={ask} rail={NO_RAIL} row={makeRow('open_not_held')} />)
     expect(screen.getByText('Declined')).toBeInTheDocument()
     expect(document.querySelector('[data-ask-retry="true"]')).toHaveTextContent(/^Asked again .*: no verified reply \(HTTP 502\)\.$/)
+  })
+})
+
+describe('ExchangeStreamRow — a row the pane shows with no other side, whose ask brings a contradicting record', () => {
+  it('reads Disagree, and Compare shows the difference from the asked record', async () => {
+    const user = userEvent.setup()
+    const theirs = fixtureHalfBody({ capsuleId: 'theirs-1', responseDigest: 'e'.repeat(64) })
+    const askOutcome = settleRowAsk(null, {
+      kind: 'record',
+      at: '2026-09-28T23:00:00Z',
+      evidence: { status: 'found', idMatch: true, signatureOk: true, peerRecord: theirs, fetch: vi.fn() }
+    })
+    const row = makeRow('open_not_asked')
+    expect(row.raw.theirs.state).toBe('absent')
+    const onToggleChecks = vi.fn()
+    const { rerender } = render(
+      <ExchangeStreamRow {...toggleProps()} askOutcome={askOutcome} onToggleChecks={onToggleChecks} rail={NO_RAIL} row={row} />
+    )
+    expect(screen.getByText('Disagree')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Compare' }))
+    expect(onToggleChecks).toHaveBeenCalledWith(row)
+    rerender(<ExchangeStreamRow {...toggleProps()} askOutcome={askOutcome} checksExpanded rail={NO_RAIL} row={row} />)
+    // The panel holds their record although the pane recorded no other side.
+    expect(screen.getAllByText('✕ differs').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('e'.repeat(64)).length).toBeGreaterThan(0)
   })
 })

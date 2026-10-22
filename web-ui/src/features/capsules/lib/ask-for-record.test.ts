@@ -5,9 +5,7 @@ import {
   FIXTURE_PROVIDER_NODE,
   FIXTURE_REQUEST_DIGEST,
   FIXTURE_RESPONSE_DIGEST,
-  fixtureHalfBody,
-  fixtureMineCell,
-  fixtureTheirsCell
+  fixtureHalfBody
 } from '@/features/capsules/lib/pushed-half-fixtures'
 import type { EvidenceVerification } from '@/features/capsules/api/evidenceRequestClient'
 import type { PeerRecomputeState } from '@/features/capsules/lib/recompute-identity'
@@ -21,14 +19,12 @@ import {
   judgeAskReply,
   producerSignatureVerifies,
   refusalSigningBody,
-  rowEvidence,
   settleRowAsk,
-  stateWithAsk,
-  askRetryNote,
   type AskOutcome,
   type RowAsk,
   type AskJudges
 } from './ask-for-record'
+import { judgeRow } from './row-evidence'
 
 const ASKED_AT = '2026-09-28T21:00:00Z'
 
@@ -36,7 +32,7 @@ const ASKED_AT = '2026-09-28T21:00:00Z'
 function stateAfterAsks(row: PaneCRow, outcomes: AskOutcome[], local: unknown, fetched: PeerRecomputeState | null = null) {
   let ask: RowAsk | null = null
   for (const outcome of outcomes) ask = settleRowAsk(ask, outcome)
-  return stateWithAsk(rowEvidence(row, local as never, fetched, ask).gate, ask)
+  return judgeRow(row, local as never, fetched, ask).state
 }
 
 function stateAfterAsk(row: PaneCRow, outcome: AskOutcome, local: unknown) {
@@ -285,7 +281,7 @@ describe('judgeAskReply', () => {
   it('never takes a refusal signed with a throwaway key instead of their announced one', async () => {
     const throwaway = signedRefusal('no_such_subject', { secret: ed25519.utils.randomSecretKey() })
     const outcome = await judgeAskReply(answer(throwaway), null, ASKED_AT)
-    expect(outcome).toMatchObject({ kind: 'no_reply', detail: 'their reply is not signed with their signing key' })
+    expect(outcome).toMatchObject({ kind: 'no_reply', detail: 'their reply is not signed with the key this node has for them' })
     expect(stateAfterAsk(waitingRow(), outcome, null).kind).toBe('open_asked')
   })
 
@@ -360,7 +356,7 @@ describe('judgeAskReply', () => {
     expect(askReplyNote(await judged(trustingJudges))?.verified).toBe(true)
     expect(askReplyNote(await judged({ ...trustingJudges, producerSignatureVerifies: () => false }))).toEqual({
       verified: false,
-      text: 'Their record is in their log, but it is not verified: it is not signed with their signing key'
+      text: 'Their record is in their log, but it is not verified: it is not signed with the key this node has for them'
     })
     expect(askReplyNote(await judged({ ...trustingJudges, recomputeIdMatch: async () => false }))).toEqual({
       verified: false,
@@ -513,80 +509,5 @@ describe('producerSignatureVerifies', () => {
   it('fails when the envelope does not sign the record’s own id', () => {
     const record = signedRecord(PEER_SECRET)
     expect(producerSignatureVerifies({ ...record, capsule_id: '08'.repeat(32) }, ANNOUNCED)).toBe(false)
-  })
-})
-
-describe('the row state across asks: a verdict wins, a verified answer stands', () => {
-  const ours = () => ourRequestedRecord()
-  const failed = (at: string): AskOutcome => ({ kind: 'no_reply', at, detail: 'HTTP 502' })
-  const LATER = '2026-09-28T22:00:00Z'
-
-  /** A row whose pushed record (from the node that served us) agrees, as the
-   *  next pane poll would carry it. */
-  function pushedAgreeing(): PaneCRow {
-    return { ...waitingRow(), mine: fixtureMineCell(), theirs: fixtureTheirsCell('agrees') } as PaneCRow
-  }
-
-  it('(a) a failed ask, then their pushed record arrives: the row reads Confirmed, not "asked"', () => {
-    expect(stateAfterAsks(waitingRow(), [failed(ASKED_AT)], ours()).kind).toBe('open_asked')
-    expect(stateAfterAsks(pushedAgreeing(), [failed(ASKED_AT)], null).kind).toBe('closed')
-  })
-
-  it('(a) a failed ask, then "Get their record" fetches an agreeing record: Confirmed', () => {
-    const fetched: PeerRecomputeState = {
-      status: 'found',
-      idMatch: true,
-      signatureOk: true,
-      peerRecord: fixtureHalfBody({ capsuleId: 'theirs-1' }),
-      fetch: () => {}
-    }
-    expect(stateAfterAsks(waitingRow(), [failed(ASKED_AT)], ours(), fetched).kind).toBe('closed')
-  })
-
-  it('(b) a failed or in-flight retry never replaces their verified refusal or "no record"', async () => {
-    const refused = await judgeAskReply(answer(signedRefusal('not_authorized')), null, ASKED_AT)
-    const noRecord = await judgeAskReply(answer(signedRefusal('no_such_subject')), null, ASKED_AT)
-    for (const first of [refused, noRecord]) {
-      const expected = first.kind === 'refused' ? 'open_refused' : 'open_absent'
-      for (const retry of [failed(LATER), { kind: 'asking', at: LATER } as AskOutcome, { kind: 'ambiguous', at: LATER, count: 2 } as AskOutcome]) {
-        const state = stateAfterAsks(waitingRow(), [first, retry], ours())
-        expect(state).toEqual({ kind: expected, date: '2026-09-28T21:00:05Z' })
-      }
-    }
-  })
-
-  it('(b) nor a refusal or absence the pane already carried', () => {
-    const paneRefused = {
-      ...waitingRow(),
-      theirs: { state: 'absent', capsule_id: null, evidence_outcome: 'signed_refusal', evidence_outcome_date: '4 Sep' }
-    } as unknown as PaneCRow
-    expect(stateAfterAsks(paneRefused, [failed(LATER)], ours())).toEqual({ kind: 'open_refused', date: '4 Sep' })
-  })
-
-  it('(b) the failed retry is said on its own line, beside the answer that stands', async () => {
-    const refused = await judgeAskReply(answer(signedRefusal('not_authorized')), null, ASKED_AT)
-    const ask = settleRowAsk(settleRowAsk(null, refused), failed(LATER))
-    expect(ask.verified).toBe(refused)
-    expect(askRetryNote(ask, false)).toMatch(/^Asked again .*: no verified reply \(HTTP 502\)\.$/)
-    // A first ask that fails is the row's own state, not a retry.
-    expect(askRetryNote(settleRowAsk(null, failed(ASKED_AT)), false)).toBeNull()
-    expect(askRetryNote(settleRowAsk(null, failed(ASKED_AT)), true)).not.toBeNull()
-  })
-
-  it('a later verified answer does replace an earlier one', async () => {
-    const refused = await judgeAskReply(answer(signedRefusal('not_authorized')), null, ASKED_AT)
-    const noRecord = await judgeAskReply(answer(signedRefusal('no_such_subject')), null, LATER)
-    expect(stateAfterAsks(waitingRow(), [refused, noRecord], ours()).kind).toBe('open_absent')
-  })
-})
-
-describe('rowEvidence: one record of theirs for the state, the panel and Compare', () => {
-  it('a record an ask brought is the evidence the panel shows, and its verdict is the row’s', async () => {
-    const theirs = { ...fixtureHalfBody({ capsuleId: 'theirs-1', responseDigest: 'e'.repeat(64) }), signature: 'aa', key_id: 'bb' }
-    const outcome = await judgeAskReply(answer(artifact([theirs])), FIXTURE_REQUEST_DIGEST, ASKED_AT, trustingJudges)
-    const judged = rowEvidence(waitingRow(), ourRequestedRecord() as never, null, settleRowAsk(null, outcome))
-    expect(judged.source).toBe('asked')
-    expect(judged.gate.kind).toBe('contradicted')
-    expect(judged.evidence?.peerRecord).toEqual(theirs)
   })
 })

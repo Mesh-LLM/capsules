@@ -25,17 +25,14 @@ import { buildChecksRows } from '@/features/capsules/lib/security-checks-view'
 import { theirContentText, yourContentFixedText } from '@/features/capsules/lib/exchange-content-state'
 import { isServedForPay, type ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
 import {
-  askReplyNote,
-  askRetryNote,
   askTarget,
   otherSideNodeId,
   rowAskControls,
-  rowEvidence,
-  stateWithAsk,
   type AskTarget,
   type RowAsk,
   type RowAskControl
 } from '@/features/capsules/lib/ask-for-record'
+import { judgeRow } from '@/features/capsules/lib/row-evidence'
 import { historyNote, type HistoryOutcome } from '@/features/capsules/lib/ask-for-history'
 import { HoverChip } from '@/features/capsules/components/HoverChip'
 import { entryRowChipMark, entryRowChipPropertyKey } from '@/features/capsules/lib/entry-row-chips'
@@ -256,23 +253,17 @@ export function ExchangeStreamRow({
   // pane already correlated (its capsule_id recomputed before the query
   // resolved). Either way the SAME gate below judges it, and the checks panel
   // shows the same evidence.
-  // A record an ask returned is one more source, judged by the same gate; the
-  // ONE record chosen (`rowEvidence`) feeds the state, the checks panel and
-  // Compare alike.
+  // Every source of their record, their claims and our asks, weighed by the
+  // rules in `row-evidence.ts`: the ONE record chosen feeds the state, the
+  // checks panel and Compare alike.
   const peerFetch = usePeerLedgerRecompute(row.raw)
-  const judged = rowEvidence(row.raw, localRecord, peerFetch, askOutcome)
+  const judged = judgeRow(row.raw, localRecord, peerFetch, askOutcome)
   // "Get their record and check it here" always runs the live fetch, whichever
   // record is shown (a pushed or asked one carries no fetch of its own).
   const theirsRecompute = judged.evidence ? { ...judged.evidence, fetch: peerFetch.fetch } : peerFetch
-  // A verdict from their record wins; otherwise the latest verified reply to
-  // an ask stands, and a failed retry never replaces it.
-  const state = stateWithAsk(judged.gate, askOutcome)
-  // Whether the plugin verified their reply, and if not, why: said on the row.
-  const askNote = askOutcome ? askReplyNote(askOutcome.verified ?? askOutcome.latest) : null
-  const retryNote = askRetryNote(
-    askOutcome,
-    judged.gate.kind === 'open_refused' || judged.gate.kind === 'open_absent'
-  )
+  const state = judged.state
+  const askNote = judged.askNote
+  const retryNote = judged.retryNote
   const alarm = isAlarmState(state)
   // Whom to ask, and how to name the exchange, from our own record of it.
   const askFor = askTarget(localRecord ?? (row.raw.mine.record as CapsuleRecord | undefined) ?? null)
