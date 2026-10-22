@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ExchangeStreamRow } from '@/features/capsules/components/ExchangeStreamRow'
 import { settleRowAsk as settleRowAskWith, type AskOutcome, type RowAsk } from '@/features/capsules/lib/ask-for-record'
 import { exchangeRowDomId } from '@/features/capsules/lib/exchange-pages'
+import { peerName as peerNameWith } from '@/features/capsules/lib/peer-names'
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import {
   CONFIRMED_NOT_KEPT,
@@ -546,16 +547,65 @@ describe('ExchangeStreamRow — bilateral-retention-decay-property (agent-action
 })
 
 describe('ExchangeStreamRow — counterparty field', () => {
-  it('renders the node id when a counterparty is attributed', () => {
-    render(<ExchangeStreamRow  {...toggleProps()} rail={NO_RAIL} row={makeRow('closed')} />)
+  it('renders the pane’s counterparty when our record names no node', () => {
+    render(<ExchangeStreamRow {...toggleProps()} localRecord={null} rail={NO_RAIL} row={makeRow('closed')} />)
     expect(screen.getByText('node:aa11bb22')).toBeInTheDocument()
     expect(screen.queryByText('other side not recorded')).not.toBeInTheDocument()
+  })
+
+  it('one row names one peer: the event line and the verdict both name the node our record names', () => {
+    // The pane's label is a signing key; our record names the node.
+    render(
+      <ExchangeStreamRow
+        {...toggleProps()}
+        rail={NO_RAIL}
+        row={makeRow('closed', { counterparty: 'key:63fd6be86ed33725' })}
+      />
+    )
+    const short = FIXTURE_PROVIDER_NODE.slice(0, 10)
+    expect(document.querySelector('[data-event-line]')).toHaveTextContent(`You asked ${short}`)
+    expect(document.querySelector('[data-row-verdict-text]')).toHaveTextContent(`✓ You and ${short} recorded the same exchange`)
+    expect(screen.queryByText(/63fd6be86e/)).not.toBeInTheDocument()
+  })
+
+  it('a key: counterparty resolves to the node their record came from, then to its hostname, on both sides', () => {
+    const node = 'e7c7916261' + 'd'.repeat(54)
+    // Their record is held (pushed), so the pane keys the row by signing key.
+    const base = makeRow('open_not_asked', { counterparty: 'key:63fd6be86ed33725' })
+    const row = {
+      ...base,
+      raw: { ...base.raw, mine: fixtureMineCell(), theirs: fixtureTheirsCell('agrees', { receivedFrom: node }) }
+    }
+    const peerName = (id: string) => peerNameWith(id, new Map([['e7c7916261', 'Ethans-Mac-Mini']]))
+    render(<ExchangeStreamRow {...toggleProps()} localRecord={null} peerName={peerName} rail={NO_RAIL} row={row} />)
+    expect(screen.getByText('Confirmed')).toBeInTheDocument()
+    expect(document.querySelector('[data-event-line]')).toHaveTextContent('You asked Ethans-Mac-Mini (e7c7916261)')
+    expect(document.querySelector('[data-row-verdict-text]')).toHaveTextContent(
+      '✓ You and Ethans-Mac-Mini (e7c7916261) recorded the same exchange'
+    )
+  })
+
+  it('a key: counterparty resolves through Pane B’s node id when the row carries none', () => {
+    const row = makeRow('closed', { counterparty: 'key:63fd6be86ed33725' })
+    const peerName = (id: string) => peerNameWith(id, new Map([['e7c7916261', 'Ethans-Mac-Mini']]))
+    render(
+      <ExchangeStreamRow
+        {...toggleProps()}
+        counterpartyNodeId={'e7c7916261' + 'd'.repeat(54)}
+        localRecord={null}
+        peerName={peerName}
+        rail={NO_RAIL}
+        row={row}
+      />
+    )
+    expect(document.querySelector('[data-event-line]')).toHaveTextContent('You asked Ethans-Mac-Mini (e7c7916261)')
   })
 
   it('ADVERSARIAL: reads "other side not recorded" — never "unknown peer", never "peer identity not resolved yet" — when unattributed', () => {
     render(
       <ExchangeStreamRow
         {...toggleProps()}
+        localRecord={null}
         rail={NO_RAIL}
         row={makeRow('closed', { counterparty: null })}
       />
@@ -857,6 +907,7 @@ describe('ExchangeStreamRow — UX §3: the left cell is the event in words; no 
     expect(durationText(320)).toBe('320 ms')
     expect(tokenFlowText(null, null)).toBeNull()
     expect(tokenFlowText(46, 2)).toBe('46 → 2 tokens')
+    expect(tokenFlowText(34, 1)).toBe('34 → 1 token')
   })
 
   it('offers both asks on a fresh exchange: record push is off by default, so there is no wait', () => {
@@ -1559,10 +1610,18 @@ describe('ExchangeStreamRow — the two asks on the row face', () => {
       />
     )
     expect(document.querySelector('[data-history-reply-verified="true"]')).toHaveTextContent(
-      'Their history is verified: 4 checkpoints of their log'
+      '✓ Their history checks out · 4 checkpoints'
     )
     expect(document.querySelector('[data-history-checked]')).toHaveTextContent(
       `checked ${formatExchangeTimestamp('2026-10-22T10:00:00Z')}`
+    )
+    // The face line: "✓ Their history checks out · 4 checkpoints · checked {time}";
+    // how it was checked sits behind the (i).
+    expect(document.querySelector('[data-history-reply-verified="true"]')?.firstChild?.textContent).toBe(
+      '✓ Their history checks out · 4 checkpoints'
+    )
+    expect(screen.getByRole('button', { name: 'About their history' })).toHaveAccessibleDescription(
+      'Their history is verified: 4 checkpoints of their log, each signed with the key this node has for them and each extending the one before.'
     )
     expect(screen.getByRole('button', { name: 'Ask for their history' })).toBeEnabled()
   })
@@ -1630,6 +1689,15 @@ describe('ExchangeStreamRow — the record an ask returned feeds the state, the 
     render(<ExchangeStreamRow {...toggleProps()} askOutcome={ask} rail={NO_RAIL} row={makeRow('open_not_held')} />)
     expect(screen.getByText('Declined')).toBeInTheDocument()
     expect(document.querySelector('[data-ask-retry="true"]')).toHaveTextContent(/Asked again .*: no verified reply \(HTTP 502\)\.$/)
+  })
+
+  it('a record ask they declined: "They declined" on the face, and the (i) says the signed refusal once, with its time and reason', () => {
+    const ask = settleRowAsk(null, { kind: 'refused', at: '2026-09-28T23:00:00Z', reason: 'not_authorized' })
+    render(<ExchangeStreamRow {...toggleProps()} askOutcome={ask} rail={NO_RAIL} row={makeRow('open_not_held')} />)
+    expect(document.querySelector('[data-row-verdict-text]')).toHaveTextContent('They declined')
+    expect(document.querySelector('[data-verdict-detail]')?.textContent).toBe(
+      `Signed refusal, ${formatExchangeTimestamp('2026-09-28T23:00:00Z')}: their sharing settings don’t let them send it to this node. Their reply is verified: signed with the key this node has for them, for this request.`
+    )
   })
 
   it('an ask to a node that left the mesh says so in plain words, never the tool’s error', () => {

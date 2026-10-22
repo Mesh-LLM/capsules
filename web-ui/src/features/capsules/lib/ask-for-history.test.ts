@@ -27,19 +27,24 @@ describe('judgeHistoryReply', () => {
     expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: 3 })
     expect(historyNote(outcome)).toEqual({
       verified: true,
-      text: 'Their history is verified: 3 checkpoints of their log, each signed with the key this node has for them and each extending the one before.',
-      checkedLine: `checked ${formatExchangeTimestamp(ASKED_AT)}`
+      text: '✓ Their history checks out · 3 checkpoints',
+      checkedLine: `checked ${formatExchangeTimestamp(ASKED_AT)}`,
+      detail:
+        'Their history is verified: 3 checkpoints of their log, each signed with the key this node has for them and each extending the one before.'
     })
+    const one = judgeHistoryReply(reply({}, { state: 'artifact', records: [], checkpoints: 1 }), ASKED_AT)
+    expect(historyNote(one)?.text).toBe('✓ Their history checks out · 1 checkpoint')
   })
 
   it('a verified card whose checkpoint count the plugin didn’t give reads as unknown, never "0 checkpoints"', () => {
     const outcome = judgeHistoryReply(reply({}, { state: 'artifact', records: [] }), ASKED_AT)
     expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: null })
-    const text = historyNote(outcome)?.text ?? ''
-    expect(text).toBe(
+    const note = historyNote(outcome)
+    expect(note?.text).toBe('✓ Their history checks out')
+    expect(note?.detail).toBe(
       'Their history is verified: the checkpoints of their log, each signed with the key this node has for them and each extending the one before.'
     )
-    expect(text).not.toMatch(/\b0 checkpoints/)
+    expect(`${note?.text} ${note?.detail}`).not.toMatch(/\b0 checkpoints/)
   })
 
   it('a refusal signed with their announced key over our request is their signed refusal, in plain words', () => {

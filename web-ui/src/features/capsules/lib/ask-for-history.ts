@@ -76,7 +76,9 @@ export function historyRefusalWords(reason: string): string {
 /** The line a row shows for its history ask, or `null` while it is in flight.
  *  A verified history says when it was checked (`checkedLine`), since a
  *  remembered one can be from an earlier visit (`history-memory.ts`). */
-export function historyNote(outcome: HistoryOutcome): { verified: boolean; text: string; checkedLine?: string } | null {
+export function historyNote(
+  outcome: HistoryOutcome
+): { verified: boolean; text: string; checkedLine?: string; detail?: string } | null {
   switch (outcome.kind) {
     case 'asking':
       return null
@@ -84,10 +86,12 @@ export function historyNote(outcome: HistoryOutcome): { verified: boolean; text:
       // An unknown count is said as unknown, never as zero.
       const n = outcome.checkpoints
       const listed = n === null ? 'the checkpoints' : `${n} checkpoint${n === 1 ? '' : 's'}`
+      // Short on the face; how it was checked behind the (i).
       return {
         verified: true,
-        text: `Their history is verified: ${listed} of their log, each signed with the key this node has for them and each extending the one before.`,
-        checkedLine: `checked ${formatExchangeTimestamp(outcome.at)}`
+        text: n === null ? '✓ Their history checks out' : `✓ Their history checks out · ${listed}`,
+        checkedLine: `checked ${formatExchangeTimestamp(outcome.at)}`,
+        detail: `Their history is verified: ${listed} of their log, each signed with the key this node has for them and each extending the one before.`
       }
     }
     case 'refused':

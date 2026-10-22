@@ -29,6 +29,7 @@ import {
   type AskJudges
 } from './ask-for-record'
 import { judgeRow } from './row-evidence'
+import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 
 const ASKED_AT = '2026-09-28T21:00:00Z'
 
@@ -367,9 +368,11 @@ describe('judgeAskReply', () => {
 
   it('gives a declined record ask its reason in plain words, and never echoes an unknown token', async () => {
     const refusal = await judgeAskReply(answer(signedRefusal('not_authorized')), null, ASKED_AT)
+    // "Signed refusal, {time}: {reason}." -- the decline said once, with its time.
     expect(askReplyNote(refusal)?.text).toBe(
-      'They declined to send their record (their sharing settings don’t let them send it to this node). Their reply is verified: signed with the key this node has for them, for this request'
+      `Signed refusal, ${formatExchangeTimestamp(refusal.at)}: their sharing settings don’t let them send it to this node. Their reply is verified: signed with the key this node has for them, for this request.`
     )
+    expect(askReplyNote(refusal)?.text.match(/declined/g)).toBeNull()
     for (const reason of ['policy_declined', 'deadline_unmet', 'request_malformed', 'retention_expired', 'derivation_unsupported']) {
       expect(recordRefusalWords(reason)).not.toContain('_')
     }

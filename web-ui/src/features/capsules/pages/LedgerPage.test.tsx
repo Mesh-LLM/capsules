@@ -966,7 +966,7 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     const { askForHistory } = await import('@/features/capsules/api/evidenceRequestClient')
     await user.click(screen.getByRole('button', { name: 'Ask for their history' }))
     expect(askForHistory).toHaveBeenCalledWith('c'.repeat(64))
-    expect(await screen.findByText(/^Their history is verified: 2 checkpoints of their log/)).toBeInTheDocument()
+    expect(await screen.findByText(/^✓ Their history checks out · 2 checkpoints/)).toBeInTheDocument()
 
     // Nothing on this row ever opens a dialog -- not the ask action, not
     // the `▸ checks` toggle either.
@@ -2083,6 +2083,17 @@ describe('LedgerPageContent — the plain-verdict pass on Exchanges', () => {
     cleanup()
   })
 
+  it('says once, with one colon, that no client marked a pair', async () => {
+    const { fetchPaneCList } = await oneAskableRow()
+    const list = await vi.mocked(fetchPaneCList).getMockImplementation()?.()
+    vi.mocked(fetchPaneCList).mockResolvedValue({ ...(list as object), referee: { twins_marked: false } } as never)
+    await openExchanges()
+    expect(screen.getByTestId('twins-unmarked')).toHaveTextContent(
+      'Side-by-side check — No ruling yet: no client marked these as a pair.'
+    )
+    expect(screen.getByTestId('twins-unmarked').textContent?.match(/:/g)).toHaveLength(1)
+  })
+
   it('opens with one line saying what a row is and what Confirmed means', async () => {
     await oneAskableRow()
     await openExchanges()
@@ -2098,22 +2109,22 @@ describe('LedgerPageContent — the plain-verdict pass on Exchanges', () => {
     } as never)
     await oneAskableRow()
     await openExchanges()
-    // The event line names the other node, the full label kept as its title.
+    // The event line names the node our record names, its full id as the title.
     const named = screen.getByText('Ethans-Mac-Mini (cccccccccc)')
-    expect(named).toHaveAttribute('title', `node:${'c'.repeat(16)}`)
+    expect(named).toHaveAttribute('title', PEER)
   })
 
   it('a verified history result is remembered per peer, and shown after a reload with when it was checked', async () => {
     await oneAskableRow()
     const first = await openExchanges()
     await first.user.click(screen.getByRole('button', { name: 'Ask for their history' }))
-    expect(await screen.findByText(/^Their history is verified: 2 checkpoints/)).toBeInTheDocument()
+    expect(await screen.findByText(/^✓ Their history checks out · 2 checkpoints/)).toBeInTheDocument()
     first.unmount()
 
     // A fresh page, no ask sent: the remembered result shows, with its time.
     await oneAskableRow()
     await openExchanges()
-    expect(await screen.findByText(/^Their history is verified: 2 checkpoints/)).toBeInTheDocument()
+    expect(await screen.findByText(/^✓ Their history checks out · 2 checkpoints/)).toBeInTheDocument()
     expect(document.querySelector('[data-history-checked]')?.textContent).toMatch(/checked /)
     const { askForHistory } = await import('@/features/capsules/api/evidenceRequestClient')
     expect(askForHistory).toHaveBeenCalledTimes(1)
@@ -2159,11 +2170,11 @@ describe('LedgerPageContent — the plain-verdict pass on Exchanges', () => {
       JSON.stringify({ [PEER]: { kind: 'verified', at: '2026-10-22T10:00:00Z', checkpoints: 2 } })
     )
     await openExchanges()
-    expect(await screen.findAllByText(/^Their history is verified: 2 checkpoints/)).toHaveLength(1)
+    expect(await screen.findAllByText(/^✓ Their history checks out · 2 checkpoints/)).toHaveLength(1)
     const newer = screen.getByLabelText('Exchange exch-newer')
     const older = screen.getByLabelText('Exchange exch-older')
-    expect(within(newer).getByText(/^Their history is verified/)).toBeInTheDocument()
-    expect(within(older).queryByText(/^Their history is verified/)).not.toBeInTheDocument()
+    expect(within(newer).getByText(/^✓ Their history checks out/)).toBeInTheDocument()
+    expect(within(older).queryByText(/^✓ Their history checks out/)).not.toBeInTheDocument()
   })
 
   it('after an ask brings back a record, the page reads its panes again so the row comes from the node', async () => {

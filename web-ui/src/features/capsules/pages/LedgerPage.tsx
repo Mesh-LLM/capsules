@@ -500,6 +500,17 @@ function ExchangesSection({
     () => buildExchangeCounterpartyIndex(paneBQuery.data?.rows ?? []),
     [paneBQuery.data]
   )
+  // A peer Pane B keys by signing key (`key:…`) -> the node id its identity
+  // names, so a row can name that node rather than the key.
+  const keyNodeIds = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const peer of paneBQuery.data?.rows ?? []) {
+      const id = peerDisplayId(peer)
+      const nodeId = peer.identity?.node_id
+      if (id?.toLowerCase().startsWith('key:') && nodeId) map.set(id, nodeId)
+    }
+    return map
+  }, [paneBQuery.data])
   const allRows = useMemo(
     () => buildExchangeLedgerRows(query.data?.rows ?? [], counterpartyIndex, recordsById),
     [query.data, counterpartyIndex, recordsById]
@@ -886,7 +897,7 @@ function ExchangesSection({
       ) : null}
       {twinsUnmarkedLine ? (
         <p className="type-caption text-fg-faint" data-testid="twins-unmarked">
-          Side-by-side check: {twinsUnmarkedLine}
+          Side-by-side check — {twinsUnmarkedLine}
         </p>
       ) : null}
 
@@ -1101,6 +1112,7 @@ function ExchangesSection({
                         ownerLinked={nodeOwnerLinked}
                         peerName={peerName}
                         witnessOff={witnessOff}
+                        counterpartyNodeId={row.counterparty ? (keyNodeIds.get(row.counterparty) ?? null) : null}
                         onToggleChecks={handleToggleChecks}
                         onToggleContent={handleToggleContent}
                         rail={railSegments[pageStart + index]}

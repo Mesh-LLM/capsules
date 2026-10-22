@@ -68,7 +68,7 @@ import { useClipboardCopy } from '@/lib/useClipboardCopy'
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import { RowVerdictLine } from '@/features/capsules/components/RowVerdictLine'
 import { rowCombinationText } from '@/features/capsules/lib/row-combination'
-import { NO_PEER_NAMES, peerName as namePeer } from '@/features/capsules/lib/peer-names'
+import { NO_PEER_NAMES, peerName as namePeer, resolveRowPeer } from '@/features/capsules/lib/peer-names'
 import { rowSteps, rowVerdictText, type RowStep } from '@/features/capsules/lib/row-verdict'
 import {
   CONFIRMED_NOT_KEPT,
@@ -260,6 +260,9 @@ export type ExchangeStreamRowProps = {
   peerName?: (id: string) => string
   /** No witness is set on this node: no "witnessed" chip in the checks. */
   witnessOff?: boolean
+  /** The node Pane B joins to this row's `key:` counterparty
+   *  (`identity.node_id`), when it knows one (`resolveRowPeer`). */
+  counterpartyNodeId?: string | null
 }
 
 const shortIdOnly = (id: string) => namePeer(id, NO_PEER_NAMES)
@@ -282,7 +285,8 @@ export function ExchangeStreamRow({
   historyOutcome = null,
   onAskForHistory,
   peerName = shortIdOnly,
-  witnessOff = false
+  witnessOff = false,
+  counterpartyNodeId = null
 }: ExchangeStreamRowProps) {
   // Lifted here (not `SecurityChecksView`, which only mounts once `▸
   // checks` is expanded) so a fetch this hook's `.fetch()` triggers can
@@ -328,14 +332,21 @@ export function ExchangeStreamRow({
   // The face says the verdict in plain words, naming the other node; the
   // longer sentences (the state's own, and what an ask returned and how it
   // was checked) move behind its (i).
-  const otherSide = askPeer ?? row.counterparty
+  // One node, named once: the event line and the verdict say the same.
+  const otherSide = resolveRowPeer({
+    askPeer,
+    counterparty: row.counterparty,
+    receivedFrom: row.raw.theirs.received_from ?? null,
+    keyNodeId: counterpartyNodeId
+  })
+  const otherSideName = otherSide ? peerName(otherSide) : null
   // An ask that couldn't reach the node (it left the mesh) is said on the
   // face, not only behind the (i).
   const latestAsk = askOutcome?.latest ?? null
   const notOnMesh = latestAsk?.kind === 'no_reply' && latestAsk.plain === true && latestAsk.detail === NOT_ON_MESH
   const faceText = gatedByCounterparty
     ? gatedText
-    : rowVerdictText(state, otherSide ? peerName(otherSide) : null, notOnMesh)
+    : rowVerdictText(state, otherSideName, notOnMesh)
   // A confirmation from the record the node holds because this node asked
   // for it (the pane's `via: "ask"`; a pushed one is `"push"`) says so.
   // One the ask brought but the plugin couldn't save says that instead.
@@ -345,7 +356,10 @@ export function ExchangeStreamRow({
       ? SAVED_BECAUSE_YOU_ASKED
       : null
   // Nothing the face already says is repeated behind the (i).
-  const verdictDetail = [cellText, savedByAsk, askNote ? askNote.text : null, retryNote]
+  // Their signed refusal, when an ask brought it, says the decline with its
+  // time and reason; the state's own "They declined…" would say it twice.
+  const refusalFromAsk = state.kind === 'open_refused' && askNote !== null
+  const verdictDetail = [refusalFromAsk ? null : cellText, savedByAsk, askNote ? askNote.text : null, retryNote]
     .filter((text): text is string => text !== null)
     .map(sentence)
     .filter((text) => text !== sentence(faceText))
@@ -398,7 +412,7 @@ export function ExchangeStreamRow({
       registered: entryRowChipMark(checksRows, 'registered')
     },
     refusedAtTheDoor: row.raw.theirs.evidence_outcome === 'claims_refused',
-    askPeer: askPeer ? peerName(askPeer) : null
+    askPeer: askPeer ? otherSideName : null
   })
   const steps = rowSteps({
     sealed: row.raw.mine.state !== 'absent',
@@ -501,9 +515,9 @@ export function ExchangeStreamRow({
                reader gets "You asked key:… · model · 46 → 2 tokens". */}
             <p className="text-xs text-foreground" data-event-line="true">
               <span className="font-medium">{roleText(row.roleTag)}</span>{' '}
-              {row.counterparty ? (
-                <span className="font-mono" title={row.counterparty}>
-                  {peerName(row.counterparty)}
+              {otherSide ? (
+                <span className="font-mono" title={otherSide}>
+                  {otherSideName}
                 </span>
               ) : (
                 <span className="text-fg-dim">other side not recorded</span>
@@ -591,6 +605,12 @@ export function ExchangeStreamRow({
                     {' '}
                     · {historyLine.checkedLine}
                   </span>
+                ) : null}
+                {historyLine.detail ? (
+                  <>
+                    {' '}
+                    <InfoHover census="row:history_detail" describes="their history" label={historyLine.detail} side="left" />
+                  </>
                 ) : null}
               </p>
             ) : null}

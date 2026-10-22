@@ -31,6 +31,7 @@ import {
   type RightCellStateKind
 } from '@/features/capsules/lib/exchange-row-state'
 import { recomputeIdMatch, type PeerRecomputeState } from '@/features/capsules/lib/recompute-identity'
+import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import { SAMPLE_DATA_UNAVAILABLE } from '@/features/capsules/lib/tooltip-copy'
 
 /** What asking produced for one row. `at` is when this node asked or when the
@@ -426,7 +427,7 @@ export function askReplyNote(outcome: AskOutcome): { verified: boolean; text: st
     case 'refused':
       return {
         verified: true,
-        text: `They declined to send their record (${recordRefusalWords(outcome.reason)}). ${SIGNED_FOR_THIS_REQUEST}`
+        text: `Signed refusal, ${formatExchangeTimestamp(outcome.at)}: ${recordRefusalWords(outcome.reason)}. ${SIGNED_FOR_THIS_REQUEST}.`
       }
     case 'no_record':
       return { verified: true, text: SIGNED_FOR_THIS_REQUEST }
