@@ -76,8 +76,9 @@ export function peerName(id: string, index: PeerNameIndex): string {
 /** The ONE node a row names, for its event line and its verdict alike.
  *  Once their record is held, the pane keys the row by signing key
  *  (`key:<16 hex>`), which names no node; the node is then, in order: the
- *  node the held record was received from (`theirs.received_from`), the node
- *  our own record names (`askPeer`), the node Pane B joins to that key
+ *  node our own record names (`askPeer`, the node every ask on the row goes
+ *  to), the node the held record was received from (`theirs.received_from`,
+ *  the sender's own word), the node Pane B joins to that key
  *  (`identity.node_id`). Otherwise our record's node, then the pane's label.
  *  The key label stands only when no node id is known. */
 export function resolveRowPeer(input: {
@@ -89,7 +90,7 @@ export function resolveRowPeer(input: {
   const nodeId = (id: string | null | undefined) => (id && peerShortId(id) ? id : null)
   const counterparty = input.counterparty
   if (counterparty?.toLowerCase().startsWith('key:')) {
-    return nodeId(input.receivedFrom) ?? input.askPeer ?? nodeId(input.keyNodeId) ?? counterparty
+    return input.askPeer ?? nodeId(input.receivedFrom) ?? nodeId(input.keyNodeId) ?? counterparty
   }
   return input.askPeer ?? counterparty
 }

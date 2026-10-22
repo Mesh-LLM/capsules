@@ -51,12 +51,12 @@ describe('the one node a row names', () => {
   const NODE = 'e7c7916261' + 'd'.repeat(54)
   const ASKED = 'c'.repeat(64)
 
-  it('a key: label resolves to the node their held record came from, before anything else', () => {
-    expect(resolveRowPeer({ askPeer: ASKED, counterparty: 'key:63fd6be86ed33725', receivedFrom: NODE })).toBe(NODE)
+  it('a key: label resolves to the node our record names first: a held record from another sender never renames the row', () => {
+    expect(resolveRowPeer({ askPeer: ASKED, counterparty: 'key:63fd6be86ed33725', receivedFrom: NODE })).toBe(ASKED)
   })
 
-  it('then to the node our record names, then to the node Pane B joins to the key', () => {
-    expect(resolveRowPeer({ askPeer: ASKED, counterparty: 'key:63fd6be86ed33725', keyNodeId: NODE })).toBe(ASKED)
+  it('then to the node their held record came from, then to the node Pane B joins to the key', () => {
+    expect(resolveRowPeer({ askPeer: null, counterparty: 'key:63fd6be86ed33725', receivedFrom: NODE, keyNodeId: ASKED })).toBe(NODE)
     expect(resolveRowPeer({ askPeer: null, counterparty: 'key:63fd6be86ed33725', keyNodeId: NODE })).toBe(NODE)
   })
 

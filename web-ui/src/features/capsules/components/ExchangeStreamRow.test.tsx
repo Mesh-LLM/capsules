@@ -568,21 +568,24 @@ describe('ExchangeStreamRow — counterparty field', () => {
     expect(screen.queryByText(/63fd6be86e/)).not.toBeInTheDocument()
   })
 
-  it('a key: counterparty resolves to the node their record came from, then to its hostname, on both sides', () => {
-    const node = 'e7c7916261' + 'd'.repeat(54)
-    // Their record is held (pushed), so the pane keys the row by signing key.
+  it('a key: row names the node our record asked, even when their held record came from another sender', () => {
+    const sender = 'e7c7916261' + 'd'.repeat(54)
+    // Their record is held, so the pane keys the row by signing key; its
+    // sender's own word (received_from) names another node than ours does.
     const base = makeRow('open_not_asked', { counterparty: 'key:63fd6be86ed33725' })
     const row = {
       ...base,
-      raw: { ...base.raw, mine: fixtureMineCell(), theirs: fixtureTheirsCell('agrees', { receivedFrom: node }) }
+      raw: { ...base.raw, mine: fixtureMineCell(), theirs: fixtureTheirsCell('agrees', { receivedFrom: sender }) }
     }
-    const peerName = (id: string) => peerNameWith(id, new Map([['e7c7916261', 'Ethans-Mac-Mini']]))
+    const asked = FIXTURE_PROVIDER_NODE.slice(0, 10)
+    const peerName = (id: string) =>
+      peerNameWith(id, new Map([[asked, 'Ethans-Mac-Mini'], ['e7c7916261', 'Other-Host']]))
     render(<ExchangeStreamRow {...toggleProps()} localRecord={null} peerName={peerName} rail={NO_RAIL} row={row} />)
-    expect(screen.getByText('Confirmed')).toBeInTheDocument()
-    expect(document.querySelector('[data-event-line]')).toHaveTextContent('You asked Ethans-Mac-Mini (e7c7916261)')
+    expect(document.querySelector('[data-event-line]')).toHaveTextContent(`You asked Ethans-Mac-Mini (${asked})`)
     expect(document.querySelector('[data-row-verdict-text]')).toHaveTextContent(
-      '✓ You and Ethans-Mac-Mini (e7c7916261) recorded the same exchange'
+      `✓ You and Ethans-Mac-Mini (${asked}) recorded the same exchange`
     )
+    expect(screen.queryByText(/Other-Host|e7c7916261/)).not.toBeInTheDocument()
   })
 
   it('a key: counterparty resolves through Pane B’s node id when the row carries none', () => {
