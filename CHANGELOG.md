@@ -1,8 +1,58 @@
 # Changelog
 
-## Unreleased
+## 0.1.5
+
+**Milestone M1: who asks for evidence is proven, and a node gets back the record of the exchange it
+asked for** (PRD-SERVICE-EVIDENCE §6, R-7 to R-14). **Upgrade both nodes.** Evidence answers are now
+the interop profile's signed envelope, which a node on 0.1.4 cannot read, and anchor pins taken from
+0.1.4 no longer reproduce. A node on 0.1.4 also sends unsigned requests, which this version refuses
+for records and Standard History under the default settings.
+
+**Signing needs a host that announces plugin keys (`plugin_keys.v1`, mesh-llm #2299).** No mesh-llm
+release has it yet: it is on mesh-llm main and is expected in 0.79.0. On 0.78.1 or older, this
+version's requests go out unsigned, so two upgraded nodes with the default settings answer each
+other no record and no Standard History. `share_history_segments = peers` and
+`share_standard_history = on` keep answering unsigned requests, and the records status
+(`requests_signed`) shows which case a node is in.
+
+### Verified on live hosts, and not
+
+- **T3 and T7 passed on three nodes built from mesh-llm main (95f9b48), not on a stock release.**
+  The run was on 2026-10-22, with this release's plugin (265ede5) on each node and default
+  settings.
+  - T7: two nodes that had never exchanged with the provider each asked for its checkpoints,
+    `history_card/1` and `served_summary/1`. All six asks got a signed `policy_declined` that
+    verifies, the same for both askers except for the request binding, and nothing was advertised.
+  - T3: after an exchange, the provider's served record named the node that asked, with the same
+    id the host announces for that node. Once a checkpoint covered the record, that node asked for
+    it and got it, and the answer verifies. A node that signed for itself while stating that
+    node's id got a signed `not_authorized`, and no ledger read was observed.
+- **Not run on a stock mesh-llm release.** No release has `plugin_keys.v1` yet (see above), so a
+  stock 0.78.1 host cannot run T3. The run repeats on a mesh-llm 0.79 candidate before this release
+  is tagged.
+- **A referee verdict on live hosts,** which 0.1.4 said would wait on 0.1.5, has still not run. It is
+  covered by tests only.
+- **Exchange corroboration and the payer's delivered leg for a deposit-covered bill** are covered by
+  tests only. Matching both halves of a host-served exchange by client nonce also needs the host to
+  pass the nonce on its served terminal event (Mesh-LLM/mesh-llm#2464).
 
 ### Changed
+
+- **A record of an exchange this node served for a peer now names the peer that asked, so that peer
+  gets its record back. Operators on `share_history_segments = peers`: your records now show which
+  node asked.** mesh-llm reports the node that asked for a host-served exchange
+  (`requested_by_node_id`, from the mesh connection, never from the request), but the plugin
+  sealed `requesting_party: "unknown"`, so under the default `counterparties` no node could get the
+  record of an exchange it asked for.
+  - **Now, under the default settings,** the node that asked is that record's counterparty: it gets
+    the record (by evidence request or ledger fetch), and it counts as a counterparty for Standard
+    History (checkpoints, `history_card/1`, `served_summary/1`).
+  - **Behaviour change under `peers`,** which already serves records to any peer: those records now
+    also say which node asked. Nothing named the asker before, so this changes what a node on
+    `peers` shares without any setting changing.
+  - A node that signs for itself while stating another node's id is still refused `not_authorized`
+    before anything is looked up. A record of an exchange this node asked for, one that reached its
+    local API, or one from a host that does not report the field still names `"unknown"`.
 
 - **An evidence answer is now the interop profile's signed envelope. Upgrade both nodes.** The
   protocol crate is `evidence-request` `=0.2.0` (what `capsule-emit-evidence-request` became when it
@@ -73,7 +123,7 @@
     and `share_standard_history = on` for Standard History. Under them, a valid signature under a
     key no host announced is answered as an unsigned request, and nothing more. Any other failed
     check is still refused.
-  - **A node on 0.1.5 or older sends unsigned requests,** so after you upgrade, its requests for
+  - **A node on 0.1.4 or older sends unsigned requests,** so after you upgrade, its requests for
     your records or Standard History are refused until it upgrades too.
   - **A node signs only once its host has taken its key.** On a host without `plugin_keys.v1` its
     requests go out unsigned, so an upgraded node with the default settings no longer answers it
@@ -94,7 +144,7 @@
   fetch, and the node answering checks it before it looks the record up. Unless records go to
   any peer (`peers`), a record goes only to the node the signature proves, never to the id the
   fetch states. Under the default
-  `share_history_segments` an unsigned fetch, from a node on 0.1.5 or older, is now refused
+  `share_history_segments` an unsigned fetch, from a node on 0.1.4 or older, is now refused
   `not_authorized`; under `peers` it is answered as before. With sharing `off`, a fetch is refused
   before the lookup, so the refusal no longer shows whether the record exists.
 - **A referee checks the signature on an `adjudicate` request** before it reads anything. A
@@ -112,7 +162,7 @@
   `history_card/1` and `served_summary/1` now go only to a counterparty (a node one of its records
   names as the other side of an exchange). Every other node gets a signed `policy_declined` that
   carries nothing about the asker: it is signed over the request's digest, the reason and the
-  time, so the same request gets the same refusal whoever sends it. Before 0.1.6 any node could
+  time, so the same request gets the same refusal whoever sends it. Before 0.1.5 any node could
   read them. **After upgrading, a node you have never exchanged with can no longer read your
   checkpoints, history card or served summary** until you set the new `share_standard_history`
   switch to `on` (console: Sharing policy › Standard history; or
