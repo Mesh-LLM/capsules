@@ -360,6 +360,12 @@ export function deriveRightCellState(
  *  that names one instant. */
 const RFC3339_WITH_ZONE = /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/
 
+/** The instant a full RFC 3339 time with a zone names, or `null` for any
+ *  other form: only such times are compared. */
+export function fullTimeInstant(date: string | null | undefined): number | null {
+  return date && RFC3339_WITH_ZONE.test(date) ? Date.parse(date) : null
+}
+
 /** A statement's or ask's date: a full RFC 3339 time in the viewer's own time
  *  zone, never a raw stamp. Any other form (no zone, a bare date, garbage) is
  *  shown as the row carries it: guessing its zone would invent a time. */

@@ -1555,3 +1555,32 @@ describe('ExchangeStreamRow — a row the pane shows with no other side, whose a
     expect(screen.getAllByText('e'.repeat(64)).length).toBeGreaterThan(0)
   })
 })
+
+describe('ExchangeStreamRow — the checks panel names the record whose checks it shows', () => {
+  it('the pane confirms record A, an ask returns contradicting record B: the panel shows B’s id with B’s checks', () => {
+    const idA = '9'.repeat(64)
+    const idB = 'f'.repeat(64)
+    const recordB = fixtureHalfBody({ capsuleId: idB, responseDigest: 'e'.repeat(64) })
+    const askOutcome = settleRowAsk(null, {
+      kind: 'record',
+      at: '2026-09-28T23:00:00Z',
+      evidence: { status: 'found', idMatch: true, signatureOk: true, peerRecord: recordB, fetch: vi.fn() }
+    })
+    // The pane names A, and the live fetch holds A, confirming.
+    const base = makeRow('closed')
+    const row = { ...base, raw: { ...base.raw, theirs: { ...base.raw.theirs, capsule_id: idA } } }
+    vi.mocked(usePeerLedgerRecompute).mockReturnValue({
+      status: 'found',
+      idMatch: true,
+      signatureOk: true,
+      peerRecord: fixtureHalfBody({ capsuleId: idA }),
+      fetch: vi.fn()
+    })
+    render(<ExchangeStreamRow {...toggleProps()} askOutcome={askOutcome} checksExpanded rail={NO_RAIL} row={row} />)
+    expect(screen.getByText('Disagree')).toBeInTheDocument()
+    const panel = screen.getByLabelText(`Security checks for ${row.exchangeKey}`)
+    expect(within(panel).getAllByText(idB).length).toBeGreaterThan(0)
+    expect(within(panel).queryByText(idA)).not.toBeInTheDocument()
+    expect(within(panel).getAllByText('✕ differs').length).toBeGreaterThan(0)
+  })
+})

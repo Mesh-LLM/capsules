@@ -107,9 +107,12 @@ export function buildIdentityRow(
   // id -- never rendered as their identity, and never fetchable
   // (`peerFetchJoinKey` already refuses it, so `theirsFetchable` disables
   // the fetch action for exactly this row).
-  const heldId = peerRecordFor(theirsRecompute)?.capsule_id
+  // The id of the record whose checks are shown (the chosen evidence); the
+  // pane's id only when no record body is held.
+  const held = peerRecordFor(theirsRecompute)
+  const heldId = held && typeof held.capsule_id === 'string' && isDigestShaped(held.capsule_id) ? held.capsule_id : null
   const paneId = row.theirs.capsule_id && isDigestShaped(row.theirs.capsule_id) ? row.theirs.capsule_id : null
-  const theirsCapsuleId = paneId ?? (typeof heldId === 'string' && isDigestShaped(heldId) ? heldId : null)
+  const theirsCapsuleId = held ? heldId : paneId
   return {
     label: 'record id',
     yours: { value: row.mine.capsule_id ?? '—', note: yoursNote },

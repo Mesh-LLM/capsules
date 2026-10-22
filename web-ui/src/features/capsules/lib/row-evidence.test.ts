@@ -170,6 +170,14 @@ const CASES: Case[] = [
     source: 'pushed',
     retry: /^Asked .*: no verified reply \(HTTP 502\)\.$/
   },
+  {
+    name: 'a kept contradicting asked record survives a later bad-signature record, even beside a confirming push',
+    row: paneRow({ pushed: record('agrees') }),
+    ask: asks(asked(record('disagrees')), asked(record('agrees', BAD_SIGNATURE), T2)),
+    state: 'contradicted',
+    source: 'asked',
+    retry: /^Asked again .*: their record didn’t check out \(it is not signed with the key this node has for them\)\.$/
+  },
   // Rule 4: the newest verified claim.
   {
     name: 'a failed retry never replaces their verified refusal',
@@ -208,6 +216,14 @@ const CASES: Case[] = [
     ask: asks(refused(), { kind: 'asking', at: T2 }),
     state: 'open_refused',
     retry: null
+  },
+  {
+    name: 'claims arriving in reverse signed order: the newer (T2) refusal stands, the T1 attempt is the retry line',
+    ask: asks(refused('2026-09-28T22:00:05Z'), noRecord('2026-09-28T21:00:05Z')),
+    state: 'open_refused',
+    date: '2026-09-28T22:00:05Z',
+    askNote: { verified: true, text: /^Their reply is verified/ },
+    retry: /^Asked again .*: they say they have no record of this, signed\.$/
   },
   {
     name: 'a stale ask claim never masks a newer pane claim',
@@ -276,5 +292,23 @@ describe('judgeRow: the precedence of records, claims and asks', () => {
     const contradicting = record('disagrees')
     const judged = judgeRow(paneRow({ pushed: record('agrees') }), ours() as never, null, asks(asked(contradicting)))
     expect(judged.evidence?.peerRecord).toBe(contradicting.peerRecord)
+  })
+})
+
+describe('settleRowAsk: which verified claim is kept', () => {
+  it('keeps the newest by signed time, whatever the arrival order; latest is still the last attempt', () => {
+    const t2 = refused('2026-09-28T22:00:05Z')
+    const t1 = noRecord('2026-09-28T21:00:05Z')
+    const ask = asks(t2, t1)
+    expect(ask?.claim).toBe(t2)
+    expect(ask?.latest).toBe(t1)
+    expect(asks(t1, t2)?.claim).toBe(t2)
+  })
+
+  it('without full times, a new claim replaces the stored one only when it says something different', () => {
+    const first = refused('4 Sep')
+    expect(asks(first, refused('5 Sep'))?.claim).toBe(first)
+    const different = noRecord('5 Sep')
+    expect(asks(first, different)?.claim).toBe(different)
   })
 })

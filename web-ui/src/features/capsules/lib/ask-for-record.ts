@@ -24,7 +24,7 @@ import { ed25519 } from '@noble/curves/ed25519'
 import type { CapsuleRecord } from '@/features/capsules/api/types'
 import type { AskSubject, EvidenceAskReply } from '@/features/capsules/api/evidenceRequestClient'
 import { verifyCoseSign1 } from '@/features/capsules/lib/cose'
-import { isVerifiedRecord, type RightCellStateKind } from '@/features/capsules/lib/exchange-row-state'
+import { fullTimeInstant, isVerifiedRecord, type RightCellStateKind } from '@/features/capsules/lib/exchange-row-state'
 import { recomputeIdMatch, type PeerRecomputeState } from '@/features/capsules/lib/recompute-identity'
 import { SAMPLE_DATA_UNAVAILABLE } from '@/features/capsules/lib/tooltip-copy'
 
@@ -400,9 +400,9 @@ export function askReplyNote(outcome: AskOutcome): { verified: boolean; text: st
   }
 }
 
-/** A row's asks for their record: the latest outcome, the latest verified
- *  claim (their signed refusal or "no record"), and the latest verified
- *  record. Each is kept apart, so a later reply of another kind -- a failure,
+/** A row's asks for their record: the latest outcome, the newest verified
+ *  claim (their signed refusal or "no record", `newerClaim`), and the latest
+ *  record that can give a verdict. Each is kept apart, so a later reply of another kind -- a failure,
  *  or a record that confirms nothing -- never erases what an earlier reply
  *  proved. `row-evidence.ts` weighs them. */
 export type RowAsk = {
@@ -411,8 +411,22 @@ export type RowAsk = {
   record: Extract<AskOutcome, { kind: 'record' }> | null
 }
 
+/** Which of two verified claims to keep: the newer by signed time when both
+ *  carry a full RFC 3339 time; otherwise the stored one, unless the new one
+ *  says something different (a refusal vs "no record"). */
+function newerClaim(stored: RowAsk['claim'], incoming: NonNullable<RowAsk['claim']>): NonNullable<RowAsk['claim']> {
+  if (!stored) return incoming
+  const storedAt = fullTimeInstant(stored.at)
+  const incomingAt = fullTimeInstant(incoming.at)
+  if (storedAt !== null && incomingAt !== null) return incomingAt >= storedAt ? incoming : stored
+  return incoming.kind !== stored.kind ? incoming : stored
+}
+
 export function settleRowAsk(previous: RowAsk | null | undefined, outcome: AskOutcome): RowAsk {
-  const claim = outcome.kind === 'refused' || outcome.kind === 'no_record' ? outcome : (previous?.claim ?? null)
+  const claim =
+    outcome.kind === 'refused' || outcome.kind === 'no_record'
+      ? newerClaim(previous?.claim ?? null, outcome)
+      : (previous?.claim ?? null)
   // A record that can give a verdict: verified, or one whose contents
   // demonstrably don't produce its id (Disagree, `recordVerdict`).
   const keeps = outcome.kind === 'record' && (isVerifiedRecord(outcome.evidence) || outcome.evidence.idMatch === false)

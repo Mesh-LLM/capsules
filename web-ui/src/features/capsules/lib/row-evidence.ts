@@ -3,12 +3,16 @@
 // asking. Every source is weighed here, by these rules and nothing else:
 //
 //   1. Candidates. Records: the live fetch this browser ran, the record the
-//      pane correlated from a push, and the record an ask returned (the
-//      latest one, or the last verified one when a later ask returned none).
-//      Claims:
+//      pane correlated from a push, the record the latest ask returned, and
+//      the last record an ask returned that can give a verdict
+//      (`settleRowAsk`). Claims:
 //      the pane's own outcome (their signed refusal or "no record", or the
 //      door's refusal of a pushed record that named another server or model)
-//      and an ask's verified refusal or "no record".
+//      and an ask's verified refusal or "no record". Of several asks' claims,
+//      the one kept is the newest by signed time when both carry a full
+//      RFC 3339 time; without that, a new claim replaces the stored one only
+//      when it says something different (refusal vs "no record").
+//      `RowAsk.latest` is always the most recent attempt.
 //   2. A record sets a verdict only when it is VERIFIED: its contents produce
 //      its id and its signature holds under the key this node has for them
 //      (`isVerifiedRecord`). The one exception: a record whose contents
@@ -41,6 +45,7 @@ import type { CapsuleRecord } from '@/features/capsules/api/types'
 import { askReplyNote, recordProblems, type AskOutcome, type RowAsk } from '@/features/capsules/lib/ask-for-record'
 import {
   deriveRightCellState,
+  fullTimeInstant,
   isVerifiedRecord,
   paneOutcomeState,
   pushedHalfRecompute,
@@ -73,11 +78,7 @@ type RecordCandidate = {
   outcome: AskOutcome | null
 }
 
-const RFC3339_WITH_ZONE = /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/
-
-function instant(date: string | null): number | null {
-  return date && RFC3339_WITH_ZONE.test(date) ? Date.parse(date) : null
-}
+const instant = fullTimeInstant
 
 /** A record of theirs whose contents don't produce the id it claims. */
 const ALTERED = 'their record doesn’t match its own id: it was changed after it was sealed'
@@ -128,8 +129,12 @@ export function judgeRow(
   }
   const pushed = pushedHalfRecompute(row)
   if (pushed) records.push({ source: 'pushed', evidence: pushed, verdict: recordVerdict(pushed, ours, 'pushed'), outcome: null })
-  const askedRecord = ask?.latest.kind === 'record' ? ask.latest : (ask?.record ?? null)
-  if (askedRecord?.kind === 'record') {
+  // Both the latest asked record and the kept verdict record: a later record
+  // that reaches no verdict never hides an earlier one that did.
+  const askedRecords = [ask?.latest.kind === 'record' ? ask.latest : null, ask?.record ?? null].filter(
+    (o, i, all): o is Extract<AskOutcome, { kind: 'record' }> => o !== null && all.indexOf(o) === i
+  )
+  for (const askedRecord of askedRecords) {
     records.push({
       source: 'asked',
       evidence: askedRecord.evidence,
