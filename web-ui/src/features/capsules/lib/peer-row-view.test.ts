@@ -24,6 +24,7 @@ import {
   matchTallyText,
   meshMetaLine,
   peerAliasLine,
+  unlinkedNodeId,
   peerDisplayId,
   periodRangeText,
   peerSortKey,
@@ -428,12 +429,17 @@ describe('peerAliasLine — D3: aliases on ONE row, never extra peers', () => {
     expect(peerAliasLine(row)).toBe('signed by 71eb777777777777 · node a70d3967bea3b22f… · endpoint e5ba9d1001')
   })
 
-  it('labels the UNLINKED node-id row honestly — the id is from our own records, no signing key linked yet', () => {
+  it('labels the UNLINKED node-id row honestly — known from our own records, no signed record from them yet', () => {
     const row = baseRow({
       peer_id: 'node:a70d3967bea3b22f',
       identity: { signing_key_id: null, endpoint_id: null, node_id: `a70d3967bea3b22f${'a'.repeat(48)}` }
     })
-    expect(peerAliasLine(row)).toBe('node id from your own records — no signing key linked yet')
+    expect(unlinkedNodeId(row)).toBe(`a70d3967bea3b22f${'a'.repeat(48)}`)
+    expect(peerAliasLine(row)).toBe('Known from your records · no signed record from them yet')
+    // A host (or operator) that announces this node's key: the row names it,
+    // never "no signing key linked".
+    expect(peerAliasLine(row, 'e'.repeat(64))).toBe(`Known from your records · its key ${'e'.repeat(16)} is announced`)
+    expect(dealtWithRowView(row, undefined, [], 'e'.repeat(64)).aliasLine).toContain('is announced')
   })
 
   it('degrades to null (no line, never a fabricated identity) when the row carries no identity evidence', () => {

@@ -2,7 +2,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   deriveContentToggleState,
-  theirContentAction,
   theirContentText,
   yourContentFixedText,
   type TheirContentState,
@@ -159,15 +158,6 @@ describe("theirContentText — v3 §3's exact three sub-states + not-visible-hol
       (kind) => theirContentText(theirState(kind, '4 Sep'))
     )
     expect(new Set(texts).size).toBe(texts.length)
-  })
-})
-
-describe('theirContentAction', () => {
-  it('only not_asked carries an action', () => {
-    expect(theirContentAction(theirState('not_asked'))).toBe('Ask them to state it')
-    for (const kind of ['not_visible_holds', 'recorded_absence', 'unanswered', 'signed_refusal'] as const) {
-      expect(theirContentAction(theirState(kind))).toBeNull()
-    }
   })
 })
 

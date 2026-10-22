@@ -1,0 +1,76 @@
+import { ed25519 } from '@noble/curves/ed25519'
+import { describe, expect, it } from 'vitest'
+import type { EvidenceAskReply, EvidenceVerification } from '@/features/capsules/api/evidenceRequestClient'
+import { refusalSigningBody } from '@/features/capsules/lib/ask-for-record'
+import { historyNote, historyRefusalWords, judgeHistoryReply } from '@/features/capsules/lib/ask-for-history'
+
+const ASKED_AT = '2026-10-22T10:00:00Z'
+const SENT = 'f'.repeat(64)
+const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+const PEER_SECRET = ed25519.utils.randomSecretKey()
+const ANNOUNCED = hex(ed25519.getPublicKey(PEER_SECRET))
+
+function signedRefusal(reason: string, secret = PEER_SECRET) {
+  const refusal = { request_digest: SENT, reason, issued_at: '2026-10-22T10:00:02Z' }
+  const sig = ed25519.sign(refusalSigningBody(refusal), secret)
+  return { ...refusal, key_id: hex(ed25519.getPublicKey(secret)), sig: hex(sig) }
+}
+
+function reply(answer: unknown, verification: EvidenceVerification, announcedKeyId: string | null = ANNOUNCED): EvidenceAskReply {
+  return { kind: 'answer', answer, verification, requestDigest: SENT, announcedKeyId }
+}
+
+describe('judgeHistoryReply', () => {
+  it('a verified history card is verified, with its checkpoint count', () => {
+    const outcome = judgeHistoryReply(reply({}, { state: 'artifact', records: [], checkpoints: 3 }), ASKED_AT)
+    expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: 3 })
+    expect(historyNote(outcome)).toEqual({
+      verified: true,
+      text: 'Their history is verified: 3 checkpoints of their log, each signed with their announced key and each extending the one before.'
+    })
+  })
+
+  it('a refusal signed with their announced key over our request is their signed refusal, in plain words', () => {
+    const outcome = judgeHistoryReply(
+      reply(signedRefusal('policy_declined'), { state: 'refusal', reason: 'policy_declined' }),
+      ASKED_AT
+    )
+    expect(outcome).toEqual({ kind: 'refused', at: '2026-10-22T10:00:02Z', reason: 'policy_declined' })
+    const note = historyNote(outcome)
+    expect(note?.verified).toBe(true)
+    expect(note?.text).toContain(historyRefusalWords('policy_declined'))
+    expect(note?.text).not.toContain('policy_declined')
+  })
+
+  it('a refusal signed with any other key, or with no announced key, is a failed ask', () => {
+    const forged = judgeHistoryReply(
+      reply(signedRefusal('policy_declined', ed25519.utils.randomSecretKey()), { state: 'refusal', reason: 'policy_declined' }),
+      ASKED_AT
+    )
+    expect(forged.kind).toBe('failed')
+    const noKey = judgeHistoryReply(
+      reply(signedRefusal('policy_declined'), { state: 'refusal', reason: 'policy_declined' }, null),
+      ASKED_AT
+    )
+    expect(noKey.kind).toBe('failed')
+  })
+
+  it('anything the plugin could not verify, or no answer at all, fails and says why', () => {
+    expect(judgeHistoryReply({ kind: 'no_answer', message: 'HTTP 502' }, ASKED_AT)).toEqual({
+      kind: 'failed',
+      at: ASKED_AT,
+      detail: 'HTTP 502'
+    })
+    const unverified = judgeHistoryReply(reply({}, { state: 'not_evidence', why: 'a consistency proof does not hold' }), ASKED_AT)
+    expect(historyNote(unverified)).toEqual({
+      verified: false,
+      text: 'Their history is not verified: their reply did not verify: a consistency proof does not hold'
+    })
+    expect(judgeHistoryReply(reply({}, { state: 'no_announced_key' }), ASKED_AT).kind).toBe('failed')
+    expect(judgeHistoryReply(reply({}, { state: 'unknown' }), ASKED_AT).kind).toBe('failed')
+  })
+
+  it('never echoes a refusal token it has no words for', () => {
+    expect(historyRefusalWords('made_up_by_the_peer')).not.toContain('made_up')
+  })
+})

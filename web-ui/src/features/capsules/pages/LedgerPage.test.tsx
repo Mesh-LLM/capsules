@@ -8,9 +8,8 @@
 //   3. No leaked internal IDs or tool names in the empty state, and no
 //      sidecar URL box anywhere
 //   4. Exchanges header shows two counts, never a ratio
-//   5. The Exchanges served / asked strip strip on Exchanges never crashes on an absent
-//      served-summary and never fabricates a number; it renders
-//      NOTHING on a null card rather than a "no data" line
+//   5. The Exchanges served / asked line counts the rows below by role, and
+//      never a number the page doesn't hold
 //   6. The exceptions-first line above the table, and the Ledger badge's
 //      "This node's copy" rename
 import { cleanup, render, screen, within } from '@testing-library/react'
@@ -68,7 +67,14 @@ vi.mock('@/features/capsules/api/recordsClient', async (importOriginal) => {
 })
 
 vi.mock('@/features/capsules/api/evidenceRequestClient', () => ({
-  askForRecord: vi.fn().mockResolvedValue({ kind: 'no_answer', message: 'no reply' })
+  askForRecord: vi.fn().mockResolvedValue({ kind: 'no_answer', message: 'no reply' }),
+  askForHistory: vi.fn().mockResolvedValue({
+    kind: 'answer',
+    answer: {},
+    verification: { state: 'artifact', records: [], checkpoints: 2 },
+    requestDigest: 'f'.repeat(64),
+    announcedKeyId: 'e'.repeat(64)
+  })
 }))
 vi.mock('@/features/capsules/api/client', () => ({
   fetchCapsuleLedger: vi.fn().mockResolvedValue({ records: [], nodePubKeyPem: null })
@@ -568,7 +574,7 @@ describe('LedgerPageContent', () => {
     }
   }
 
-  it('Exchanges hides the served / asked strip entirely on a null card — never a "no data" line above real rows', async () => {
+  it('Exchanges counts the rows it lists by role: "You served n · you asked m", never a fold it doesn’t have', async () => {
     const { fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
     vi.mocked(fetchPaneCList).mockResolvedValue(oneCleanExchangeRow())
 
@@ -576,15 +582,11 @@ describe('LedgerPageContent', () => {
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
-    // fetchPaneA's default mock (card: null) — never a crash, never a
-    // fabricated number, and (per the header-copy rule) no absence
-    // message either: the card renders nothing at all. The coverage-
-    // statement branches themselves (witnessed / not-reconciled / failed)
-    // are unit-tested directly against the pure `servedAskedCoverage` function
-    // in exchanges-served-view.test.ts — fetchPaneA is shared by three query sites
-    // on this page, so asserting a specific override's exact caller here
-    // would be an order-dependent test, not a real wiring check.
     await screen.findByTestId('exchanges-headline')
+    const role = oneCleanExchangeRow().rows[0].role_tag
+    expect(screen.getByTestId('served-asked-line')).toHaveTextContent(
+      role === 'SERVED' ? 'You served 1 · you asked 0' : 'You served 0 · you asked 1'
+    )
     expect(screen.queryByText('No served-summary data available yet.')).not.toBeInTheDocument()
   })
 
@@ -817,9 +819,8 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     // resolve to "not asked").
     expect(await screen.findByRole('group', { name: 'Exchange exch-clean-00' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Exchange exch-alarm-07' })).toBeInTheDocument()
-    expect(screen.getByText('OPEN · not held')).toBeInTheDocument()
-    expect(screen.queryByText('CLOSED')).not.toBeInTheDocument()
-    expect(screen.getAllByText('OPEN').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Waiting for theirs').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Confirmed')).not.toBeInTheDocument()
     // Neither row carries a counterparty (the
     // default fetchPaneB mock returns no rows), so the OPEN row's ask
     // action is gated -- a fact, never a fabricated "not yet asked" ask
@@ -827,8 +828,11 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     // exchange whose peer is unrecorded), so the gated text names that truth.
     expect(screen.getByText('Other side: not known')).toBeInTheDocument()
     expect(screen.queryByText('nothing to ask yet')).not.toBeInTheDocument()
-    expect(screen.queryByText('You haven’t asked for their record.')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Ask them for their record' })).not.toBeInTheDocument()
+    // The asks stay on the row, disabled with the reason: never a button
+    // pointed at nobody, never one that clicks into nothing.
+    for (const button of screen.getAllByRole('button', { name: 'Ask them for their record' })) {
+      expect(button).toBeDisabled()
+    }
 
     // `▸ checks` expands the full nine-property detail inline, under the
     // row -- never a dialog.
@@ -934,7 +938,7 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
-    expect(await screen.findByText('You haven’t asked for their record.')).toBeInTheDocument()
+    expect(await screen.findByText('Their record hasn’t arrived yet.')).toBeInTheDocument()
     const askButton = await screen.findByRole('button', { name: 'Ask them for their record' })
 
     await user.click(askButton)
@@ -945,7 +949,13 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
       'c'.repeat(64),
       expect.objectContaining({ nonce: 'nonce-known', digests: null })
     )
-    expect(await screen.findByText(/^Asked .*No reply yet\.$/)).toBeInTheDocument()
+    expect(await screen.findByText(/^Asked .*No verified reply yet\.$/)).toBeInTheDocument()
+
+    // Their history: asked of the same node, its verified outcome on the row.
+    const { askForHistory } = await import('@/features/capsules/api/evidenceRequestClient')
+    await user.click(screen.getByRole('button', { name: 'Ask for their history' }))
+    expect(askForHistory).toHaveBeenCalledWith('c'.repeat(64))
+    expect(await screen.findByText(/^Their history is verified: 2 checkpoints of their log/)).toBeInTheDocument()
 
     // Nothing on this row ever opens a dialog -- not the ask action, not
     // the `▸ checks` toggle either.
@@ -1795,7 +1805,7 @@ describe('LedgerPageContent — real twin bracket + Twins-only filter', () => {
     expect(screen.queryByText(/Side-by-side check/)).not.toBeInTheDocument()
   })
 
-  it('"Twins only" actually filters to bracket rows now that a real bracket id exists', async () => {
+  it('"Sent to two machines" actually filters to bracket rows now that a real bracket id exists', async () => {
     const { fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
     vi.mocked(fetchPaneCList).mockResolvedValue(twinBracketPayload())
 
@@ -1811,7 +1821,7 @@ describe('LedgerPageContent — real twin bracket + Twins-only filter', () => {
     const stateSection = (await screen.findByText('State')).closest('section')
     if (!stateSection) throw new Error('State filter section not found')
     await user.click(within(stateSection).getByRole('button', { name: 'None' }))
-    await user.click(within(stateSection).getByLabelText(/Twins only,/))
+    await user.click(within(stateSection).getByLabelText(/Sent to two machines,/))
 
     expect(await screen.findByRole('group', { name: 'Exchange twin-exch-0' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Exchange twin-exch-1' })).toBeInTheDocument()
@@ -1830,7 +1840,7 @@ describe('LedgerPageContent — a served exchange with no other side', () => {
     vi.clearAllMocks()
   })
 
-  it('is badged LOCAL, and the state filter counts it under "This node only", not "Open"', async () => {
+  it('is badged "No other side", and the state filter counts it there, not under "Waiting for theirs"', async () => {
     const { fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
     const served = (key: string, counterparty: string | null) => ({
       exchange_key: key,
@@ -1855,16 +1865,16 @@ describe('LedgerPageContent — a served exchange with no other side', () => {
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
     const local = await screen.findByRole('group', { name: 'Exchange local-exch' })
-    expect(within(local).getByText('LOCAL')).toBeInTheDocument()
-    expect(within(local).queryByText(/^OPEN/)).not.toBeInTheDocument()
+    expect(within(local).getByText('No other side')).toBeInTheDocument()
+    expect(within(local).queryByText('Waiting for theirs')).not.toBeInTheDocument()
     const remote = screen.getByRole('group', { name: 'Exchange remote-exch' })
-    expect(within(remote).getByText('OPEN')).toBeInTheDocument()
+    expect(within(remote).getByText('Waiting for theirs')).toBeInTheDocument()
 
     await user.click(screen.getByLabelText('Filter exchanges'))
     const stateSection = (await screen.findByText('State')).closest('section')
     if (!stateSection) throw new Error('State filter section not found')
-    expect(within(stateSection).getByLabelText(/^Open, 1 /)).toBeInTheDocument()
-    expect(within(stateSection).getByLabelText(/^This node only, 1 /)).toBeInTheDocument()
+    expect(within(stateSection).getByLabelText(/^Waiting for theirs, 1 /)).toBeInTheDocument()
+    expect(within(stateSection).getByLabelText(/^No other side, 1 /)).toBeInTheDocument()
   })
 })
 

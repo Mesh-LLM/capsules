@@ -22,24 +22,23 @@ import {
   SettlementStrip
 } from '@/features/capsules/components/SettlementRow'
 import { buildChecksRows } from '@/features/capsules/lib/security-checks-view'
-import {
-  theirContentAction,
-  theirContentText,
-  yourContentFixedText
-} from '@/features/capsules/lib/exchange-content-state'
+import { theirContentText, yourContentFixedText } from '@/features/capsules/lib/exchange-content-state'
 import { isServedForPay, type ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
 import {
-  askIsOffered,
   askReplyNote,
   askTarget,
+  otherSideNodeId,
+  rowAskControls,
   stateAfterAsk,
   type AskOutcome,
-  type AskTarget
+  type AskTarget,
+  type RowAskControl
 } from '@/features/capsules/lib/ask-for-record'
+import { historyNote, type HistoryOutcome } from '@/features/capsules/lib/ask-for-history'
+import { HoverChip } from '@/features/capsules/components/HoverChip'
 import { entryRowChipMark, entryRowChipPropertyKey } from '@/features/capsules/lib/entry-row-chips'
 import { checkRowDomId, exchangeRowDomId } from '@/features/capsules/lib/exchange-pages'
 import {
-  askForRecordIsDue,
   bracketStrip,
   bracketStripText,
   closedPropertyCellItems,
@@ -91,19 +90,10 @@ import {
  *     join comes from Pane B, per-peer) -> `Other side: not known`.
  *  Each is a stated fact, never a deficit or a "not yet". */
 const NO_OTHER_SIDE_TEXT = 'Local — no other side'
+/** The badge on a served exchange with no other side anywhere. */
+const NO_OTHER_SIDE_LABEL = 'No other side'
 const OTHER_SIDE_NOT_KNOWN_TEXT = 'Other side: not known'
 const PAYER_NOT_RECORDED_TEXT = 'Served for pay — payer not recorded'
-
-/** Wall-clock time for the ask timeout, re-read every 30 s so a waiting row
- *  offers the ask once the timeout passes -- never `Date.now()` in render. */
-function useNowMs(): number {
-  const [nowMs, setNowMs] = useState(() => Date.now())
-  useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000)
-    return () => window.clearInterval(timer)
-  }, [])
-  return nowMs
-}
 
 function roleText(roleTag: string): string {
   // `You served`/`You asked` are stated in words on every row -- never
@@ -128,6 +118,33 @@ function rowStateTone(kind: RightCellStateKind): StatusBadgeTone {
     default:
       return 'muted'
   }
+}
+
+const ROW_BUTTON_CLASS =
+  'ui-control h-7 w-fit gap-1 rounded-[var(--radius)] px-2 text-[length:var(--density-type-caption)]'
+
+/** One of the row's two asks: a live button, or a disabled one that says on
+ *  hover (and to screen readers) why it can't be sent. */
+function AskButton({ control, onAsk, census }: { control: RowAskControl; onAsk: () => void; census: string }) {
+  const button = (
+    <Button
+      className={ROW_BUTTON_CLASS}
+      disabled={control.disabledReason !== null}
+      onClick={onAsk}
+      size="sm"
+      type="button"
+      variant="outline"
+    >
+      {control.label}
+    </Button>
+  )
+  if (control.disabledReason === null) return button
+  // A disabled button gets no pointer events, so the wrapper takes the hover.
+  return (
+    <HoverChip census={census} label={control.disabledReason}>
+      <span className="inline-flex">{button}</span>
+    </HoverChip>
+  )
 }
 
 /** A short/copyable identifier (design §3A) -- `role="link"`, not `button`, for the same reason
@@ -197,11 +214,15 @@ export type ExchangeStreamRowProps = {
   onToggleContent: (row: ExchangeLedgerRow) => void
   /** Toggle ② -- flips `checksExpanded` for this row (the `▸/▾ checks` control). */
   onToggleChecks: (row: ExchangeLedgerRow) => void
-  onAction: (row: ExchangeLedgerRow) => void
   /** What "Ask them for their record" produced for this row, if it asked. */
   askOutcome?: AskOutcome | null
-  /** Sends the ask. Absent where the page can't ask (the row offers none). */
+  /** Sends the ask. Absent where the page can't ask (a saved sample): the
+   *  button stays, disabled, saying why. */
   onAskForRecord?: (row: ExchangeLedgerRow, target: AskTarget) => void
+  /** What "Ask for their history" produced for this row, if it asked. */
+  historyOutcome?: HistoryOutcome | null
+  /** Sends the history ask to the other side's node. Absent as above. */
+  onAskForHistory?: (row: ExchangeLedgerRow, peerId: string) => void
 }
 
 export function ExchangeStreamRow({
@@ -217,9 +238,10 @@ export function ExchangeStreamRow({
   ownerLinked = null,
   onToggleContent,
   onToggleChecks,
-  onAction,
   askOutcome = null,
-  onAskForRecord
+  onAskForRecord,
+  historyOutcome = null,
+  onAskForHistory
 }: ExchangeStreamRowProps) {
   // Lifted here (not `SecurityChecksView`, which only mounts once `▸
   // checks` is expanded) so a fetch this hook's `.fetch()` triggers can
@@ -245,9 +267,10 @@ export function ExchangeStreamRow({
   const alarm = isAlarmState(state)
   // Whom to ask, and how to name the exchange, from our own record of it.
   const askFor = askTarget(localRecord ?? (row.raw.mine.record as CapsuleRecord | undefined) ?? null)
-  // Do (2): an ask action with no recorded
-  // counterparty renders no button at all, with the text branching on WHICH
-  // truth holds -- a SERVED row has no remote other side to ask; an ASKED row
+  const askPeer = otherSideNodeId(localRecord ?? (row.raw.mine.record as CapsuleRecord | undefined) ?? null)
+  const historyLine = historyOutcome ? historyNote(historyOutcome) : null
+  // Do (2): a row waiting on a counterparty it has no record of says so in
+  // the cell, branching on WHICH truth holds -- a SERVED row has no remote other side to ask; an ASKED row
   // has one, but it's unknown/unrecorded. Never a single "nothing to ask yet"
   // that hides the difference.
   const gatedByCounterparty = isAskAction(state.kind) && !row.counterparty && !askFor
@@ -259,24 +282,21 @@ export function ExchangeStreamRow({
   const gatedText =
     row.roleTag !== 'SERVED' ? OTHER_SIDE_NOT_KNOWN_TEXT : servedForPay ? PAYER_NOT_RECORDED_TEXT : NO_OTHER_SIDE_TEXT
   const cellText = gatedByCounterparty ? gatedText : rightCellText(state)
-  // UX §3: with push on, their record normally arrives when the exchange
-  // finishes -- the ask is offered only once that has had time to happen.
-  const nowMs = useNowMs()
-  const askWaiting = isAskAction(state.kind) && !askForRecordIsDue(row.timestamp, nowMs)
-  // The ask is offered past the timeout on a row still waiting for their
-  // record, when we know whom to ask; never while an ask is in flight. An ask
-  // kind that can't be offered renders no button rather than a dead one.
-  const askOffered =
-    onAskForRecord !== undefined &&
-    askOutcome?.kind !== 'asking' &&
-    askIsOffered(state.kind, askFor, row.timestamp, nowMs)
-  const action = askOffered
-    ? state.kind === 'open_asked'
-      ? 'Ask again'
-      : 'Ask them for their record'
-    : gatedByCounterparty || askWaiting || isAskAction(state.kind)
-      ? null
-      : rightCellAction(state)
+  // The row's two asks, always on the row face: record push is off by
+  // default, so asking is how their record (or their history) gets here. Each
+  // is live as soon as our record names the other side's node, and otherwise
+  // says why not.
+  const asks = rowAskControls({
+    kind: state.kind,
+    target: askFor,
+    peerId: askPeer,
+    canAsk: onAskForRecord !== undefined && onAskForHistory !== undefined,
+    roleTag: row.roleTag,
+    servedForPay,
+    recordAsk: askOutcome,
+    historyAsk: historyOutcome
+  })
+  const action = rightCellAction(state)
   // Look finding 1: the chip strip on the collapsed row must show the same
   // results as the panel, so this node's own record is recomputed for every
   // rendered row, not only an expanded one. It is a local hash + signature
@@ -310,11 +330,11 @@ export function ExchangeStreamRow({
     marks: {
       content: entryRowChipMark(checksRows, 'content'),
       sig: entryRowChipMark(checksRows, 'sig'),
-      inclusion: entryRowChipMark(checksRows, 'inclusion'),
+      inclusion: entryRowChipMark(checksRows, 'inclusion', checkpointCovered),
       registered: entryRowChipMark(checksRows, 'registered')
     },
     refusedAtTheDoor: row.raw.theirs.evidence_outcome === 'claims_refused',
-    late: askForRecordIsDue(row.timestamp, nowMs)
+    askPeer: askPeer ? shortId(askPeer) : null
   })
   // UX §3 "Left: the event in words" -- role, peer, model, tokens, duration,
   // all read from this row's own record (the fetched `localRecord`, else the
@@ -453,12 +473,12 @@ export function ExchangeStreamRow({
                    (§3A "one colour per state") still varies with CLOSED/
                    refused/absent, never just alarm-vs-muted. */}
                 <StatusBadge dot={alarm} size="caption" tone={localOnly ? 'muted' : tone}>
-                  {localOnly ? 'LOCAL' : rowStatusLabel(state, row.raw.theirs.in_their_log)}
+                  {localOnly ? NO_OTHER_SIDE_LABEL : rowStatusLabel(state, row.raw.theirs.in_their_log)}
                 </StatusBadge>
                 {/* Terse state on the face; the fuller story behind the (i). */}
                 <InfoHover
                   census={localOnly ? 'row_state:local' : `row_state:${state.kind}`}
-                  describes={localOnly ? 'the LOCAL state' : `the ${rightCellStatusLabel(state)} state`}
+                  describes={localOnly ? `the ${NO_OTHER_SIDE_LABEL} state` : `the ${rightCellStatusLabel(state)} state`}
                   label={
                     localOnly
                       ? LOCAL_ONLY_TOOLTIP
@@ -492,29 +512,51 @@ export function ExchangeStreamRow({
                 {OWN_RECORD_FAILS_WARNING}
               </p>
             ) : null}
-            {action ? (
-              <Button
-                className="ui-control h-7 w-fit gap-1 rounded-[var(--radius)] px-2 text-[length:var(--density-type-caption)]"
-                onClick={() =>
-                  // Compare opens this row's checks at "their record",
-                  // where yours and theirs sit side by side. Other actions ask
-                  // the page (a counterparty request, a statement to view).
-                  state.kind === 'contradicted'
-                    ? handleChipActivate(entryRowChipPropertyKey('theirs'))
-                    : askOffered && askFor && onAskForRecord
-                      ? onAskForRecord(row, askFor)
-                      : onAction(row)
-                }
-                size="sm"
-                type="button"
-                variant="outline"
+            {historyLine ? (
+              <p
+                className={cn('text-xs', historyLine.verified ? 'text-foreground' : 'text-fg-dim')}
+                data-history-reply-verified={historyLine.verified ? 'true' : 'false'}
+                role="note"
               >
-                {action}
-              </Button>
+                {historyLine.text}
+              </p>
             ) : null}
+            <div className="flex flex-wrap items-center gap-1.5" data-row-asks="true">
+              {action ? (
+                // Compare opens this row's checks at "their record", where
+                // yours and theirs sit side by side.
+                <Button
+                  className={ROW_BUTTON_CLASS}
+                  onClick={() => handleChipActivate(entryRowChipPropertyKey('theirs'))}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  {action}
+                </Button>
+              ) : null}
+              <AskButton
+                census="action:disabled_reason"
+                control={asks.record}
+                onAsk={() => {
+                  if (askFor && onAskForRecord) onAskForRecord(row, askFor)
+                }}
+              />
+              <AskButton
+                census="action:disabled_reason"
+                control={asks.history}
+                onAsk={() => {
+                  if (askPeer && onAskForHistory) onAskForHistory(row, askPeer)
+                }}
+              />
+            </div>
           </div>
         </div>
-        <ExchangeRowChips checks={checksRows} onChipActivate={handleChipActivate} />
+        <ExchangeRowChips
+          checkpointCovered={checkpointCovered}
+          checks={checksRows}
+          onChipActivate={handleChipActivate}
+        />
         {row.raw.split ? <StageStrip split={row.raw.split} /> : null}
         {/* Payments sit beside the inference state, never inside it: CLOSED
            is about the two records of the exchange; settlement is this
@@ -568,20 +610,6 @@ export function ExchangeStreamRow({
               data-their-content-state={row.contentToggleState.their.kind}
             >
               <p className="text-xs text-fg-dim">{theirContentText(row.contentToggleState.their)}</p>
-              {theirContentAction(row.contentToggleState.their) ? (
-                <Button
-                  className="ui-control h-7 w-fit gap-1 rounded-[var(--radius)] px-2 text-[length:var(--density-type-caption)]"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    onAction(row)
-                  }}
-                  size="sm"
-                  type="button"
-                  variant="outline"
-                >
-                  {theirContentAction(row.contentToggleState.their)}
-                </Button>
-              ) : null}
             </div>
           </div>
         ) : null}

@@ -20,16 +20,17 @@ import { navigateHost } from '@/plugin-host/host'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { TabPanel } from '@/components/ui/TabPanel'
 import { fetchCapsuleLedger } from '@/features/capsules/api/client'
-import { askForRecord } from '@/features/capsules/api/evidenceRequestClient'
+import { announcedKeyFor, askForHistory, askForRecord } from '@/features/capsules/api/evidenceRequestClient'
 import { judgeAskReply, type AskOutcome, type AskTarget } from '@/features/capsules/lib/ask-for-record'
-import type { CapsuleRecord, JsonRecord } from '@/features/capsules/api/types'
+import { judgeHistoryReply, type HistoryOutcome } from '@/features/capsules/lib/ask-for-history'
+import { THEIR_RECORD_ARRIVES_IF_PUSHED } from '@/features/capsules/lib/row-combination'
+import type { CapsuleRecord } from '@/features/capsules/api/types'
 import {
   PaneFetchError,
   fetchPaneA,
   fetchPaneB,
   fetchPaneCList
 } from '@/features/capsules/api/sidecarClient'
-import { servedAskedCoverage } from '@/features/capsules/lib/exchanges-served-view'
 import { LedgerPeersTable } from '@/features/capsules/components/LedgerPeersTable'
 import { InfoHover } from '@/features/capsules/components/InfoHover'
 import { ExchangeStreamRow } from '@/features/capsules/components/ExchangeStreamRow'
@@ -115,6 +116,7 @@ import { advertisedOnlyPeers, usePeerMeshStatusIndex } from '@/features/capsules
 import {
   advertisedOnlyRowView,
   dealtWithRowView,
+  unlinkedNodeId,
   peerDisplayId,
   peerSortKey,
   sortPeerRows,
@@ -171,12 +173,6 @@ function describePaneError(error: unknown): string {
 
 type LedgerTab = 'peers' | 'exchanges' | 'integrity'
 
-// ---------------------------------------------------------------------------
-// Exchanges served / asked strip strip (pane-a's card.served_summary) — sits above the
-// Exchanges records table. Retired the standalone tab that held it;
-// this is the quantity answer, records are the list below it.
-// ---------------------------------------------------------------------------
-
 /** p2 item 5: a control that can't act right now says why on hover (and to
  *  screen readers), never greys out silently. `reason === null` renders the
  *  control untouched. The wrapper takes the hover because a disabled button
@@ -190,30 +186,11 @@ function DisabledReason({ reason, children }: { reason: string | null; children:
   )
 }
 
-function ExchangesServedAskedHeader({ card }: { card: JsonRecord | null | undefined }) {
-  const coverage = servedAskedCoverage(card)
-
-  // No served-summary fold exists yet (`card` null, or a present card with
-  // no witnessed range) -- render nothing rather than a "no data" line
-  // sitting above real rows. The coverage statement is a later item, once
-  // the fold is wired and `coverage.kind` can actually be `'verified'`.
-  if (coverage.kind === 'absent') {
-    return null
-  }
-  if (coverage.kind === 'failed') {
-    return (
-      <div className="rounded border border-border-soft bg-panel-strong/40 px-3 py-2 text-xs text-amber-500">
-        {coverage.headline}
-      </div>
-    )
-  }
-  return (
-    <div className="flex flex-col gap-1 rounded border border-border-soft bg-panel-strong/40 px-3 py-2">
-      <p className="text-sm font-medium text-foreground">Served: {coverage.servedText}</p>
-      <p className="text-xs text-fg-dim">{coverage.askedText}</p>
-      <p className="text-xs text-fg-faint">{coverage.statement}</p>
-    </div>
-  )
+/** How many of the listed exchanges this node served and how many it asked
+ *  for: a count of the rows below, by role, nothing more. */
+export function servedAskedLine(rows: readonly ExchangeLedgerRow[]): string {
+  const served = rows.filter((row) => row.roleTag === 'SERVED').length
+  return `You served ${served} · you asked ${rows.length - served}`
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +215,24 @@ function PeersSection({ recordsById }: { recordsById: Map<string, CapsuleRecord>
     refetchInterval: 15_000,
     retry: false,
     enabled: !harnessMode
+  })
+  // The key announced for each peer known only from our own records, so the
+  // row names it rather than saying no key is linked. One plugin route per
+  // node (`peer-key`), which answers `null` on a host that announces none.
+  const unlinkedNodeIds = useMemo(
+    () =>
+      [...new Set((query.data?.rows ?? []).map(unlinkedNodeId))]
+        .filter((id): id is string => id !== null && /^[0-9a-f]{64}$/i.test(id))
+        .sort(),
+    [query.data]
+  )
+  const announcedKeysQuery = useQuery({
+    queryKey: ['ledger', 'peer-keys', unlinkedNodeIds],
+    queryFn: async () =>
+      new Map(await Promise.all(unlinkedNodeIds.map(async (id) => [id, await announcedKeyFor(id)] as const))),
+    enabled: !harnessMode && unlinkedNodeIds.length > 0,
+    refetchInterval: 30_000,
+    retry: false
   })
   const meshStatus = usePeerMeshStatusIndex(PEER_TAB_HARNESS_MESH_PEERS, PEER_TAB_HARNESS_MESH_MODELS)
   const effectiveRecordsById = harnessMode ? PEER_TAB_HARNESS_LEDGER_RECORDS : recordsById
@@ -279,9 +274,11 @@ function PeersSection({ recordsById }: { recordsById: Map<string, CapsuleRecord>
     )
   }
 
-  const dealtWithViews = sortedDealtWithRawRows.map((row) =>
-    dealtWithRowView(row, resolveTimestamp, harnessMode ? [] : (paneCQuery.data?.rows ?? []))
-  )
+  const dealtWithViews = sortedDealtWithRawRows.map((row) => {
+    const nodeId = unlinkedNodeId(row)
+    const announcedKey = nodeId ? (announcedKeysQuery.data?.get(nodeId) ?? null) : null
+    return dealtWithRowView(row, resolveTimestamp, harnessMode ? [] : (paneCQuery.data?.rows ?? []), announcedKey)
+  })
   const advertisedViews = advertisedPeers.map((peer) => advertisedOnlyRowView(peer.shortId ?? peer.id))
 
   // §3E -- the role-aware
@@ -363,17 +360,17 @@ function exchangeFilterOptionLabel(value: string): string {
     case 'exception':
       return 'Exception'
     case 'closed':
-      return 'Closed'
+      return 'Confirmed'
     case 'contradicted':
-      return 'Contradicted'
+      return 'Disagree'
     case 'asked_no_reply':
       return 'Asked, no reply'
     case 'open':
-      return 'Open'
+      return 'Waiting for theirs'
     case 'local':
-      return 'This node only'
+      return 'No other side'
     case 'twins':
-      return 'Twins only'
+      return 'Sent to two machines'
     default:
       return value
   }
@@ -405,8 +402,8 @@ function ExchangesSection({
   /** §3E -- "Get the other side’s record" and
    *  "Register a checkpoint" beside the headline both land on the Integrity
    *  tab's setup checklist, the one place either step actually exists today
-   *  (`SetupChecklist` — neither has a wired end-to-end action yet, same
-   *  honest-stub discipline as `handleAskForHalf` below). Deep-linking to
+   *  (`SetupChecklist` — neither has a wired end-to-end action yet).
+   *  Deep-linking to
    *  the specific checklist row is left to the drill-paths work. */
   onGoToIntegrity: () => void
   /** A replayed fixture run (`evidenceSource` === 'sample'): actions that
@@ -420,7 +417,7 @@ function ExchangesSection({
   // Distinct queryKey from the top-level/Integrity pane-a query (no `mode`
   // suffix there) — this one's queryFn branches on harness mode, and a
   // shared key with a non-branching queryFn would race for cache ownership.
-  const servedSummaryQuery = useQuery({
+  const paneAQuery = useQuery({
     queryKey: ['ledger', 'pane-a', 'served-summary', mode],
     queryFn: () => (harnessMode ? Promise.resolve(HARNESS_PANE_A_PAYLOAD) : fetchPaneA()),
     refetchInterval: 15_000,
@@ -436,13 +433,13 @@ function ExchangesSection({
   // the Integrity chain strip shades, so a row's checks panel can never say
   // "no checkpoint covers this record" while Integrity says all are covered.
   const checkpointCoverage = useMemo(() => {
-    const card = servedSummaryQuery.data?.card ?? null
+    const card = paneAQuery.data?.card ?? null
     const covered = typeof card?.covered_leaf_count === 'number' ? card.covered_leaf_count : null
     return checkpointCoverageByRecord(
-      (servedSummaryQuery.data?.rows ?? []).map((r) => r.capsule_id),
+      (paneAQuery.data?.rows ?? []).map((r) => r.capsule_id),
       covered
     )
-  }, [servedSummaryQuery.data])
+  }, [paneAQuery.data])
   // Same queryKey as PeersSection's own pane-c query (no `mode` suffix) --
   // that one calls the identical `fetchPaneCList()` in live mode and is
   // simply `enabled: false` in harness mode, so both share ONE cache entry
@@ -477,12 +474,6 @@ function ExchangesSection({
   const [roleFilter, setRoleFilter] = useState<Set<string>>(new Set(ALL_ROLE_VALUES))
   const [checksFilter, setChecksFilter] = useState<Set<string>>(new Set(ALL_CHECKS_VALUES))
   const [stateFilter, setStateFilter] = useState<Set<string>>(new Set(ALL_STATE_FILTER_VALUES))
-  // the row's action cell must never open a detail surface of its own. The
-  // remaining row actions (view a statement, ask them to state their
-  // content) have no carrier yet, so they stay a no-op -- honest absence,
-  // never a fabricated result.
-  const handleAskForHalf = useCallback((_row: ExchangeLedgerRow) => {}, [])
-
   // "Ask them for their record": one evidence request to the other side over
   // the mesh (this plugin's `mesh_evidence_request` tool), judged in
   // `ask-for-record.ts`. The row shows "Asked …" at once, then whatever
@@ -498,6 +489,18 @@ function ExchangesSection({
     void askForRecord(target.peerId, target)
       .then((reply) => judgeAskReply(reply, requestDigest, askedAt))
       .then(settle)
+  }, [])
+
+  // "Ask for their history": one evidence request for the other side's
+  // history card (`history_card/1`), judged in `ask-for-history.ts`. Kept per
+  // row, beside that row's record ask.
+  const [historyOutcomes, setHistoryOutcomes] = useState<ReadonlyMap<string, HistoryOutcome>>(() => new Map())
+  const handleAskForHistory = useCallback((row: ExchangeLedgerRow, peerId: string) => {
+    const askedAt = new Date().toISOString()
+    const settle = (outcome: HistoryOutcome) =>
+      setHistoryOutcomes((previous) => new Map(previous).set(row.exchangeKey, outcome))
+    settle({ kind: 'asking', at: askedAt })
+    void askForHistory(peerId).then((reply) => settle(judgeHistoryReply(reply, askedAt)))
   }, [])
 
   // windowed paging (v3 §2a) state. `pageIndex`
@@ -704,12 +707,9 @@ function ExchangesSection({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [currentPageRows, focusedRowIndex, jumpToNextContradiction, checksExpandedKey, contentExpandedKey])
 
-  const servedAskedHeader = <ExchangesServedAskedHeader card={servedSummaryQuery.data?.card ?? null} />
-
   if (query.isLoading) {
     return (
       <div className="flex flex-col gap-2">
-        {servedAskedHeader}
         <p className="text-sm text-muted-foreground">Loading…</p>
       </div>
     )
@@ -717,7 +717,6 @@ function ExchangesSection({
   if (query.isError) {
     return (
       <div className="flex flex-col gap-2">
-        {servedAskedHeader}
         <p className="text-sm text-amber-500">{describePaneError(query.error)}</p>
       </div>
     )
@@ -728,7 +727,6 @@ function ExchangesSection({
   if (!query.data || query.data.row_count === 0) {
     return (
       <div className="flex flex-col gap-2">
-        {servedAskedHeader}
         <EmptyState
           description="Once you ask another node for an answer, or serve one to a peer, each exchange appears here as a two-sided record — your sealed record and theirs, as they send it."
           hint={
@@ -742,7 +740,7 @@ function ExchangesSection({
               >
                 Open Chat to start one
               </Button>
-              {requesterStartedDate ? <span>Your node started keeping its half on {requesterStartedDate}.</span> : null}
+              {requesterStartedDate ? <span>Your node started keeping its records on {requesterStartedDate}.</span> : null}
             </div>
           }
           icon={<ArrowLeftRight aria-hidden="true" className="size-10" strokeWidth={1.4} />}
@@ -783,11 +781,12 @@ function ExchangesSection({
 
   return (
     <div className="flex flex-col gap-2">
-      {servedAskedHeader}
       {/* L3.1 — Exchanges section headline */}
       <p className="text-sm text-fg-dim">
-        Each exchange is a pair of sealed records — yours and theirs. Their record normally arrives when the exchange
-        finishes. If it doesn’t, you can ask for it.
+        Each exchange is a pair of sealed records: yours and theirs. {THEIR_RECORD_ARRIVES_IF_PUSHED}
+      </p>
+      <p className="text-xs text-fg-dim" data-testid="served-asked-line">
+        {servedAskedLine(allRows)}
       </p>
       {/* UX §3 — ONE headline: count, confirmed, disagreements. Registration
          is an Integrity fact and lives there (and in the hero line). */}
@@ -1024,9 +1023,10 @@ function ExchangesSection({
                           row.raw.mine.capsule_id ? (checkpointCoverage.get(row.raw.mine.capsule_id) ?? null) : null
                         }
                         nodePubKeyPem={nodePubKeyPem}
-                        onAction={handleAskForHalf}
                         askOutcome={askOutcomes.get(row.exchangeKey) ?? null}
                         onAskForRecord={harnessMode || sampleData ? undefined : handleAskForRecord}
+                        historyOutcome={historyOutcomes.get(row.exchangeKey) ?? null}
+                        onAskForHistory={harnessMode || sampleData ? undefined : handleAskForHistory}
                         ownerLinked={nodeOwnerLinked}
                         onToggleChecks={handleToggleChecks}
                         onToggleContent={handleToggleContent}

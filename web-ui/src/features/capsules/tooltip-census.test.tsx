@@ -273,7 +273,7 @@ describe('tooltip census -- every chip type the Evidence tab ships has a plain o
     const user = userEvent.setup()
     render(<LedgerPageContent />, { wrapper })
     await user.click(await screen.findByRole('tab', { name: /exchanges/i }))
-    await screen.findAllByText(/You haven’t asked for their record\./)
+    await screen.findAllByText('Waiting for theirs')
     expectCovered(REQUIRED.exchanges, censusOnScreen(), 'face')
   })
 

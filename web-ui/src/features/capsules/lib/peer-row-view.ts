@@ -43,7 +43,8 @@ export function unattributedExchangesLine(count: number): string {
 // Peer identity aliases (D3) -- one
 // row per peer, joined on the signing key, with the other id spaces shown as
 // ALIASES on that row. Only evidence-backed aliases render; a node-id-only
-// row (no signing key linked by any evidence yet) says so instead of
+// row (no signed record from that node yet) says so, and names the key this
+// node was told that node signs with when there is one, instead of
 // pretending the spaces are one.
 // ---------------------------------------------------------------------------
 
@@ -62,18 +63,28 @@ export function peerIdentityAliases(row: PaneBRow): PeerIdentityAliases {
   }
 }
 
+/** The node id of a row known only from this node's own records (a record
+ *  naming the server it routed to), with no signed record from that node
+ *  yet: what to look up an announced key for. `null` otherwise. */
+export function unlinkedNodeId(row: PaneBRow): string | null {
+  const { signingKeyId, endpointId, nodeId } = peerIdentityAliases(row)
+  return !signingKeyId && nodeId && !endpointId ? nodeId : null
+}
+
 /** The one alias line under a peer row's id: "signed by <key16> · node
  *  <id16>… · endpoint <id>" for a key-joined peer (only the aliases the
- *  evidence carries), the honest unlinked note for a node-id-only row, and
- *  `null` when the row carries no identity evidence at all. */
-export function peerAliasLine(row: PaneBRow): string | null {
+ *  evidence carries), the unlinked note for a node-id-only row, and `null`
+ *  when the row carries no identity evidence at all. `announcedKeyId` is the
+ *  key this node was told the unlinked node signs with (the plugin's
+ *  `peer-key` route: the host's announced keys and the operator's map), or
+ *  `null` when none is, or on a host that announces none. */
+export function peerAliasLine(row: PaneBRow, announcedKeyId: string | null = null): string | null {
   const { signingKeyId, endpointId, nodeId } = peerIdentityAliases(row)
   if (!signingKeyId) {
-    // The unlinked case: the id came from this node's own records (a
-    // requester half naming the server it routed to); no pushed,
-    // door-verified half links it to a signing key yet.
-    if (nodeId && !endpointId) return 'node id from your own records — no signing key linked yet'
-    return null
+    if (!unlinkedNodeId(row)) return null
+    return announcedKeyId
+      ? `Known from your records · its key ${announcedKeyId.slice(0, 16)} is announced`
+      : 'Known from your records · no signed record from them yet'
   }
   const parts = [`signed by ${signingKeyId.slice(0, 16)}`]
   if (nodeId) parts.push(`node ${nodeId.slice(0, 16)}…`)
@@ -542,7 +553,9 @@ export function dealtWithRowView(
   row: PaneBRow,
   resolveTimestamp?: (capsuleId: string) => string | null,
   /** The Exchanges rows (pane C), for this peer's twin pairs. */
-  exchangeRows: readonly PaneCRow[] = []
+  exchangeRows: readonly PaneCRow[] = [],
+  /** The key announced for an unlinked peer's node (`unlinkedNodeId`). */
+  announcedKeyId: string | null = null
 ): PeerTableRowView {
   // `peerDisplayId` returns `null` for a row with no counterparty identity
   // at all (see its own doc comment) -- callers filter those out before
@@ -553,7 +566,7 @@ export function dealtWithRowView(
     key: row.peer_id ?? displayId,
     displayId,
     hasDealings: true,
-    aliasLine: peerAliasLine(row),
+    aliasLine: peerAliasLine(row, announcedKeyId),
     // UX §2: "self-reported" is true of every row, so it lives once in the
     // table legend, not on each row.
     identityNote: '',

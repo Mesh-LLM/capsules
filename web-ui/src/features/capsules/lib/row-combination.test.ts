@@ -5,7 +5,7 @@ import { rowCombinationText, WITNESS_HOLDS_IT, type RowCombinationInput } from '
 const ALL_OK = { content: '✓', sig: '✓', inclusion: '✓', registered: '–' } as const
 
 function input(overrides: Partial<RowCombinationInput>): RowCombinationInput {
-  return { state: 'closed', roleTag: 'ASKED', yoursHeld: true, marks: ALL_OK, refusedAtTheDoor: false, late: false, ...overrides }
+  return { state: 'closed', roleTag: 'ASKED', yoursHeld: true, marks: ALL_OK, refusedAtTheDoor: false, ...overrides }
 }
 
 describe('rowCombinationText -- what the badge and the chips say together', () => {
@@ -27,11 +27,17 @@ describe('rowCombinationText -- what the badge and the chips say together', () =
     expect(rowCombinationText(input({ state: 'contradicted' }))).toMatch(/disagrees with it, or doesn’t match its own id/)
   })
 
-  it('not arrived: on its way, then late (A7/A8), never telling you to do something the row doesn’t offer', () => {
-    expect(rowCombinationText(input({ state: 'open_not_held' }))).toMatch(/normally arrives/)
-    const late = rowCombinationText(input({ state: 'open_not_held', late: true }))
-    expect(late).toMatch(/is late/)
-    expect(late).not.toMatch(/\bAsk\b/)
+  it('not arrived: never "normally arrives" (record push is off by default); points to the ask the row offers', () => {
+    const text = rowCombinationText(input({ state: 'open_not_held' }))
+    expect(text).not.toMatch(/normally arrives|usually/)
+    expect(text).toMatch(/off by default/)
+    expect(text).toMatch(/ask for it on this row/)
+  })
+
+  it('a row the pane shows with no other side, whose own record names one, says whom to ask', () => {
+    expect(rowCombinationText(input({ state: 'open_not_asked', askPeer: 'ab12cd34' }))).toBe(
+      'Their record hasn’t arrived. You can ask ab12cd34 for it.'
+    )
   })
 
   it('only their record, nothing loaded, served locally, unknown other side (A17/A16/A10/A11)', () => {

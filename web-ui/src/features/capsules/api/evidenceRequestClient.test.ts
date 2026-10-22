@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { askForRecord } from '@/features/capsules/api/evidenceRequestClient'
+import { askForHistory, askForRecord } from '@/features/capsules/api/evidenceRequestClient'
 import { judgeAskReply } from '@/features/capsules/lib/ask-for-record'
 
 afterEach(() => {
@@ -68,7 +68,7 @@ describe('askForRecord', () => {
     expect(await askForRecord(PEER, BY_NONCE)).toEqual({
       kind: 'answer',
       answer,
-      verification: { state: 'artifact', records: [3, 4] },
+      verification: { state: 'artifact', records: [3, 4], checkpoints: 0 },
       requestDigest: DIGEST,
       announcedKeyId: null
     })
@@ -175,5 +175,28 @@ describe('askForRecord', () => {
       producerSignatureVerifies: () => true
     })
     expect(outcome).toMatchObject({ kind: 'record', evidence: { status: 'found', peerRecord: theirs } })
+  })
+})
+
+describe('askForHistory', () => {
+  it('asks for the whole log as the history_card/1 derivation, and keeps the checkpoint count', async () => {
+    const fetchMock = stubRoutes(
+      {
+        answer: { profile: 'evidence-interop/0' },
+        request_digest: DIGEST,
+        verification: { state: 'artifact', anchor: 'x', records: [], checkpoints: 3 }
+      },
+      'ab'.repeat(32)
+    )
+    const reply = await askForHistory(PEER)
+    expect(sentRequests(fetchMock)).toEqual([
+      {
+        profile: 'evidence-interop/0',
+        coverage: { min_freshness: 1 },
+        subject: { full_history: null },
+        derivation: 'history_card/1'
+      }
+    ])
+    expect(reply).toMatchObject({ kind: 'answer', verification: { state: 'artifact', records: [], checkpoints: 3 } })
   })
 })

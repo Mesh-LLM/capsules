@@ -1,5 +1,5 @@
-// "Ask them for their record" (UX §3): after the timeout, a row whose other
-// side's record hasn't arrived can ask that node for it. The plugin sends one
+// "Ask them for their record" (UX §3): a row whose other side's record hasn't
+// arrived can ask that node for it, as soon as our record names that node. The plugin sends one
 // evidence request over the mesh and verifies the reply before handing it
 // over (`api/evidenceRequestClient.ts`); this module judges what came back,
 // the same way the row judges a record that was pushed: nothing here is
@@ -26,12 +26,12 @@ import type { CapsuleRecord } from '@/features/capsules/api/types'
 import type { AskSubject, EvidenceAskReply } from '@/features/capsules/api/evidenceRequestClient'
 import { verifyCoseSign1 } from '@/features/capsules/lib/cose'
 import {
-  askForRecordIsDue,
-  deriveRightCellState,
+  stateFromFetchedHalf,
   type RightCellState,
   type RightCellStateKind
 } from '@/features/capsules/lib/exchange-row-state'
 import { recomputeIdMatch, type PeerRecomputeState } from '@/features/capsules/lib/recompute-identity'
+import { SAMPLE_DATA_UNAVAILABLE } from '@/features/capsules/lib/tooltip-copy'
 
 /** What asking produced for one row. `at` is when this node asked or when the
  *  other side signed its reply. */
@@ -76,37 +76,101 @@ function pocBlock(record: unknown): Record<string, unknown> | null {
   return obj(obj(obj(obj(record)?.model_attestation)?.compute_attestation)?.['x-mesh-poc-v1'])
 }
 
-export function askTarget(record: CapsuleRecord | Record<string, unknown> | null | undefined): AskTarget | null {
+/** The node on the other side of the exchange, as OUR record names it: the
+ *  node that served our request, or the one that asked us on a row we
+ *  served. `null` when the record names no such node. */
+export function otherSideNodeId(record: CapsuleRecord | Record<string, unknown> | null | undefined): string | null {
   const poc = pocBlock(record)
   const provenance = obj(poc?.serving_provenance)
+  const other = poc?.role === 'served' ? str(provenance?.requested_by_node_id) : str(provenance?.served_by_node_id)
+  const peerId = other?.toLowerCase() ?? null
+  return peerId && FULL_ID.test(peerId) ? peerId : null
+}
+
+export function askTarget(record: CapsuleRecord | Record<string, unknown> | null | undefined): AskTarget | null {
+  const poc = pocBlock(record)
   const recordedNonce = str(poc?.client_nonce)
   const nonce = recordedNonce === HOST_SERVED_NO_NONCE ? null : recordedNonce
   const effect = obj(obj(record)?.effect)
   const request = str(effect?.request_digest)?.toLowerCase()
   const response = str(effect?.response_digest)?.toLowerCase()
   const digests = request && response && FULL_ID.test(request) && FULL_ID.test(response) ? { request, response } : null
-  const other = poc?.role === 'served' ? str(provenance?.requested_by_node_id) : str(provenance?.served_by_node_id)
-  const peerId = other?.toLowerCase() ?? null
-  return peerId && FULL_ID.test(peerId) && (nonce || digests) ? { peerId, nonce, digests } : null
+  const peerId = otherSideNodeId(record)
+  return peerId && (nonce || digests) ? { peerId, nonce, digests } : null
 }
 
-/** The row states whose record hasn't arrived, where asking can help. */
+/** The row states where asking can help: their record hasn't arrived, or
+ *  they answered with a statement that asking again may change. */
 const ASKABLE_KINDS: ReadonlySet<RightCellStateKind> = new Set([
   'open_not_held',
   'open_not_given',
   'open_not_asked',
-  'open_asked'
+  'open_asked',
+  'open_refused',
+  'open_absent'
 ])
 
-/** The ask is offered once the exchange is past the timeout, on a row still
- *  waiting for their record, when we know whom to ask and how. */
-export function askIsOffered(
-  kind: RightCellStateKind,
-  target: AskTarget | null,
-  timestamp: string | null,
-  nowMs: number
-): boolean {
-  return ASKABLE_KINDS.has(kind) && target !== null && askForRecordIsDue(timestamp, nowMs)
+/** Why one of the row's two asks can't be sent, or `null` when it can. */
+export type RowAskControl = { label: string; disabledReason: string | null }
+
+export type RowAskInput = {
+  kind: RightCellStateKind
+  /** Whom to ask and how to name the exchange (`askTarget`). */
+  target: AskTarget | null
+  /** The node on the other side (`otherSideNodeId`): enough for a history ask. */
+  peerId: string | null
+  /** False where the page can't ask anyone (a saved sample). */
+  canAsk: boolean
+  roleTag: string
+  servedForPay: boolean
+  recordAsk: AskOutcome | null
+  historyAsk: { kind: string } | null
+}
+
+export const ASK_RECORD_LABEL = 'Ask them for their record'
+export const ASK_RECORD_AGAIN_LABEL = 'Ask again for their record'
+export const ASK_HISTORY_LABEL = 'Ask for their history'
+export const ASKING_LABEL = 'Asking…'
+
+function nobodyToAsk(roleTag: string, servedForPay: boolean): string {
+  if (roleTag !== 'SERVED') return 'Your record doesn’t name the node that answered, so there is no one to ask.'
+  return servedForPay
+    ? 'Your record doesn’t name the node that paid, so there is no one to ask.'
+    : 'No other node took part in this exchange, so there is no one to ask.'
+}
+
+/** The row's two asks, always shown: each one either can be sent now, or says
+ *  in one line why not. Nothing is offered that would click into nothing. */
+export function rowAskControls(input: RowAskInput): { record: RowAskControl; history: RowAskControl } {
+  const unavailable = input.canAsk ? null : SAMPLE_DATA_UNAVAILABLE
+  const nobody = input.peerId ? null : nobodyToAsk(input.roleTag, input.servedForPay)
+
+  let record: RowAskControl
+  if (input.recordAsk?.kind === 'asking') {
+    record = { label: ASKING_LABEL, disabledReason: 'Waiting for their reply.' }
+  } else {
+    const label =
+      input.recordAsk || input.kind === 'open_asked' || input.kind === 'open_refused' || input.kind === 'open_absent'
+        ? ASK_RECORD_AGAIN_LABEL
+        : ASK_RECORD_LABEL
+    const settled =
+      input.kind === 'closed'
+        ? 'Their record is already here and checks out.'
+        : input.kind === 'contradicted'
+          ? 'Their record is already here; Compare shows where it differs.'
+          : null
+    const unnamed = input.target ? null : 'Your record doesn’t name this exchange in a way they can look up.'
+    record = {
+      label,
+      disabledReason: unavailable ?? nobody ?? (ASKABLE_KINDS.has(input.kind) ? unnamed : settled)
+    }
+  }
+
+  const history: RowAskControl =
+    input.historyAsk?.kind === 'asking'
+      ? { label: ASKING_LABEL, disabledReason: 'Waiting for their reply.' }
+      : { label: ASK_HISTORY_LABEL, disabledReason: unavailable ?? nobody }
+  return { record, history }
 }
 
 function hexBytes(hex: string): Uint8Array | null {
@@ -137,7 +201,7 @@ function announcedKeyBytes(namedKeyId: unknown, announcedKeyId: string | null): 
 
 /** Why a refusal proves nothing, or `null` when it holds: signed under the
  *  announced key, over OUR request. */
-function refusalProblem(
+export function refusalProblem(
   refusal: Record<string, unknown>,
   announcedKeyId: string | null,
   sentRequestDigest: string
@@ -289,7 +353,7 @@ export function theirHalfCandidates(
   return served.length > 0 ? served : pool
 }
 
-const NO_KEY_DETAIL = 'this node has no announced key for them, so their reply cannot be checked'
+export const NO_KEY_DETAIL = 'this node has no announced key for them, so their reply cannot be checked'
 
 /** The line a row shows once its ask is answered: whether the reply was
  *  verified, and if not, why. `null` while the ask is in flight. */
@@ -330,7 +394,9 @@ export function askReplyNote(outcome: AskOutcome): { verified: boolean; text: st
   }
 }
 
-/** The row's right cell once it has asked. */
+/** The row's right cell once it has asked. A record they sent goes through
+ *  the row gate as a fetched half; one that doesn't confirm the exchange
+ *  leaves the row "asked", and the reply note says why. */
 export function stateAfterAsk(
   row: PaneCRow,
   outcome: AskOutcome,
@@ -345,7 +411,13 @@ export function stateAfterAsk(
       return { kind: 'open_refused', date: outcome.at }
     case 'no_record':
       return { kind: 'open_absent', date: outcome.at }
-    case 'record':
-      return deriveRightCellState(row, outcome.evidence, localRecord)
+    case 'record': {
+      // Judged on the reply itself: the ask went to the node our own record
+      // names, so the row's pane-side `theirs.state` (which may still read
+      // "absent") doesn't decide it.
+      const ours = localRecord ?? (row.mine.record as CapsuleRecord | undefined) ?? null
+      const state = stateFromFetchedHalf(outcome.evidence, ours)
+      return state.kind === 'open_not_held' ? { kind: 'open_asked', date: outcome.at } : state
+    }
   }
 }

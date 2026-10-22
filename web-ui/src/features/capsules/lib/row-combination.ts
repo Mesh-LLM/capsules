@@ -16,9 +16,14 @@ export type RowCombinationInput = {
   marks: { content: EntryRowChipMark; sig: EntryRowChipMark; inclusion: EntryRowChipMark; registered: EntryRowChipMark }
   /** The door refused their record for naming another server or model. */
   refusedAtTheDoor: boolean
-  /** Old enough that their record should have arrived. */
-  late: boolean
+  /** The other side's node, short, when our record names one to ask. */
+  askPeer?: string | null
 }
+
+/** Record push is off by default (INSTALL.md "Quiet by default"), so their
+ *  record arriving by itself is the exception, never the expectation. */
+export const THEIR_RECORD_ARRIVES_IF_PUSHED =
+  'Their record arrives on its own only if their node sends records (off by default). Otherwise, ask for it on the exchange row.'
 
 export const WITNESS_HOLDS_IT = ' A witness you don’t run also holds your checkpoint.'
 
@@ -34,7 +39,7 @@ export function rowCombinationText(input: RowCombinationInput): string {
   }
   switch (state) {
     case 'closed':
-      return marks.inclusion === '✓'
+      return marks.inclusion === '✓' || marks.inclusion === '◐'
         ? `Both records agree and check out: yours is unchanged and signed, and theirs is signed, from the node that served you, with the same request, answer and model weights.${witnessed}`
         : `Confirmed by them; your record is newer than your last checkpoint and the next one will cover it.${witnessed}`
     case 'contradicted':
@@ -42,18 +47,17 @@ export function rowCombinationText(input: RowCombinationInput): string {
         ? 'Their signed record says another server or another model handled your request, so your node refused it. Use Compare to see the difference.'
         : `Your record checks out, and their signed record disagrees with it, or doesn’t match its own id. Use Compare to see where.${witnessed}`
     case 'open_not_held':
-      return input.late
-        ? 'Your side is sealed and checks out, but their record is late: it normally arrives when the exchange finishes.'
-        : 'Your side is sealed and checks out; their record normally arrives when the exchange finishes.'
+      return 'Your side is sealed and checks out; their record hasn’t arrived. It comes on its own only if their node sends records (off by default), so ask for it on this row.'
     case 'open_not_given':
-      return 'Your side is sealed and checks out; their record hasn’t arrived, and they didn’t send an id to ask for it by.'
+      return 'Your side is sealed and checks out; their record hasn’t arrived, and nothing they sent names it by its id. Ask for it on this row.'
     case 'open_not_asked':
+      if (input.askPeer) return `Their record hasn’t arrived. You can ask ${input.askPeer} for it.`
       if (input.roleTag !== 'SERVED') return 'Your record doesn’t name who answered, so there is no one to ask.'
       return input.servedForPay
         ? 'You served this for pay to another node; which node paid isn’t recorded, so there is no one to ask.'
         : 'You served this yourself; your record is all there is.'
     case 'open_asked':
-      return 'You asked for their record and no answer has come back yet.'
+      return 'You asked for their record and no verified answer has come back yet.'
     case 'open_refused':
       return 'They declined to share their record and signed the refusal; the refusal is on your record.'
     case 'open_absent':

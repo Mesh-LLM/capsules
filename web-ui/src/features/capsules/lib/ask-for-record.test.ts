@@ -7,12 +7,13 @@ import {
   FIXTURE_RESPONSE_DIGEST,
   fixtureHalfBody
 } from '@/features/capsules/lib/pushed-half-fixtures'
-import { ASK_FOR_RECORD_AFTER_MS } from '@/features/capsules/lib/exchange-row-state'
 import type { EvidenceVerification } from '@/features/capsules/api/evidenceRequestClient'
 import {
-  askIsOffered,
   askReplyNote,
   askTarget,
+  otherSideNodeId,
+  rowAskControls,
+  type RowAskInput,
   HOST_SERVED_NO_NONCE,
   judgeAskReply,
   producerSignatureVerifies,
@@ -157,22 +158,73 @@ describe('askTarget', () => {
   })
 })
 
-describe('askIsOffered', () => {
+describe('rowAskControls', () => {
   const target = { peerId: FIXTURE_PROVIDER_NODE, nonce: NONCE, digests: null }
-  const at = '2026-09-28T20:00:00Z'
-  const now = Date.parse(at)
-
-  it('waits for the timeout, then offers the ask on a row whose record has not arrived', () => {
-    expect(askIsOffered('open_not_given', target, at, now + ASK_FOR_RECORD_AFTER_MS - 1)).toBe(false)
-    expect(askIsOffered('open_not_given', target, at, now + ASK_FOR_RECORD_AFTER_MS)).toBe(true)
-    expect(askIsOffered('open_not_held', target, at, now + ASK_FOR_RECORD_AFTER_MS)).toBe(true)
+  const input = (overrides: Partial<RowAskInput> = {}): RowAskInput => ({
+    kind: 'open_not_given',
+    target,
+    peerId: FIXTURE_PROVIDER_NODE,
+    canAsk: true,
+    roleTag: 'ASKED',
+    servedForPay: false,
+    recordAsk: null,
+    historyAsk: null,
+    ...overrides
   })
 
-  it('never offers it on a closed or contradicted row, or with no one to ask', () => {
-    const late = now + ASK_FOR_RECORD_AFTER_MS
-    expect(askIsOffered('closed', target, at, late)).toBe(false)
-    expect(askIsOffered('contradicted', target, at, late)).toBe(false)
-    expect(askIsOffered('open_not_given', null, at, late)).toBe(false)
+  it('offers both asks at once on a row whose record has not arrived: no timeout', () => {
+    for (const kind of ['open_not_given', 'open_not_held', 'open_not_asked'] as const) {
+      expect(rowAskControls(input({ kind }))).toEqual({
+        record: { label: 'Ask them for their record', disabledReason: null },
+        history: { label: 'Ask for their history', disabledReason: null }
+      })
+    }
+  })
+
+  it('offers asking again after an answer or a signed statement', () => {
+    for (const kind of ['open_asked', 'open_refused', 'open_absent'] as const) {
+      expect(rowAskControls(input({ kind })).record).toEqual({ label: 'Ask again for their record', disabledReason: null })
+    }
+  })
+
+  it('keeps the record ask on a settled row, disabled with why; the history ask stays live', () => {
+    expect(rowAskControls(input({ kind: 'closed' })).record.disabledReason).toBe(
+      'Their record is already here and checks out.'
+    )
+    expect(rowAskControls(input({ kind: 'contradicted' })).record.disabledReason).toMatch(/Compare shows where/)
+    expect(rowAskControls(input({ kind: 'closed' })).history.disabledReason).toBeNull()
+  })
+
+  it('says why when there is no one to ask, by which truth holds', () => {
+    const asked = rowAskControls(input({ target: null, peerId: null }))
+    expect(asked.record.disabledReason).toBe('Your record doesn’t name the node that answered, so there is no one to ask.')
+    expect(asked.history.disabledReason).toBe(asked.record.disabledReason)
+    expect(rowAskControls(input({ target: null, peerId: null, roleTag: 'SERVED' })).record.disabledReason).toBe(
+      'No other node took part in this exchange, so there is no one to ask.'
+    )
+    expect(
+      rowAskControls(input({ target: null, peerId: null, roleTag: 'SERVED', servedForPay: true })).history.disabledReason
+    ).toBe('Your record doesn’t name the node that paid, so there is no one to ask.')
+    // A named node, but nothing to name the exchange by: only the history ask can go.
+    const unnamed = rowAskControls(input({ target: null }))
+    expect(unnamed.record.disabledReason).toMatch(/doesn’t name this exchange/)
+    expect(unnamed.history.disabledReason).toBeNull()
+  })
+
+  it('is disabled on a saved sample, and while an ask is in flight', () => {
+    const sample = rowAskControls(input({ canAsk: false }))
+    expect(sample.record.disabledReason).toBe('Not available on sample data.')
+    expect(sample.history.disabledReason).toBe('Not available on sample data.')
+    const asking = rowAskControls(
+      input({ recordAsk: { kind: 'asking', at: ASKED_AT }, historyAsk: { kind: 'asking' } })
+    )
+    expect(asking.record).toEqual({ label: 'Asking…', disabledReason: 'Waiting for their reply.' })
+    expect(asking.history).toEqual({ label: 'Asking…', disabledReason: 'Waiting for their reply.' })
+  })
+
+  it('names the other side from our record, whichever role we had', () => {
+    expect(otherSideNodeId(ourRequestedRecord())).toBe(FIXTURE_PROVIDER_NODE)
+    expect(otherSideNodeId(fixtureHalfBody({ servedBy: 'unknown' }))).toBeNull()
   })
 })
 
@@ -361,6 +413,15 @@ describe('judgeAskReply', () => {
     expect(outcome.kind).toBe('record')
     const ours = ourRequestedRecord()
     expect(stateAfterAsk(waitingRow(), outcome, ours as never).kind).toBe('closed')
+  })
+
+  it('closes a row the pane still shows with no other side once their verified record arrives (never "not received")', async () => {
+    const theirs = { ...fixtureHalfBody({ capsuleId: 'theirs-1' }), signature: 'aa', key_id: 'bb' }
+    const outcome = await judgeAskReply(answer(artifact([theirs])), FIXTURE_REQUEST_DIGEST, ASKED_AT, trustingJudges)
+    const paneAbsent = { ...waitingRow(), theirs: { state: 'absent', capsule_id: null } } as unknown as PaneCRow
+    expect(stateAfterAsk(paneAbsent, outcome, ourRequestedRecord() as never).kind).toBe('closed')
+    // Our record from the pane's own copy when none was fetched.
+    expect(stateAfterAsk(paneAbsent, outcome, null).kind).toBe('closed')
   })
 
   it('never closes the row on a record whose signature does not verify', async () => {

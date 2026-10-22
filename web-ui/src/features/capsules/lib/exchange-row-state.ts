@@ -8,6 +8,7 @@
 import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
 import type { CapsuleRecord } from '@/features/capsules/api/types'
 import { isDigestShaped } from '@/features/capsules/lib/canonical'
+import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import { CLOSED_CELL_TOOLTIPS, ROW_STATE_TOOLTIPS } from '@/features/capsules/lib/tooltip-copy'
 import type { PeerRecomputeState } from '@/features/capsules/lib/recompute-identity'
 
@@ -252,6 +253,16 @@ export function capsuleIdIsDigestShaped(id: string | null | undefined): boolean 
   return typeof id === 'string' && /^[0-9a-f]{64}$/.test(id)
 }
 
+/** The right cell for a counterparty record this browser fetched, judged on
+ *  its own by THE gate. For an ask this row sent to the node its own record
+ *  names: the row's pane-side `theirs.state` doesn't apply to that reply. */
+export function stateFromFetchedHalf(
+  evidence: PeerRecomputeState,
+  localRecord: CapsuleRecord | null | undefined
+): RightCellState {
+  return { kind: counterpartyHalfState(evidence, localRecord, 'fetched'), date: null }
+}
+
 export function deriveRightCellState(
   row: PaneCRow,
   theirsRecompute?: PeerRecomputeState,
@@ -296,8 +307,11 @@ export function deriveRightCellState(
   return { kind: 'open_not_held', date: null }
 }
 
+/** A statement's or ask's date: an RFC 3339 time in the viewer's own time
+ *  zone, never a raw ISO stamp; any other form as the row carries it. */
 function dateOrFallback(date: string | null): string {
-  return date ?? 'date unavailable'
+  if (!date) return 'date unavailable'
+  return /^\d{4}-\d{2}-\d{2}T/.test(date) ? formatExchangeTimestamp(date) : date
 }
 
 // ---------------------------------------------------------------------------
@@ -320,20 +334,19 @@ export type BracketStrip = { yours: BracketSide; joined: boolean; theirs: Bracke
 function theirSide(kind: RightCellStateKind): BracketSide {
   switch (kind) {
     case 'closed':
-      return { glyph: '●', word: 'same' }
+      return { glyph: '●', word: 'confirmed' }
     case 'contradicted':
-      return { glyph: '●', word: 'differs' }
+      return { glyph: '●', word: 'disagrees' }
     case 'open_refused':
-      return { glyph: '○', word: 'refused' }
+      return { glyph: '○', word: 'declined' }
     case 'open_absent':
       return { glyph: '○', word: 'they have no record' }
     case 'open_asked':
       return { glyph: '○', word: 'asked, no reply yet' }
     case 'open_not_held':
     case 'open_not_given':
-      return { glyph: '○', word: 'not received' }
     case 'open_not_asked':
-      return { glyph: '○', word: 'not asked for' }
+      return { glyph: '○', word: 'not received' }
     default: {
       const exhaustiveCheck: never = kind
       return exhaustiveCheck
@@ -353,23 +366,6 @@ export function bracketStrip(row: PaneCRow, state: RightCellState): BracketStrip
 export function bracketStripText(strip: BracketStrip): string {
   const link = strip.joined ? ' —— ' : '   '
   return `Yours ${strip.yours.glyph} ${strip.yours.word}${link}Theirs ${strip.theirs.glyph} ${strip.theirs.word}`
-}
-
-/** UX §3 "Put `Ask for their record` on the row only after a timeout": with
- *  push on, their record normally arrives when the exchange finishes, so an
- *  ask is offered only once this long has passed without it. A minute: a
- *  node that runs no record-push door never receives a push, and asking is
- *  then the only way its row closes, so the wait stays short. Committed
- *  times are minute-granular, so the ask appears within a minute or two. */
-export const ASK_FOR_RECORD_AFTER_MS = 60 * 1000
-
-/** True once the exchange is old enough that their record should have
- *  arrived. A row with no parseable timestamp cannot be timed, so the ask is
- *  offered rather than hidden. */
-export function askForRecordIsDue(timestamp: string | null, nowMs: number): boolean {
-  const at = timestamp ? Date.parse(timestamp) : Number.NaN
-  if (Number.isNaN(at)) return true
-  return nowMs - at >= ASK_FOR_RECORD_AFTER_MS
 }
 
 /** D4(d): the CLOSED right column as
@@ -407,19 +403,17 @@ export function rightCellText(state: RightCellState): string {
     case 'closed':
       return '✓ They recorded the same request and answer'
     case 'contradicted':
-      return '✗ Their record differs'
+      return '✗ Their record disagrees with yours'
     case 'open_refused':
       return `They declined, and signed the refusal — ${dateOrFallback(state.date)}`
     case 'open_absent':
       return `They say they have no record of this — ${dateOrFallback(state.date)}`
     case 'open_asked':
-      return `Asked ${dateOrFallback(state.date)}. No reply yet.`
+      return `Asked ${dateOrFallback(state.date)}. No verified reply yet.`
     case 'open_not_held':
-      return 'Their record hasn’t arrived yet.'
     case 'open_not_given':
-      return 'Their record hasn’t arrived yet.'
     case 'open_not_asked':
-      return 'You haven’t asked for their record.'
+      return 'Their record hasn’t arrived yet.'
     default: {
       const exhaustiveCheck: never = state.kind
       return exhaustiveCheck
@@ -436,7 +430,8 @@ export function rightCellDetail(state: RightCellState): string {
   return ROW_STATE_TOOLTIPS[state.kind]
 }
 
-/** The row's state label, with "in their log" on a CLOSED row once our
+/** The row's state label, one plain word or phrase per state, with "in
+ *  their log" on a CLOSED row once our
  *  records cite their inclusion proof for it (§7.6b). No number: their
  *  checkpoint's leaf count includes their padding, so it is never a count of
  *  their records. */
@@ -448,21 +443,19 @@ export function rowStatusLabel(state: RightCellState, inTheirLog: object | null 
 export function rightCellStatusLabel(state: RightCellState): string {
   switch (state.kind) {
     case 'closed':
-      return 'CLOSED'
+      return 'Confirmed'
     case 'contradicted':
-      return 'CONTRADICTED'
+      return 'Disagree'
     case 'open_refused':
-      return 'OPEN · refused'
+      return 'Declined'
     case 'open_absent':
-      return 'OPEN · absent'
+      return 'They have no record'
     case 'open_asked':
-      return 'OPEN · asked'
+      return 'Asked, no reply'
     case 'open_not_held':
-      return 'OPEN · not held'
     case 'open_not_given':
-      return 'OPEN'
     case 'open_not_asked':
-      return 'OPEN'
+      return 'Waiting for theirs'
     default: {
       const exhaustiveCheck: never = state.kind
       return exhaustiveCheck
@@ -470,42 +463,17 @@ export function rightCellStatusLabel(state: RightCellState): string {
   }
 }
 
-/** The action control that lives inside the cell, or `null` for `closed`
- *  (nothing to do once a row agrees and cites your half) and
- *  `open_not_held` (the real action -- `fetch peer capsule &
- *  recompute here` -- lives inside the `▸ checks` panel, next to the
- *  identity it fetches for, not as a second copy of the same button at the
- *  row summary level). */
+/** The state's own action beside the row's two asks: `Compare` on a row
+ *  whose two records disagree (it opens the checks at their record). Every
+ *  other state has none: the asks (`rowAskControls`) are the row's actions,
+ *  and no control is shown that has nothing to do. */
 export function rightCellAction(state: RightCellState): string | null {
-  switch (state.kind) {
-    case 'closed':
-      return null
-    case 'contradicted':
-      return 'Compare'
-    case 'open_refused':
-      return 'View refusal'
-    case 'open_absent':
-      return 'View statement'
-    case 'open_asked':
-      return 'Ask again'
-    case 'open_not_held':
-      return null
-    case 'open_not_given':
-      return null
-    case 'open_not_asked':
-      return 'Ask them for their record'
-    default: {
-      const exhaustiveCheck: never = state.kind
-      return exhaustiveCheck
-    }
-  }
+  return state.kind === 'contradicted' ? 'Compare' : null
 }
 
-/** The two states whose action is literally "ask a counterparty"
- * -- every other action (`Compare` / `View
- *  refusal` / `View statement`) inspects evidence this node already holds,
- *  not a live counterparty to contact, so only these two require a
- *  recorded counterparty before the action can render. */
+/** The two states that wait on a counterparty to ask: a row in one of them
+ *  with no recorded counterparty says which truth holds instead
+ *  (`ExchangeStreamRow`'s gated cell text). */
 const ASK_ACTION_KINDS: ReadonlySet<RightCellStateKind> = new Set(['open_not_asked', 'open_asked'])
 
 export function isAskAction(kind: RightCellStateKind): boolean {
