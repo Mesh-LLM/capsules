@@ -32,6 +32,8 @@ pnpm typecheck && pnpm test && pnpm build   # writes ../bundle/register-mesh-plu
 
 # Repository checks
 scripts/no-keys.sh
+scripts/mutants.sh            # each plugin mutant fails its tests (slow)
+scripts/referee-mutants.sh    # each referee mutant fails its cases (slow)
 node --test scripts/*.test.mjs
 (cd vectors && shasum -a 256 -c SHA256SUMS)
 ```
@@ -50,6 +52,10 @@ On Linux x86_64, Linux arm64 and macOS arm64 (`.github/workflows/ci.yml`):
 
 - `cargo fmt --check`, `cargo clippy -D warnings` and `cargo test` for the
   plugin, including the conformance vectors in `vectors/`.
+- The mutants: each build with one deliberate fault must fail the tests named
+  for it, in `gates/mutants.json` (`scripts/mutants.sh`) and
+  `vectors/parity/referee/mutants.json` (`scripts/referee-mutants.sh`); and
+  serde_json's `unbounded_depth` must not reach the plugin binary.
 - The web UI: typecheck, unit tests, and the bundle build.
 
 Once, on Linux:
@@ -97,6 +103,9 @@ in `crates/evidence-plugin/src/two_node_e2e.rs` run over what each node wrote:
   from the requester, because the requester is a client node, whose id is new
   each start and so cannot be given a key, and each of its pushes is refused
   for that reason.
+- the real-host tests (`tests/host_runtime_e2e.rs`, see
+  [docs/REAL-HOST-VERIFICATION.md](docs/REAL-HOST-VERIFICATION.md)) pass, and
+  fail on a build that serves a blocked model.
 
 The mesh-llm release and the model are pinned by SHA-256 in the workflow and
 cached. Add the `run-e2e` label to a pull request to run it before merge.

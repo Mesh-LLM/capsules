@@ -85,6 +85,7 @@ host feature; none names this plugin.
 | `docs/` | sharing policy, verification chain, split-stage records, protocol notes, real-host tests |
 | `plugin.toml`, `plugin.package.json` | the package marker and the reviewed plugin manifest |
 | `scripts/` | packaging and repository checks |
+| `gates/` | the plugin's mutant table, which `scripts/mutants.sh` runs |
 
 The records are sealed by the [`capsule-emit`](https://crates.io/crates/capsule-emit)
 crate on top of [`checkpointed-local-log`](https://crates.io/crates/checkpointed-local-log)

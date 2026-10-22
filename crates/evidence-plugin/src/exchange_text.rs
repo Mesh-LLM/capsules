@@ -304,12 +304,12 @@ pub fn keep(
         }
         bytes = serde_json::to_vec(&document)?;
     }
-    let disclosures = ledger_dir.join("disclosures");
     let dir = by_exchange_dir(ledger_dir);
     std::fs::create_dir_all(&dir)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        let disclosures = ledger_dir.join("disclosures");
         for private in [&disclosures, &dir] {
             std::fs::set_permissions(private, std::fs::Permissions::from_mode(0o700))?;
         }

@@ -78,99 +78,14 @@ jobs:
       - name: Tests
         run: cargo test --locked -- --test-threads=1
 
-      # The parity runners (vectors/parity/) are part of the tests above. A
-      # receiver built without its claim checks, and a responder built without
-      # its sharing-policy gate, must each FAIL its runner, on the cases that
-      # exercise the dropped check. Each mutant must build first, so a compile
-      # error can never pass as "the mutant was caught".
-      - name: Record-push parity catches a receiver that drops a check
-        shell: bash
-        run: |
-          cargo test --locked --bin capsules --features mutant-record-push-skips-claims --no-run
-          if out=$(cargo test --locked --bin capsules --features mutant-record-push-skips-claims -- record_push_parity:: 2>&1); then
-            echo "::error::the parity run passed a receiver that skips the claim checks"
-            exit 1
-          fi
-          grep -q "claims_served_by_other" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the claim cases"; exit 1; }
-
-      - name: Evidence-request parity catches a responder that drops a check
-        shell: bash
-        run: |
-          cargo test --locked --bin capsules --features mutant-evidence-skips-policy-gate --no-run
-          if out=$(cargo test --locked --bin capsules --features mutant-evidence-skips-policy-gate -- evidence_request_parity:: 2>&1); then
-            echo "::error::the parity run passed a responder that skips the sharing-policy gate"
-            exit 1
-          fi
-          grep -q "record_to_a_stranger" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the policy cases"; exit 1; }
-
-      - name: The witness-key tests catch a requester that ignores witness keys
-        shell: bash
-        run: |
-          cargo test --locked --bin capsules --features mutant-answer-ignores-witness-keys --no-run
-          if out=$(cargo test --locked --bin capsules --features mutant-answer-ignores-witness-keys -- evidence_answer:: 2>&1); then
-            echo "::error::the witness-key tests passed a requester that ignores witness keys"
-            exit 1
-          fi
-          grep -q "a_receipt_under_its_witnesss_configured_key_is_counted_witnessed ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the witnessed case"; exit 1; }
-      - name: The TEE checks catch a verifier that skips the binding
-        shell: bash
-        run: |
-          cargo test --locked --bin capsules --features mutant-tee-skips-binding-check --no-run
-          if out=$(cargo test --locked --bin capsules --features mutant-tee-skips-binding-check -- producer::tee_attest 2>&1); then
-            echo "::error::the TEE checks passed a verifier that skips the binding"
-            exit 1
-          fi
-          grep -q "check_3_a_quote_bound_to_another_record_fails ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the binding case"; exit 1; }
-
-      - name: The own-key tests catch a node that never announces its key
-        shell: bash
-        run: |
-          cargo test --locked --bin capsules --features mutant-own-key-not-announced --no-run
-          if out=$(cargo test --locked --bin capsules --features mutant-own-key-not-announced -- peer_keys:: 2>&1); then
-            echo "::error::the own-key tests passed a node that never announces its key"
-            exit 1
-          fi
-          grep -q "a_peers_announced_key_verifies_its_pushed_half_with_no_configured_keys ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the no-configured-keys case"; exit 1; }
-
-      - name: The requester-auth tests catch a responder that skips the signature check
-        shell: bash
-        run: |
-          cargo test --locked --bin capsules --features mutant-requester-auth-skips-verify --no-run
-          if out=$(cargo test --locked --bin capsules --features mutant-requester-auth-skips-verify -- evidence_answer:: 2>&1); then
-            echo "::error::the requester-auth tests passed a responder that skips the signature check"
-            exit 1
-          fi
-          grep -q "a_node_claiming_to_be_another_is_refused_before_the_ledger_is_read ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the T3 case"; exit 1; }
-
-      - name: The requester-auth tests catch a responder that skips the audience check
-        shell: bash
-        run: |
-          cargo test --locked --bin capsules --features mutant-requester-auth-skips-audience --no-run
-          if out=$(cargo test --locked --bin capsules --features mutant-requester-auth-skips-audience -- evidence_answer:: 2>&1); then
-            echo "::error::the requester-auth tests passed a responder that skips the audience check"
-            exit 1
-          fi
-          grep -q "a_request_addressed_to_another_node_is_refused_before_the_ledger_is_read ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the relay case"; exit 1; }
-
-      - name: The requester-auth tests catch a responder that answers any failed signature as unsigned
-        shell: bash
-        run: |
-          cargo test --locked --bin capsules --features mutant-requester-auth-downgrades-all --no-run
-          if out=$(cargo test --locked --bin capsules --features mutant-requester-auth-downgrades-all -- evidence_answer:: 2>&1); then
-            echo "::error::the requester-auth tests passed a responder that answers any failed signature as unsigned"
-            exit 1
-          fi
-          grep -q "a_failed_request_is_never_answered_as_unsigned ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the never-downgraded case"; exit 1; }
-
-      - name: The requester-auth tests catch one domain tag shared by every channel
-        shell: bash
-        run: |
-          cargo test --locked --bin capsules --features mutant-requester-auth-shared-tag --no-run
-          if out=$(cargo test --locked --bin capsules --features mutant-requester-auth-shared-tag -- requester_auth:: 2>&1); then
-            echo "::error::the requester-auth tests passed one domain tag shared by every channel"
-            exit 1
-          fi
-          grep -q "a_request_signed_for_one_channel_fails_on_every_other ... FAILED" <<<"$out" || { echo "$out"; echo "::error::the mutant failed, but not on the cross-channel case"; exit 1; }
+      # The plugin's mutants (gates/mutants.json): each build with one
+      # deliberate fault must fail the tests the table names for it, and print
+      # what it says. Among them: a receiver built without its claim checks
+      # and a responder built without its sharing-policy gate must each FAIL
+      # their parity runner (vectors/parity/), and a build that serves a
+      # blocked model or a malformed body must fail the stand-in host tests.
+      - name: The tests catch each plugin mutant
+        run: bash ../../scripts/mutants.sh
 
       # The referee's mutants (vectors/parity/referee/mutants.json): each build
       # with one deliberate fault must fail the referee parity run on every

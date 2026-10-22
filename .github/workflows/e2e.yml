@@ -137,6 +137,25 @@ jobs:
               || { echo "$out"; echo "::error::the mutant was not caught by ${attack%_}"; exit 1; }
           done
 
+      # The plugin under the real host (tests/host_runtime_e2e.rs, ignored
+      # unless MESH_LLM_HOST_BIN is set), then a build that serves a blocked
+      # model, which the real host's routing must not hide: the blocked-model
+      # case must FAIL. Last, because the mutant build replaces the executable
+      # the steps above ran.
+      - name: Real-host tests, and the blocked-model mutant through the real host
+        working-directory: crates/evidence-plugin
+        run: |
+          export MESH_LLM_HOST_BIN="$MESH_LLM_BIN"
+          cargo test --locked --test host_runtime_e2e -- --ignored --test-threads=1
+          cargo test --locked --test host_runtime_e2e --features mutant-blocked-model-served --no-run
+          if out=$(cargo test --locked --test host_runtime_e2e --features mutant-blocked-model-served \
+              -- --ignored --test-threads=1 denies_blocked_model_end_to_end_through_real_host 2>&1); then
+            echo "::error::the real-host tests passed a build that serves a blocked model"
+            exit 1
+          fi
+          grep -q "denies_blocked_model_end_to_end_through_real_host \.\.\. FAILED" <<<"$out" \
+            || { echo "$out"; echo "::error::the mutant failed, but not on the blocked-model case"; exit 1; }
+
       # The node logs only: never the data directories, which hold each
       # node's signing key.
       - name: Keep the node logs

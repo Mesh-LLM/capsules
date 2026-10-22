@@ -110,18 +110,19 @@ capsule-emit-lib = { package = "capsule-emit", version = "0.0.6" }
 cll = { package = "checkpointed-local-log", version = "0.2.1" }
 # Evidence requests are answered in-process (`evidence_answer`): parsing,
 # resolution, signed refusals and the artifact answer come from the protocol
-# crate (draft-mih-agent-evidence-request-00). Pinned exactly: 0.0.3 checks
-# the witness receipts an answer carries and anchors an exchange answer at the
-# earliest checkpoint covering it, and a new release may change what verifies.
-capsule-emit-evidence-request = "=0.0.3"
-# A witness's receipt for a checkpoint is checked offline before the page
-# counts it (`witness_status`). Not on crates.io: pinned to a public commit.
+# crate (draft-mih-agent-evidence-request-00). Pinned exactly: a new release
+# may change what verifies. 0.0.4 takes its witness-receipt checks from the
+# crates.io scitt-cose-receipt.
+capsule-emit-evidence-request = "=0.0.4"
 # The witness's own record of this log (`witness_status`): one blocking GET,
 # no redirects, a capped body. Already in the tree through capsule-emit.
 ureq = { version = "2", features = ["json"] }
 # O_NOFOLLOW for the lock files (`data_dir`). Already in the tree.
 libc = "0.2"
-scitt-cose-receipt = { git = "https://github.com/action-state-group/scitt-cose", rev = "8833281c11d33e3c1e289cf74f11d25ee7f3c6dc" }
+# A witness's receipt for a checkpoint is checked offline before the page
+# counts it (`witness_status`). 0.1.0 is yanked, so this resolves to 0.1.1 or
+# later.
+scitt-cose-receipt = "0.1"
 
 [dev-dependencies]
 # The record-push parity run reads its own golden answers, which hold a record
@@ -134,7 +135,7 @@ tempfile = "3"
 # Decodes the `CallToolResult` a `tools/call` `RpcResponse` carries, in
 # `tests/mesh_evidence_bridge_interop.rs` -- same version mesh-llm-plugin
 # itself pins, so the wire shape matches exactly.
-rmcp = "1.8"
+rmcp = "3"
 # Frames the fake host's envelopes in `tests/quiet_default_interop.rs`, whose
 # reader task owns the read half of the plugin socket -- same version
 # mesh-llm-plugin itself pins.

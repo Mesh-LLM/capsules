@@ -77,6 +77,13 @@
 - **`share_history_segments` defaults to `counterparties`.** `prospective`, the old default, is
   deprecated and read as `counterparties`: it always served exactly the same nodes, so nothing
   changes for a node using it. A log line says when it is read. Set `counterparties` instead.
+- **Evidence requests use `capsule-emit-evidence-request` 0.0.4 (was 0.0.3), and witness receipts
+  are checked by `scitt-cose-receipt` 0.1.1 from crates.io instead of a git pin.** 0.0.4 changes
+  only how a request sent as CBOR is read. This plugin reads requests as JSON, so its answers do not
+  change. The receipt check now tries every well-formed inclusion proof in a receipt, not only the
+  first, so a receipt that was refused only because of the order of its proofs can now count as
+  witnessed on the Evidence page. A proof with an impossible tree size, index or path is refused
+  as malformed before any is tried.
 
 ### Added
 
@@ -133,6 +140,16 @@
   read as a second, different weights claim. Weights fields are now held to weights fields and
   model ids to model ids. A half whose two weights fields disagree, or that names another model id
   than the one asked for, is still refused, and the Evidence page applies the same rule.
+- **Two providers that gave the same answer to one request are no longer crossed.** Their halves
+  were paired by answer alone, so when one provider's half arrived first it could close the record
+  of the other, and both exchanges showed as open. A half now first closes the record of its own
+  serving node, and the result is the same whatever order the halves arrive in.
+- **A ledger fetch reads at most 1 MiB each way.** The node answering read a whole request into
+  memory before checking it, and the node asking read a whole answer. An oversized request is now
+  dropped unanswered, and an oversized answer is an error.
+- **A start that stopped while moving the ledger to a new history finishes the same move next
+  time.** It used to pick the next archive slot and seal `history_started` with the wrong archive
+  path and a prior record count of zero.
 
 ## 0.1.4
 

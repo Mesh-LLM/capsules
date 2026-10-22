@@ -165,6 +165,17 @@ mod tests {
         assert_eq!(checked_in, packaged());
     }
 
+    /// The package marker, the executable and every sealed record must name
+    /// one version, so a release bumps `plugin.toml` with the crate.
+    #[test]
+    fn plugin_toml_declares_the_crate_version() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugin.toml");
+        let marker: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&path).expect("plugin.toml is checked in"))
+                .expect("plugin.toml is TOML");
+        assert_eq!(marker["version"].as_str(), Some(env!("CARGO_PKG_VERSION")));
+    }
+
     /// The manifest names a page id and an entry script that the bundle
     /// source must provide: the page id the bundle registers, and the one
     /// file the bundle build writes. Both live in TypeScript, so read them.

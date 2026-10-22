@@ -39,14 +39,15 @@ const SETTLE: Duration = Duration::from_secs(180);
 /// The most a test waits for the plugin to connect and answer initialize.
 const STARTUP: Duration = Duration::from_secs(60);
 
+/// Unique within the process too: the tests run in parallel, and two clock
+/// reads can return the same nanosecond.
 fn nonce() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     format!(
         "{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        COUNTER.fetch_add(1, Ordering::Relaxed)
     )
 }
 
