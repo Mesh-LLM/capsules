@@ -44,7 +44,7 @@ describe('buildExchangeLedgerRows', () => {
       ],
       new Map()
     )
-    expect(row.checksText).toBe('checkpoint signature')
+    expect(row.checksText).toBe('checkpoint signed')
     expect(row.checksText).not.toMatch(/\d\/\d/)
   })
 
@@ -87,8 +87,8 @@ describe('buildExchangeLedgerRows', () => {
       ],
       new Map()
     )
-    expect(row.checksText).toBe('checkpoint signature')
-    expect(row.checksText).not.toMatch(/content binding|capture coverage/)
+    expect(row.checksText).toBe('checkpoint signed')
+    expect(row.checksText).not.toMatch(/words match|captured in full/)
   })
 
   it('falls back to naming the pair-reconciliation check when has_issue is true but no named property failed', () => {

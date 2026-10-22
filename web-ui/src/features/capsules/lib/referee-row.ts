@@ -1,5 +1,5 @@
 // The line a twin pair's row reads when no referee signed a verdict for it:
-// "Not adjudicated: <why>". One line per reason the plugin gives
+// "No ruling yet: <why>". One line per reason the plugin gives
 // (`referee::request`), and none of them counts against either machine.
 import type { ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
 
@@ -18,26 +18,26 @@ const NOT_COMPARABLE_BECAUSE: Record<string, string> = {
 
 /** Every reason the plugin gives, and its line. */
 export const NOT_ADJUDICATED_LINES: Record<string, string> = {
-  off: 'Not adjudicated: the independent check is turned off on this node.',
-  host_does_not_mark_twins: 'Not adjudicated: no client marked these as a pair.',
-  twins_agree: 'Not adjudicated: the two answers agree.',
-  not_comparable: 'Not adjudicated: the two answers cannot be compared.',
-  no_eligible_referee: 'Not adjudicated: no eligible referee.',
-  referee_cannot_sign: 'Not adjudicated: the referee asked cannot sign a verdict.',
-  referee_unreachable: 'Not adjudicated: the referee asked did not answer.'
+  off: 'No ruling yet: the independent check is turned off on this node.',
+  host_does_not_mark_twins: 'No ruling yet: no client marked these as a pair.',
+  twins_agree: 'No ruling yet: the two answers agree.',
+  not_comparable: 'No ruling yet: the two answers cannot be compared.',
+  no_eligible_referee: 'No ruling yet: no eligible referee.',
+  referee_cannot_sign: 'No ruling yet: the referee asked cannot sign a verdict.',
+  referee_unreachable: 'No ruling yet: the referee asked did not answer.'
 }
 
 /** A pair with no outcome recorded yet (its other half not held here). */
-export const NOT_ADJUDICATED_YET = 'Not adjudicated yet.'
+export const NOT_ADJUDICATED_YET = 'No ruling yet.'
 
 /** The line for a row that is not adjudicated; `null` for an adjudicated one. */
 export function notAdjudicatedLine(row: RefereeRow | null | undefined): string | null {
   if (!row) return NOT_ADJUDICATED_YET
   if (row.state === 'adjudicated') return null
   if (row.reason === 'not_comparable' && row.because && NOT_COMPARABLE_BECAUSE[row.because]) {
-    return `Not adjudicated: not comparable, ${NOT_COMPARABLE_BECAUSE[row.because]}.`
+    return `No ruling yet: not comparable, ${NOT_COMPARABLE_BECAUSE[row.because]}.`
   }
-  return NOT_ADJUDICATED_LINES[row.reason] ?? 'Not adjudicated.'
+  return NOT_ADJUDICATED_LINES[row.reason] ?? 'No ruling yet.'
 }
 
 /** The pair's recorded outcome, from either of its rows. */

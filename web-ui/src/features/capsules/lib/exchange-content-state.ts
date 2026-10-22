@@ -115,9 +115,3 @@ export function theirContentText(state: TheirContentState): string {
     }
   }
 }
-
-/** The action control that lives inside the `their` cell when expanded --
- *  only the never-asked state has one (v3 §3's table). */
-export function theirContentAction(state: TheirContentState): string | null {
-  return state.kind === 'not_asked' ? 'Ask them to state it' : null
-}

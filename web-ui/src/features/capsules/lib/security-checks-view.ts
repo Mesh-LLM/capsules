@@ -34,8 +34,10 @@ function boolToWireState(value: boolean | null): string {
  *  it must never gate a `✓ same` claim (that requires `peerRecordFor`
  *  below to return non-null) -- conflating the two was finding 2 of the
  *  2026-09-23 assessment. */
-function theirsHeld(row: PaneCRow): boolean {
-  return row.theirs.state !== 'absent'
+function theirsHeld(row: PaneCRow, theirsRecompute?: PeerRecomputeState): boolean {
+  // A record of theirs this page holds (fetched, or brought by an ask) counts
+  // even where the pane recorded no other side (`row-evidence.ts`).
+  return row.theirs.state !== 'absent' || theirsRecompute?.status === 'found'
 }
 
 /** True only when `theirsRecompute` carries a REAL, arrived result for
@@ -80,8 +82,8 @@ export type IdentityRow = { label: string; yours: IdentityCell; theirs: Identity
  *  defaulting to. */
 function theirsIdentityNote(theirsRecompute: PeerRecomputeState | undefined): string {
   if (theirsActuallyRecomputed(theirsRecompute)) {
-    if (theirsRecompute?.idMatch === true) return '✓ recomputed here, matches'
-    if (theirsRecompute?.idMatch === false) return '✕ recomputed here, MISMATCH'
+    if (theirsRecompute?.idMatch === true) return '✓ checked in your browser, matches'
+    if (theirsRecompute?.idMatch === false) return '✕ checked in your browser, doesn’t match'
   }
   if (theirsRecompute?.status === 'fetching') return 'fetching…'
   if (theirsRecompute?.status === 'not_found') return 'they have no such record'
@@ -96,20 +98,25 @@ export function buildIdentityRow(
 ): IdentityRow {
   const yoursNote =
     identity.idMatch === true
-      ? '✓ recomputed here, matches'
+      ? '✓ checked in your browser, matches'
       : identity.idMatch === false
-        ? '✕ recomputed here, MISMATCH'
+        ? '✕ checked in your browser, doesn’t match'
         : 'not yet recomputed'
   // Finding 5: a peer-asserted id that isn't digest-shaped (a chat-
   // completion id forwarded as-is, `capsule-chatcmpl-…`) is not a capsule
   // id -- never rendered as their identity, and never fetchable
   // (`peerFetchJoinKey` already refuses it, so `theirsFetchable` disables
   // the fetch action for exactly this row).
-  const theirsCapsuleId = row.theirs.capsule_id && isDigestShaped(row.theirs.capsule_id) ? row.theirs.capsule_id : null
+  // The id of the record whose checks are shown (the chosen evidence); the
+  // pane's id only when no record body is held.
+  const held = peerRecordFor(theirsRecompute)
+  const heldId = held && typeof held.capsule_id === 'string' && isDigestShaped(held.capsule_id) ? held.capsule_id : null
+  const paneId = row.theirs.capsule_id && isDigestShaped(row.theirs.capsule_id) ? row.theirs.capsule_id : null
+  const theirsCapsuleId = held ? heldId : paneId
   return {
-    label: 'capsule id',
+    label: 'record id',
     yours: { value: row.mine.capsule_id ?? '—', note: yoursNote },
-    theirs: theirsHeld(row)
+    theirs: theirsHeld(row, theirsRecompute)
       ? { value: theirsCapsuleId ?? 'not given', note: theirsIdentityNote(theirsRecompute) }
       : null
   }
@@ -153,7 +160,7 @@ export function buildHeaderRows(
   theirsRecompute?: PeerRecomputeState
 ): HeaderRow[] {
   const keyId = localRecord && typeof localRecord.key_id === 'string' ? (localRecord.key_id as string) : null
-  const held = theirsHeld(row)
+  const held = theirsHeld(row, theirsRecompute)
   const peerRecord = peerRecordFor(theirsRecompute)
   const peerTimestamp = peerRecord && typeof peerRecord.timestamp === 'string' ? peerRecord.timestamp : null
   const peerKeyId = peerRecord && typeof peerRecord.key_id === 'string' ? peerRecord.key_id : null
@@ -291,7 +298,7 @@ export function buildCommitsToRows(
   const effect = (localRecord?.effect ?? null) as { request_digest?: string; response_digest?: string } | null
   const taskBindingCell = row.properties?.task_binding ?? null
   const modelId = localRecord?.model_attestation?.model_id ?? null
-  const held = theirsHeld(row)
+  const held = theirsHeld(row, theirsRecompute)
   const peerRecord = peerRecordFor(theirsRecompute)
 
   /** `theirs` is `null` (no cell at all) only when `!held` -- no
@@ -346,7 +353,7 @@ export function buildCommitsToRows(
           ? theirsFor(responseDigestRaw, ['effect', 'response_digest'])
           : null
     },
-    { label: 'task binding', yours: taskBinding, theirs: null },
+    { label: 'tied to the request', yours: taskBinding, theirs: null },
     {
       label: 'model identity',
       yours: modelIdentity,
@@ -425,8 +432,8 @@ const CHECKPOINT_DEPENDENT = new Set(['local_inclusion', 'checkpoint_signature',
 
 function yoursDetailFor(key: string, state: string, text: string | undefined, actuallyRecomputed: boolean): string {
   if (text) return text
-  if (actuallyRecomputed) return 'recomputed here'
-  if (RECOMPUTED_PROPERTIES.has(key)) return 'not yet recomputed here'
+  if (actuallyRecomputed) return 'checked in your browser'
+  if (RECOMPUTED_PROPERTIES.has(key)) return 'not yet checked in your browser'
   if (state === 'NOT_PRESENT') {
     // once-per-node checkpoint/registration
     // facts live on the Integrity section, never repeated per row -- this
@@ -440,7 +447,7 @@ function yoursDetailFor(key: string, state: string, text: string | undefined, ac
 
 function theirsDetailFor(key: string, theirsRecompute: PeerRecomputeState | undefined): string {
   if (RECOMPUTED_PROPERTIES.has(key)) {
-    if (theirsActuallyRecomputed(theirsRecompute)) return 'recomputed here'
+    if (theirsActuallyRecomputed(theirsRecompute)) return 'checked in your browser'
     if (theirsRecompute?.status === 'fetching') return 'fetching…'
     if (theirsRecompute?.status === 'not_found') return 'they have no such record'
     if (theirsRecompute?.status === 'error') return `fetch failed: ${theirsRecompute.errorMessage ?? 'unknown error'}`
@@ -577,7 +584,7 @@ export function buildChecksRows(
   { gateKind, checkpointCovered = null, ownerLinked = null }: ChecksContext = {}
 ): ChecksRow[] {
   const gateOutcome = gateOutcomeCell(gateKind)
-  const held = theirsHeld(row)
+  const held = theirsHeld(row, theirsRecompute)
   const checkpointSignatureState = row.properties?.checkpoint_signature?.state ?? 'NOT_PRESENT'
 
   return Object.keys(NINE_PROPERTY_LABELS).map((key) => {

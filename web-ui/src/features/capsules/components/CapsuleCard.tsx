@@ -46,12 +46,12 @@ function buildVerdict(sp: ServingProvenance, inputs: VerdictInputs): VerdictLine
   } else if (inputs.idMatch === false) {
     line1 = {
       mark: 'warn',
-      text: `Attests it ran on ${name}${hw} (self-reported) — but this record's content does NOT recompute to its own capsule_id here. Treat it as altered.`
+      text: `Attests it ran on ${name}${hw} (self-reported) — but this record's id doesn’t match its contents here. Treat it as altered.`
     }
   } else {
     line1 = {
       mark: 'ok',
-      text: `Attests it ran on ${name}${hw} (self-reported)${split ? `, ${split}` : ''} — recompute in-browser that this record is signed+unaltered.`
+      text: `Attests it ran on ${name}${hw} (self-reported)${split ? `, ${split}` : ''} — check in your browser that this record is signed and unaltered.`
     }
   }
 
@@ -278,7 +278,7 @@ export function CapsuleCard({ record, nodePubKeyPem }: CapsuleCardProps) {
           </summary>
           <div className="space-y-1 px-3 pb-3 font-mono text-muted-foreground">
             <div>capsule_id: {capsuleId}</div>
-            <div>recomputed in-browser: {recomputedId ?? '(not recomputable)'}</div>
+            <div>id checked in your browser: {recomputedId ?? '(couldn’t be checked)'}</div>
             <div>id matches: {idMatch === true ? 'yes' : idMatch === false ? 'NO' : 'n/a'}</div>
             <div>
               signature (COSE_Sign1 vs node pubkey):{' '}

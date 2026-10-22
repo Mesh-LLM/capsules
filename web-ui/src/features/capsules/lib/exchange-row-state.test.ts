@@ -16,6 +16,7 @@ import type { CapsuleRecord } from '@/features/capsules/api/types'
 import type { PeerRecomputeState } from '@/features/capsules/lib/recompute-identity'
 import { fixtureHalfBody, fixtureMineCell, fixtureTheirsCell } from '@/features/capsules/lib/pushed-half-fixtures'
 import { STANDING_WORD } from '@/features/capsules/lib/banned-terms'
+import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 
 function paneCRow(overrides: Partial<PaneCRow> = {}): PaneCRow {
   return {
@@ -43,6 +44,11 @@ function localRecordWithDigests(): CapsuleRecord {
  *  CLOSED-eligible. */
 function citingPeerRecord(): Record<string, unknown> {
   return fixtureHalfBody({ capsuleId: 'a'.repeat(64) })
+}
+
+/** A provider record whose answer digest differs from ours. */
+function disagreeingPeerRecord(): Record<string, unknown> {
+  return fixtureHalfBody({ capsuleId: 'a'.repeat(64), responseDigest: 'e'.repeat(64) })
 }
 
 function fetched(overrides: Partial<PeerRecomputeState> = {}): PeerRecomputeState {
@@ -87,6 +93,21 @@ describe('deriveRightCellState — finding 1 (2026-09-23 assessment): CLOSED req
   it('a real fetch that does NOT match -> CONTRADICTED, never CLOSED', () => {
     const row = paneCRow()
     expect(deriveRightCellState(row, fetched({ idMatch: false })).kind).toBe('contradicted')
+  })
+
+  it('a verified fetch from the provider whose answer differs from ours -> CONTRADICTED', () => {
+    expect(
+      deriveRightCellState(paneCRow(), fetched({ peerRecord: disagreeingPeerRecord() }), localRecordWithDigests()).kind
+    ).toBe('contradicted')
+  })
+
+  it('a bad signature over a matching id is no verdict -- never CONTRADICTED, never CLOSED', () => {
+    const state = deriveRightCellState(
+      paneCRow(),
+      fetched({ signatureOk: false, peerRecord: disagreeingPeerRecord() }),
+      localRecordWithDigests()
+    )
+    expect(state.kind).toBe('open_not_held')
   })
 
   it('BOUNCE REPRO (finding 1): idMatch true but signatureOk false is NOT CLOSED -- an id match proves nothing without a verified signature over the fetched bytes', () => {
@@ -377,6 +398,10 @@ describe('deriveRightCellState — bilateral-retention-decay-property (agent-act
     // own claimed id -- the "both-present-disagreeing" case the property
     // says MUST stay a contradiction, never downgraded to missing-half.
     expect(deriveRightCellState(row, fetched({ status: 'found', idMatch: false })).kind).toBe('contradicted')
+    // And a verified provider record whose digests differ from ours.
+    expect(
+      deriveRightCellState(row, fetched({ peerRecord: disagreeingPeerRecord() }), localRecordWithDigests()).kind
+    ).toBe('contradicted')
   })
 })
 
@@ -473,19 +498,35 @@ describe('rightCellText — the load-bearing distinction', () => {
     expect(notAsked).not.toBe(unanswered)
   })
 
-  it('LOAD-BEARING: pending-fetch never renders the same string as not-asked or CLOSED', () => {
-    const pendingFetch = rightCellText(stateOf('open_not_held'))
-    expect(pendingFetch).not.toBe(rightCellText(stateOf('open_not_asked')))
-    expect(pendingFetch).not.toBe(rightCellText(stateOf('closed')))
+  it('LOAD-BEARING: a record still to arrive never renders the same string as an unanswered ask or CLOSED', () => {
+    const notArrived = rightCellText(stateOf('open_not_held'))
+    expect(notArrived).not.toBe(rightCellText(stateOf('open_asked')))
+    expect(notArrived).not.toBe(rightCellText(stateOf('closed')))
+  })
+
+  it('shows an ask’s RFC 3339 time in the viewer’s zone, never the raw stamp', () => {
+    const text = rightCellText(stateOf('open_asked', '2026-10-22T14:03:00Z'))
+    expect(text).not.toContain('2026-10-22T14:03:00Z')
+    expect(text).toBe(`Asked ${formatExchangeTimestamp('2026-10-22T14:03:00Z')}. No verified reply yet.`)
+    const offset = rightCellText(stateOf('open_asked', '2026-10-22T16:03:00+02:00'))
+    expect(offset).toBe(`Asked ${formatExchangeTimestamp('2026-10-22T16:03:00+02:00')}. No verified reply yet.`)
+  })
+
+  it('leaves a time with no zone, or anything else, as the row carries it', () => {
+    for (const raw of ['2026-10-22T14:03:00', '2026-10-22', '4 Sep', 'not a date', '2026-10-22T14:03Z']) {
+      expect(rightCellText(stateOf('open_asked', raw))).toBe(`Asked ${raw}. No verified reply yet.`)
+    }
   })
 
   it('renders the exact copy from v3 §2 for each state', () => {
     expect(rightCellText(stateOf('closed'))).toBe('✓ They recorded the same request and answer')
-    expect(rightCellText(stateOf('contradicted'))).toBe('✗ Their record differs')
+    expect(rightCellText(stateOf('contradicted'))).toBe('✗ Their record disagrees with yours')
     expect(rightCellText(stateOf('open_refused', '4 Sep'))).toBe('They declined, and signed the refusal — 4 Sep')
     expect(rightCellText(stateOf('open_absent', '4 Sep'))).toBe('They say they have no record of this — 4 Sep')
-    expect(rightCellText(stateOf('open_asked', '3 Sep'))).toBe('Asked 3 Sep. No reply yet.')
-    expect(rightCellText(stateOf('open_not_asked'))).toBe('You haven’t asked for their record.')
+    expect(rightCellText(stateOf('open_asked', '3 Sep'))).toBe('Asked 3 Sep. No verified reply yet.')
+    // Push is off by default: "not asked" isn't why it's missing, so it reads
+    // like every other record that hasn't arrived.
+    expect(rightCellText(stateOf('open_not_asked'))).toBe('Their record hasn’t arrived yet.')
     // UX §7 ruling: "not held" and "id not given" share one face; the (i)
     // tells them apart.
     expect(rightCellText(stateOf('open_not_held'))).toBe('Their record hasn’t arrived yet.')
@@ -519,12 +560,15 @@ describe('rightCellDetail — Item 4: the fuller story behind each state, moved 
     }
   })
 
-  it('the not-held states say their record has not arrived; "id not given" adds why it cannot be asked for', () => {
+  it('the not-held states say their record has not arrived, and that it comes on its own only if they send records', () => {
     // Both cases the gate returns open_not_held for: nothing yet, or
     // something arrived that couldn't be confirmed as theirs.
     expect(rightCellDetail(stateOf('open_not_held'))).toContain('Their record hasn’t arrived')
     expect(rightCellDetail(stateOf('open_not_held'))).toContain('couldn’t be confirmed as theirs')
-    expect(rightCellDetail(stateOf('open_not_given'))).toContain('they didn’t send an id to ask for it by')
+    expect(rightCellDetail(stateOf('open_not_given'))).toContain('nothing they sent names it by its id')
+    for (const kind of ['open_not_held', 'open_not_given', 'open_not_asked'] as const) {
+      expect(rightCellDetail(stateOf(kind))).toContain('only if their node sends records (off by default)')
+    }
   })
 
   it('never names a banned word, even to deny it, and none of the engineer’s words', () => {
@@ -541,38 +585,28 @@ describe('rightCellDetail — Item 4: the fuller story behind each state, moved 
 })
 
 describe('rightCellStatusLabel', () => {
-  it('names seven distinct status badges (open_not_given and open_not_asked share the plain OPEN badge)', () => {
+  it('one plain word or phrase per state; every record still to arrive reads "Waiting for theirs"', () => {
     const labels = ALL_KINDS.map((kind) => rightCellStatusLabel(stateOf(kind)))
-    expect(new Set(labels).size).toBe(7)
+    expect(new Set(labels).size).toBe(6)
     expect(labels).toEqual([
-      'CLOSED',
-      'CONTRADICTED',
-      'OPEN · refused',
-      'OPEN · absent',
-      'OPEN · asked',
-      'OPEN · not held',
-      'OPEN',
-      'OPEN'
+      'Confirmed',
+      'Disagree',
+      'Declined',
+      'They have no record',
+      'Asked, no reply',
+      'Waiting for theirs',
+      'Waiting for theirs',
+      'Waiting for theirs'
     ])
   })
 })
 
 describe('rightCellAction', () => {
-  it('closed, open_not_held, and open_not_given have no row-level action; every other state has one', () => {
-    expect(rightCellAction(stateOf('closed'))).toBeNull()
-    expect(rightCellAction(stateOf('open_not_held'))).toBeNull()
-    expect(rightCellAction(stateOf('open_not_given'))).toBeNull()
-    for (const kind of ALL_KINDS.filter((k) => k !== 'closed' && k !== 'open_not_held' && k !== 'open_not_given')) {
-      expect(rightCellAction(stateOf(kind))).not.toBeNull()
-    }
-  })
-
-  it('names the exact action from v3 §2', () => {
+  it('only a contradicted row has a state action (Compare); the asks are the row’s, never a dead control', () => {
     expect(rightCellAction(stateOf('contradicted'))).toBe('Compare')
-    expect(rightCellAction(stateOf('open_refused'))).toBe('View refusal')
-    expect(rightCellAction(stateOf('open_absent'))).toBe('View statement')
-    expect(rightCellAction(stateOf('open_asked'))).toBe('Ask again')
-    expect(rightCellAction(stateOf('open_not_asked'))).toBe('Ask them for their record')
+    for (const kind of ALL_KINDS.filter((k) => k !== 'contradicted')) {
+      expect(rightCellAction(stateOf(kind))).toBeNull()
+    }
   })
 })
 

@@ -9,7 +9,7 @@ import {
 describe('the not-adjudicated reason lines', () => {
   it('a host with no twin bracket ids says so, word for word', () => {
     expect(notAdjudicatedLine({ state: 'not_adjudicated', reason: 'host_does_not_mark_twins' })).toBe(
-      'Not adjudicated: no client marked these as a pair.'
+      'No ruling yet: no client marked these as a pair.'
     )
   })
 
@@ -31,7 +31,7 @@ describe('the not-adjudicated reason lines', () => {
   it('not comparable says why', () => {
     for (const because of ['sampled', 'model_hash_differs', 'model_hash_unknown', 'weights_differ', 'weights_unknown']) {
       expect(notAdjudicatedLine({ state: 'not_adjudicated', reason: 'not_comparable', because })).toMatch(
-        /^Not adjudicated: not comparable, .+\.$/
+        /^No ruling yet: not comparable, .+\.$/
       )
     }
   })

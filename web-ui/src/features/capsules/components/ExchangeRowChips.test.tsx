@@ -37,10 +37,11 @@ describe('ExchangeRowChips -- one tooltip per result, not one per chip', () => {
     )
   })
 
-  it('every chip has a distinct text for ✓, ✗ and –', () => {
+  it('every chip has a distinct text for each of its marks (✓, ✗, – and the checkpoint chip’s ◐)', () => {
     for (const byMark of Object.values(ENTRY_CHIP_RESULT_TOOLTIPS)) {
-      expect(new Set(Object.values(byMark)).size).toBe(3)
+      expect(new Set(Object.values(byMark)).size).toBe(Object.keys(byMark).length)
     }
+    expect(Object.keys(ENTRY_CHIP_RESULT_TOOLTIPS.inclusion)).toContain('◐')
   })
 
   it('never claims the checkpoint coverage or a witness receipt is checked on this page', () => {

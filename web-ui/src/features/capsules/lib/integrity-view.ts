@@ -24,6 +24,7 @@ import {
   INTEGRITY_TILE_TOOLTIPS,
   OWNER_LINKED_PHRASE,
   OWNER_NOT_LINKED_PHRASE,
+  THEIR_RECORD_ARRIVES_IF_PUSHED,
   WITNESS_OFF
 } from '@/features/capsules/lib/tooltip-copy'
 
@@ -233,7 +234,7 @@ export function buildSetupSteps(
       body:
         closedByOtherSideCount > 0 || askedPeerAt !== null
           ? null
-          : 'Their record usually arrives on its own when an exchange finishes; you can also ask them for it.'
+          : THEIR_RECORD_ARRIVES_IF_PUSHED
     }
   ]
 }
@@ -470,7 +471,7 @@ export type WitnessRow = {
 
 /** The words for where a witness's key came from. */
 export const WITNESS_KEY_CONFIGURED = 'key configured'
-export const WITNESS_KEY_PINNED = 'key pinned on first contact, not configured'
+export const WITNESS_KEY_PINNED = 'key taken from its first answer, not configured'
 
 export function witnessRows(card: JsonRecord | null | undefined): WitnessRow[] {
   const rows = Array.isArray(card?.witness_status) ? (card.witness_status as unknown[]) : []

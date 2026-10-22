@@ -8,6 +8,7 @@
 import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
 import type { CapsuleRecord } from '@/features/capsules/api/types'
 import { isDigestShaped } from '@/features/capsules/lib/canonical'
+import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import { CLOSED_CELL_TOOLTIPS, ROW_STATE_TOOLTIPS } from '@/features/capsules/lib/tooltip-copy'
 import type { PeerRecomputeState } from '@/features/capsules/lib/recompute-identity'
 
@@ -43,6 +44,15 @@ const EVIDENCE_OUTCOME_TO_KIND: Record<string, RightCellStateKind> = {
   not_asked: 'open_not_asked'
 }
 
+/** The state the pane's own evidence outcome names (a door-checked claims
+ *  refusal, their signed refusal or "no record", an unanswered ask), or
+ *  `null` when the row carries none. */
+export function paneOutcomeState(row: PaneCRow): RightCellState | null {
+  const outcome = row.theirs.evidence_outcome
+  const kind = outcome ? EVIDENCE_OUTCOME_TO_KIND[outcome] : undefined
+  return kind ? { kind, date: row.theirs.evidence_outcome_date ?? null } : null
+}
+
 /**
  * Derives the right-cell state from a Pane C row (`deriveRightCellState`,
  * below the helpers).
@@ -52,22 +62,27 @@ const EVIDENCE_OUTCOME_TO_KIND: Record<string, RightCellStateKind> = {
  * counterparty recorded at all (`theirs.state === 'absent'`) is
  * `open_not_asked`.
  *
- * Otherwise CLOSED/CONTRADICTED come from ONE predicate
- * (`counterpartyHalfState`), whichever way the counterparty's bytes arrived:
+ * Otherwise CLOSED/CONTRADICTED come from ONE predicate (`recordVerdict`),
+ * whichever way the counterparty's bytes arrived:
  *   - a live `mesh_ledger_fetch` this browser ran (`theirsRecompute`), or
  *   - the half the peer PUSHED, correlated by the pane from our own citing
  *     record (`pushedHalfRecompute`: the held body, the door's signature
- *     verdict, and the `capsule_id` recompute done before the pane query
+ *     verdict, and the `capsule_id` check done before the pane query
  *     resolved).
- * CLOSED needs all four: the signature verified against the peer's announced
- * key, the body recomputes to its `capsule_id`, both `effect` digests equal
- * ours (§6.2/L-G), and the provider check (`providerMatches`, provisional).
- * CONTRADICTED: the body does not recompute to its id, both sides carry
- * real digests that differ, or the provider's half names other model weights
- * than it served us under (`modelSwapped`). A PUSHED half from a node that did not serve the
- * exchange is never CONTRADICTED (any peer can push). Anything else -- not recomputed yet, unsigned,
- * a missing digest, a different or unnamed provider -- stays OPEN
- * (`open_not_held`): never a verdict we did not check.
+ * A record whose body demonstrably does not produce its `capsule_id` is
+ * CONTRADICTED (the ratified bilateral-retention-decay-property: both
+ * present, disagreeing). Otherwise only a VERIFIED record gives a verdict:
+ * its body produces its `capsule_id` and its signature holds under the key
+ * this node has for the peer. CLOSED also needs both `effect` digests equal
+ * to ours (§6.2/L-G) and the provider check (`providerMatches`,
+ * provisional). CONTRADICTED: a verified provider record whose digests differ
+ * from ours, or that names other model weights than it served us under
+ * (`modelSwapped`). A PUSHED record from a node that did not serve the
+ * exchange is never CONTRADICTED (any peer can push). Anything else -- not
+ * checked yet, unsigned, a missing digest, a different or unnamed provider
+ * -- stays OPEN (`open_not_held`): never a verdict we did
+ * not check. How this combines with asks and the pane's own claims is
+ * `row-evidence.ts`.
  *
  * With no evidence at all, a digest-shaped peer id is `open_not_held` (known,
  * fetchable) and a non-digest correlation marker is `open_not_given`
@@ -211,34 +226,69 @@ export function pushedHalfRecompute(row: PaneCRow): PeerRecomputeState | null {
   }
 }
 
-/** THE gate. CLOSED iff all four hold for provider-signed bytes this node
- *  holds (pushed or fetched): the signature verified against the peer's
- *  announced key, the body recomputes to its `capsule_id`, both digests equal
- *  ours, and it came from the provider (`providerMatches`). */
+/** A record of theirs is evidence only when it is VERIFIED: its contents
+ *  produce its id, and its signature holds under the key this node has for
+ *  them. Anything less -- unsigned, a bad signature, an id that doesn't match,
+ *  a check that didn't run -- proves nothing either way. */
+export function isVerifiedRecord(evidence: PeerRecomputeState): boolean {
+  return evidence.idMatch === true && evidence.signatureOk === true
+}
+
+/** What a verified record of theirs says about OUR record, or why it says
+ *  nothing: it is not from the node that served this exchange, or it names
+ *  neither our request and answer nor different ones. */
+export type RecordVerdict =
+  | { kind: 'closed' }
+  /** `altered`: its contents don't produce the id it claims. */
+  | { kind: 'contradicted'; why: 'altered' | 'differs' }
+  | { kind: 'no_verdict'; why: 'not_verified' | 'other_provider' | 'other_exchange' }
+
+/** Where a record of theirs came from. Any peer can push one, so a pushed
+ *  record from a node that didn't serve the exchange says nothing about it;
+ *  a fetched or asked one came from the node this browser asked. */
+export type RecordSource = 'fetched' | 'pushed' | 'asked'
+
+/** THE gate.
+ *  - A completed check showing the record's contents don't produce the id it
+ *    claims is CONTRADICTED (`altered`): the other side handed over an
+ *    altered record, the "both present, disagreeing" case of the ratified
+ *    bilateral-retention-decay-property (agent-action-capsule @7f8a78d8).
+ *    A pushed record from a node that didn't serve the exchange is the one
+ *    exception: anyone can push, so it says nothing.
+ *  - Otherwise only a verified record (`isVerifiedRecord`: id matches, and
+ *    the signature holds under the key this node has for them) gives a
+ *    verdict. CLOSED iff it came from the provider (`providerMatches`) and
+ *    both digests equal ours; CONTRADICTED (`differs`) iff it came from the
+ *    provider and its digests differ from ours, or it names other model
+ *    weights (`modelSwapped`).
+ *  - An id check that didn't run, or a bad signature over a matching id, is
+ *    no verdict. */
+export function recordVerdict(
+  evidence: PeerRecomputeState,
+  localRecord: CapsuleRecord | null | undefined,
+  source: RecordSource
+): RecordVerdict {
+  if (evidence.idMatch === null) return { kind: 'no_verdict', why: 'not_verified' }
+  const fromProvider = providerMatches(localRecord, evidence.peerRecord)
+  if (source === 'pushed' && !fromProvider) return { kind: 'no_verdict', why: 'other_provider' }
+  if (evidence.idMatch === false) return { kind: 'contradicted', why: 'altered' }
+  if (!isVerifiedRecord(evidence)) return { kind: 'no_verdict', why: 'not_verified' }
+  if (!fromProvider) return { kind: 'no_verdict', why: 'other_provider' }
+  if (digestsDisagree(localRecord, evidence.peerRecord)) return { kind: 'contradicted', why: 'differs' }
+  // Matching digests prove the two sides saw the same bytes, not which model
+  // made them: a provider record naming other weights is never CLOSED.
+  if (modelSwapped(localRecord, evidence.peerRecord)) return { kind: 'contradicted', why: 'differs' }
+  if (digestsCiteOurHalf(localRecord, evidence.peerRecord)) return { kind: 'closed' }
+  return { kind: 'no_verdict', why: 'other_exchange' }
+}
+
 function counterpartyHalfState(
   evidence: PeerRecomputeState,
   localRecord: CapsuleRecord | null | undefined,
-  source: 'fetched' | 'pushed'
+  source: RecordSource
 ): RightCellStateKind {
-  // Recompute not run / could not run: inconclusive, never a verdict.
-  if (evidence.idMatch === null) return 'open_not_held'
-  const fromProvider = providerMatches(localRecord, evidence.peerRecord)
-  // Any peer can push a half. One from a node that did not serve this
-  // exchange says nothing about it: never a contradiction, never a close. A
-  // fetched half came from the peer this browser asked.
-  if (source === 'pushed' && !fromProvider) return 'open_not_held'
-  // The peer's own bytes don't produce the id claimed for them.
-  if (!evidence.idMatch) return 'contradicted'
-  // Unauthenticated bytes prove nothing either way.
-  if (evidence.signatureOk !== true) return 'open_not_held'
-  if (!fromProvider) return 'open_not_held'
-  if (digestsDisagree(localRecord, evidence.peerRecord)) return 'contradicted'
-  // Matching digests prove the two sides saw the same bytes, not which model
-  // made them: a provider half naming other weights is never CLOSED.
-  if (modelSwapped(localRecord, evidence.peerRecord)) return 'contradicted'
-  if (digestsCiteOurHalf(localRecord, evidence.peerRecord)) return 'closed'
-
-  return 'open_not_held'
+  const verdict = recordVerdict(evidence, localRecord, source)
+  return verdict.kind === 'no_verdict' ? 'open_not_held' : verdict.kind
 }
 
 /** A real sealed capsule id is 64 lower-hex (`capsule-emit-mesh`
@@ -250,6 +300,16 @@ function counterpartyHalfState(
  *  host's `capsule_id_is_digest_shaped` (openai-frontend). */
 export function capsuleIdIsDigestShaped(id: string | null | undefined): boolean {
   return typeof id === 'string' && /^[0-9a-f]{64}$/.test(id)
+}
+
+/** The right cell for a counterparty record this browser fetched, judged on
+ *  its own by THE gate. For an ask this row sent to the node its own record
+ *  names: the row's pane-side `theirs.state` doesn't apply to that reply. */
+export function stateFromFetchedHalf(
+  evidence: PeerRecomputeState,
+  localRecord: CapsuleRecord | null | undefined
+): RightCellState {
+  return { kind: counterpartyHalfState(evidence, localRecord, 'fetched'), date: null }
 }
 
 export function deriveRightCellState(
@@ -296,8 +356,25 @@ export function deriveRightCellState(
   return { kind: 'open_not_held', date: null }
 }
 
+/** A full RFC 3339 timestamp, zone included (`Z` or `±hh:mm`): the only form
+ *  that names one instant. */
+const RFC3339_WITH_ZONE = /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/
+
+/** The instant a full RFC 3339 time with a zone names, or `null` for any
+ *  other form, or one that names no real instant (month 99): only such
+ *  times are compared. */
+export function fullTimeInstant(date: string | null | undefined): number | null {
+  if (!date || !RFC3339_WITH_ZONE.test(date)) return null
+  const at = Date.parse(date)
+  return Number.isFinite(at) ? at : null
+}
+
+/** A statement's or ask's date: a full RFC 3339 time in the viewer's own time
+ *  zone, never a raw stamp. Any other form (no zone, a bare date, garbage) is
+ *  shown as the row carries it: guessing its zone would invent a time. */
 function dateOrFallback(date: string | null): string {
-  return date ?? 'date unavailable'
+  if (!date) return 'date unavailable'
+  return fullTimeInstant(date) !== null ? formatExchangeTimestamp(date) : date
 }
 
 // ---------------------------------------------------------------------------
@@ -320,20 +397,19 @@ export type BracketStrip = { yours: BracketSide; joined: boolean; theirs: Bracke
 function theirSide(kind: RightCellStateKind): BracketSide {
   switch (kind) {
     case 'closed':
-      return { glyph: '●', word: 'same' }
+      return { glyph: '●', word: 'confirmed' }
     case 'contradicted':
-      return { glyph: '●', word: 'differs' }
+      return { glyph: '●', word: 'disagrees' }
     case 'open_refused':
-      return { glyph: '○', word: 'refused' }
+      return { glyph: '○', word: 'declined' }
     case 'open_absent':
       return { glyph: '○', word: 'they have no record' }
     case 'open_asked':
       return { glyph: '○', word: 'asked, no reply yet' }
     case 'open_not_held':
     case 'open_not_given':
-      return { glyph: '○', word: 'not received' }
     case 'open_not_asked':
-      return { glyph: '○', word: 'not asked for' }
+      return { glyph: '○', word: 'not received' }
     default: {
       const exhaustiveCheck: never = kind
       return exhaustiveCheck
@@ -353,23 +429,6 @@ export function bracketStrip(row: PaneCRow, state: RightCellState): BracketStrip
 export function bracketStripText(strip: BracketStrip): string {
   const link = strip.joined ? ' —— ' : '   '
   return `Yours ${strip.yours.glyph} ${strip.yours.word}${link}Theirs ${strip.theirs.glyph} ${strip.theirs.word}`
-}
-
-/** UX §3 "Put `Ask for their record` on the row only after a timeout": with
- *  push on, their record normally arrives when the exchange finishes, so an
- *  ask is offered only once this long has passed without it. A minute: a
- *  node that runs no record-push door never receives a push, and asking is
- *  then the only way its row closes, so the wait stays short. Committed
- *  times are minute-granular, so the ask appears within a minute or two. */
-export const ASK_FOR_RECORD_AFTER_MS = 60 * 1000
-
-/** True once the exchange is old enough that their record should have
- *  arrived. A row with no parseable timestamp cannot be timed, so the ask is
- *  offered rather than hidden. */
-export function askForRecordIsDue(timestamp: string | null, nowMs: number): boolean {
-  const at = timestamp ? Date.parse(timestamp) : Number.NaN
-  if (Number.isNaN(at)) return true
-  return nowMs - at >= ASK_FOR_RECORD_AFTER_MS
 }
 
 /** D4(d): the CLOSED right column as
@@ -407,19 +466,17 @@ export function rightCellText(state: RightCellState): string {
     case 'closed':
       return '✓ They recorded the same request and answer'
     case 'contradicted':
-      return '✗ Their record differs'
+      return '✗ Their record disagrees with yours'
     case 'open_refused':
       return `They declined, and signed the refusal — ${dateOrFallback(state.date)}`
     case 'open_absent':
       return `They say they have no record of this — ${dateOrFallback(state.date)}`
     case 'open_asked':
-      return `Asked ${dateOrFallback(state.date)}. No reply yet.`
+      return `Asked ${dateOrFallback(state.date)}. No verified reply yet.`
     case 'open_not_held':
-      return 'Their record hasn’t arrived yet.'
     case 'open_not_given':
-      return 'Their record hasn’t arrived yet.'
     case 'open_not_asked':
-      return 'You haven’t asked for their record.'
+      return 'Their record hasn’t arrived yet.'
     default: {
       const exhaustiveCheck: never = state.kind
       return exhaustiveCheck
@@ -436,7 +493,8 @@ export function rightCellDetail(state: RightCellState): string {
   return ROW_STATE_TOOLTIPS[state.kind]
 }
 
-/** The row's state label, with "in their log" on a CLOSED row once our
+/** The row's state label, one plain word or phrase per state, with "in
+ *  their log" on a CLOSED row once our
  *  records cite their inclusion proof for it (§7.6b). No number: their
  *  checkpoint's leaf count includes their padding, so it is never a count of
  *  their records. */
@@ -448,21 +506,19 @@ export function rowStatusLabel(state: RightCellState, inTheirLog: object | null 
 export function rightCellStatusLabel(state: RightCellState): string {
   switch (state.kind) {
     case 'closed':
-      return 'CLOSED'
+      return 'Confirmed'
     case 'contradicted':
-      return 'CONTRADICTED'
+      return 'Disagree'
     case 'open_refused':
-      return 'OPEN · refused'
+      return 'Declined'
     case 'open_absent':
-      return 'OPEN · absent'
+      return 'They have no record'
     case 'open_asked':
-      return 'OPEN · asked'
+      return 'Asked, no reply'
     case 'open_not_held':
-      return 'OPEN · not held'
     case 'open_not_given':
-      return 'OPEN'
     case 'open_not_asked':
-      return 'OPEN'
+      return 'Waiting for theirs'
     default: {
       const exhaustiveCheck: never = state.kind
       return exhaustiveCheck
@@ -470,42 +526,17 @@ export function rightCellStatusLabel(state: RightCellState): string {
   }
 }
 
-/** The action control that lives inside the cell, or `null` for `closed`
- *  (nothing to do once a row agrees and cites your half) and
- *  `open_not_held` (the real action -- `fetch peer capsule &
- *  recompute here` -- lives inside the `▸ checks` panel, next to the
- *  identity it fetches for, not as a second copy of the same button at the
- *  row summary level). */
+/** The state's own action beside the row's two asks: `Compare` on a row
+ *  whose two records disagree (it opens the checks at their record). Every
+ *  other state has none: the asks (`rowAskControls`) are the row's actions,
+ *  and no control is shown that has nothing to do. */
 export function rightCellAction(state: RightCellState): string | null {
-  switch (state.kind) {
-    case 'closed':
-      return null
-    case 'contradicted':
-      return 'Compare'
-    case 'open_refused':
-      return 'View refusal'
-    case 'open_absent':
-      return 'View statement'
-    case 'open_asked':
-      return 'Ask again'
-    case 'open_not_held':
-      return null
-    case 'open_not_given':
-      return null
-    case 'open_not_asked':
-      return 'Ask them for their record'
-    default: {
-      const exhaustiveCheck: never = state.kind
-      return exhaustiveCheck
-    }
-  }
+  return state.kind === 'contradicted' ? 'Compare' : null
 }
 
-/** The two states whose action is literally "ask a counterparty"
- * -- every other action (`Compare` / `View
- *  refusal` / `View statement`) inspects evidence this node already holds,
- *  not a live counterparty to contact, so only these two require a
- *  recorded counterparty before the action can render. */
+/** The two states that wait on a counterparty to ask: a row in one of them
+ *  with no recorded counterparty says which truth holds instead
+ *  (`ExchangeStreamRow`'s gated cell text). */
 const ASK_ACTION_KINDS: ReadonlySet<RightCellStateKind> = new Set(['open_not_asked', 'open_asked'])
 
 export function isAskAction(kind: RightCellStateKind): boolean {

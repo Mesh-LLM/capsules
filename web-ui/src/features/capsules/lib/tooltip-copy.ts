@@ -31,6 +31,11 @@ export const HERO_TOOLTIPS = {
 export const OWNER_LINKED_PHRASE = 'linked to your owner account (self-asserted)'
 export const OWNER_NOT_LINKED_PHRASE = 'not linked to an owner'
 
+/** Record push is off by default (INSTALL.md "Quiet by default"), so their
+ *  record arriving by itself is the exception, never the expectation. */
+export const THEIR_RECORD_ARRIVES_IF_PUSHED =
+  'Their record arrives on its own only if their node sends records (off by default). Otherwise, ask for it on the exchange row.'
+
 /** p2 item 5: why an action is disabled -- said on hover, never a silent grey. */
 export const SAMPLE_DATA_UNAVAILABLE = 'Not available on sample data.'
 
@@ -38,9 +43,9 @@ export const SAMPLE_DATA_UNAVAILABLE = 'Not available on sample data.'
  *  what can be shown about it. "docs" links what the page can and cannot
  *  show (`DOCS_URL`). */
 export const HERO_DESCRIPTION_BEFORE_LINK =
-  'Evidence: every exchange this node sealed at the moment it happened. A sealed record cannot change without it showing. Depending on what is turned on, it can also be shown to sit in a signed checkpoint, be witnessed by an outside log, and match the other side’s record. The chips on each row say which of these were checked here. See the '
+  'Every exchange this node handled, sealed as a signed record when it happened. The chips on each row show what was checked here. See the '
 export const HERO_DESCRIPTION_LINK_TEXT = 'docs'
-export const HERO_DESCRIPTION_AFTER_LINK = ' for what this page can and cannot show.'
+export const HERO_DESCRIPTION_AFTER_LINK = '.'
 export const HERO_DESCRIPTION = `${HERO_DESCRIPTION_BEFORE_LINK}${HERO_DESCRIPTION_LINK_TEXT}${HERO_DESCRIPTION_AFTER_LINK}`
 
 /** Where "docs" in the hero points: this plugin's own account of what each
@@ -83,7 +88,8 @@ export const THEIR_LOG_TOOLTIPS = {
   failed: 'Your node fetched their log and it didn’t check out on this machine, so none of it is shown as checked.',
   refused: 'They refused to show their log. Nothing of it is checked here.',
   no_answer: 'Your node asked for their log and no answer has been checked here yet.',
-  not_asked: 'Your node hasn’t asked for their log, so nothing of it is checked here.'
+  not_asked:
+    'Your node hasn’t asked for their history, so nothing of it is checked here. “Ask for their history” on an exchange with them asks, and shows the checked answer on that row.'
 } as const
 
 /** The peer drill's "Their history" sections
@@ -122,33 +128,37 @@ export const PEER_ATTENTION = {
   }
 } as const
 
-/** The row's state badge: the (i) beside CLOSED / CONTRADICTED / OPEN. */
+/** The row's state badge: the (i) beside Confirmed / Disagree / Waiting for
+ *  theirs and the rest. */
 export const ROW_STATE_TOOLTIPS = {
   closed:
     'They sent their own signed record of this exchange, from the node that served you, and it checks out on this machine. It names the same request, answer and model weights as yours.',
   contradicted:
     'You both have signed records of this exchange and they disagree: the request, the answer, the model or who served it differs, or their record doesn’t match its own id. Use Compare to see where.',
   open_refused:
-    'They declined to share their record and signed the refusal. The refusal is the evidence; the exchange stays open.',
+    'They declined to share their record and signed the refusal. The refusal is the evidence; nothing of theirs is compared.',
   open_absent:
     'They say they have no record of this exchange. That is their statement; there is nothing of theirs to check.',
-  open_asked: 'You asked for their record and no reply has arrived yet.',
+  open_asked: 'You asked for their record and no verified reply has arrived yet.',
   open_not_held:
-    'Their record hasn’t arrived, or what arrived couldn’t be confirmed as theirs from the node that served you. It usually comes when the exchange finishes.',
-  open_not_given: 'Their record of this exchange hasn’t arrived yet, and they didn’t send an id to ask for it by.',
-  open_not_asked: 'You haven’t asked them for their record.'
+    'Their record hasn’t arrived, or what arrived couldn’t be confirmed as theirs from the node that served you. It arrives on its own only if their node sends records (off by default); otherwise, ask for it on this row.',
+  open_not_given:
+    'Their record hasn’t arrived, and nothing they sent names it by its id. It arrives on its own only if their node sends records (off by default); otherwise, ask for it on this row.',
+  open_not_asked:
+    'Their record hasn’t arrived. It arrives on its own only if their node sends records (off by default); otherwise, ask for it on this row.'
 } as const
 
 /** The per-property cells a CLOSED row shows, each with its own (i). */
 export const CLOSED_CELL_TOOLTIPS = {
   their_id: 'The id of their record; it’s a fingerprint of the record itself.',
-  signature: 'Signed with the key this peer announces.',
+  signature: 'Signed with this peer’s signing key, as this node knows it.',
   request: 'The same request as in your record.',
   response: 'The same answer as in your record.'
 } as const
 
 
-/** The chip strip, per result: what a ✓, ✗ or – on each chip means, and
+/** The chip strip, per result: what a ✓, ✗ or – on each chip means (and,
+ *  on the checkpoint chip, ◐: a checkpoint covers it, not checked here), and
  *  the check behind it. The words-match and signed chips are checked on this
  *  machine (recompute-identity.ts); in-a-checkpoint is the node's count, not
  *  a checked proof; witnessed is read, not checked here. */
@@ -166,7 +176,8 @@ export const ENTRY_CHIP_RESULT_TOOLTIPS = {
   inclusion: {
     '✓': 'A checkpoint this node signed covers this record, by the node’s own count. This page doesn’t check that coverage itself.',
     '✗': 'The node reports that no checkpoint covers this record.',
-    '–': 'No checkpoint covers this record yet; the next checkpoint the node makes will.'
+    '–': 'No checkpoint covers this record yet; the next checkpoint the node makes will.',
+    '◐': 'A checkpoint on this node covers this record, as Integrity counts. This row hasn’t checked that for itself yet.'
   },
   registered: {
     '✓': 'A witness you don’t run holds a checkpoint covering this record. The witness’s receipt isn’t checked on this page.',
@@ -182,7 +193,7 @@ export const ENTRY_CHIP_RESULT_TOOLTIPS = {
 
 /** The (i) on a peer's twin pairs line. Facts only, never a judgement. */
 export const PEER_TWINS_TOOLTIP =
-  'Twin pairs: a client sent the same request to this node and to another one, and marked the two as one pair. “Answers differed” compares the two sealed answers byte for byte; it is a comparison, not a ruling. “Not adjudicated” means no referee has ruled on the pair.'
+  'A client sent the same request to this node and to another one, and marked the two as one pair. “Answers differed” compares the two sealed answers byte for byte; it is a comparison, not a ruling. “No ruling yet” means no referee has ruled on the pair.'
 
 /** The LOCAL badge's (i): a served exchange with no other side recorded. */
 export const LOCAL_ONLY_TOOLTIP =
@@ -226,49 +237,6 @@ export const TWIN_VERDICT_TOOLTIPS = {
   not_comparable: 'The two answers were sampled, so a referee can’t compare them. This is never a disagreement.'
 } as const
 
-/** One sentence per chip AND per state, plain words first, then what
- *  was actually checked (TOOLTIPS-ASSESSMENT §0: C1 content binding and C2
- *  signature are redone in this browser, `recompute-identity.ts:28-80`; C10
- *  checkpoint coverage is a count, `integrity-view.ts:237-244`, so it is
- *  never ✓; the witness receipt is read, never checked here; their record
- *  is the ONE gate, `exchange-row-state.ts`). */
-export const ENTRY_CHIP_STATE_TOOLTIPS = {
-  content: {
-    '✓': 'Your record still matches its id: this browser redid its fingerprint just now.',
-    '✗': 'Your record no longer matches its id, so it may have been changed. This browser redid its fingerprint and it differs.',
-    '–': 'Not checked here yet: this browser hasn’t redone your record’s fingerprint (it isn’t loaded, or this is sample data).',
-    '◐': 'Not checked here yet: this browser hasn’t redone your record’s fingerprint.'
-  },
-  sig: {
-    '✓': 'Your record is signed with this node’s key. This browser checked the signature just now.',
-    '✗': 'The signature on your record doesn’t check out against this node’s key.',
-    '–': 'Not checked here yet: the signature on your record hasn’t been checked on this page.',
-    '◐': 'Not checked here yet: the signature on your record hasn’t been checked on this page.'
-  },
-  inclusion: {
-    '✓': 'A checkpoint on this node covers this record, by the count Integrity shows. The proof itself is not checked here.',
-    '✗': 'This node reports that its checkpoint doesn’t cover this record as it should. Not checked here.',
-    '–': 'No checkpoint on this node covers this record yet, as far as this node says. Not checked here.',
-    '◐': 'A checkpoint on this node covers this record, by the count Integrity shows. The proof itself is not checked here.'
-  },
-  registered: {
-    '✓': 'A witness you don’t run holds a checkpoint covering this record, as this node reports. Not checked here.',
-    '✗': 'This node reports a problem with the witness’s copy of the checkpoint. Not checked here.',
-    '–': 'No witness you don’t run holds a checkpoint covering this record, as far as this node says. Not checked here.',
-    '◐': 'No witness you don’t run holds a checkpoint covering this record, as far as this node says. Not checked here.'
-  },
-  theirs: {
-    '✓': 'The other side’s signed record agrees with yours: the same request and answer, from the node that served you. Checked on this machine.',
-    '✗': 'The other side’s record doesn’t agree with yours, or your node refused it. The badge says which; Compare shows where.',
-    '–': 'The other side’s record isn’t here, or couldn’t be confirmed as theirs, so nothing is compared yet.',
-    '◐': 'The other side’s record isn’t here, or couldn’t be confirmed as theirs, so nothing is compared yet.'
-  }
-} as const
-
-/** The `in a checkpoint ◐` chip: covered, but the proof is not checked here. */
-export const ENTRY_CHIP_COVERED_TOOLTIP =
-  'A checkpoint on this node covers this record, as Integrity counts. This row hasn’t checked that for itself yet.'
-
 /** The TWIN bracket's `not adjudicated` badge. */
 export const TWIN_NO_VERDICT_TOOLTIP =
   'The same request went to two machines and both answers are recorded. A referee is asked only when they differ at temperature 0 on the same model and weights, and until one signs a verdict nothing counts against either machine.'
@@ -283,7 +251,7 @@ export const INTEGRITY_TILE_TOOLTIPS = {
     'Records this node sealed into its log, not counting padding. Sealed means a record can’t change unnoticed; it doesn’t make the contents true.',
   sharedWithWitness:
     'How many of your checkpoints a witness you don’t run is holding. Off by your choice until you turn one on.',
-  confirmedByOtherSide: 'Exchanges the other side confirmed with their own signed record, checked on this machine.',
+  confirmedByOtherSide: 'Exchanges saved on this node that the other side confirmed with their own signed record, checked on this machine.',
   contradicted:
     'Exchanges where your record and theirs disagree: a different request, answer, model or server, or their record not matching its own id.'
 } as const
@@ -309,7 +277,7 @@ export const CHAIN_STRIP_TOOLTIP =
  *  exact terms, but each hover is still one plain sentence. */
 export const CHECK_CHIP_TOOLTIPS: Record<string, string> = {
   content_binding: 'Whether the record’s contents still match its id.',
-  producer_signature: 'Whether the record is signed with the key its node announces.',
+  producer_signature: 'Whether the record is signed with its node’s signing key.',
   task_binding: 'Whether the record is tied to the request it answers.',
   local_inclusion: 'Whether a checkpoint on the node that sealed it covers this record.',
   checkpoint_signature: 'Whether that checkpoint is signed by the node that made it.',

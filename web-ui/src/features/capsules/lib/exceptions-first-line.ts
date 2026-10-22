@@ -73,7 +73,8 @@ export function exceptionsFirstLine(tally: ExceptionsFirstTally, rangeLabel: str
   const { total, needingAttention, failed, mismatched, askedUnanswered } = tally
   const noun = total === 1 ? 'exchange' : 'exchanges'
   const rangeSuffix = rangeLabel ? `, ${rangeLabel}` : ''
-  const breakdown = `${failed} failed · ${mismatched} mismatched · ${askedUnanswered} asked-and-unanswered`
+  const ownFails = failed === 1 ? 'own record fails its checks' : 'own records fail their checks'
+  const breakdown = `${failed} ${ownFails} · ${mismatched} disagree · ${askedUnanswered} asked, no reply`
 
   if (needingAttention === 0) {
     return `${total} sealed by you${rangeSuffix}.`
@@ -95,5 +96,15 @@ export function exchangesHeadline(
   const noun = total === 1 ? 'exchange' : 'exchanges'
   const rangeSuffix = rangeLabel ? `, ${rangeLabel}` : ''
   const disagreementNoun = disagreements === 1 ? 'disagreement' : 'disagreements'
-  return `${total} ${noun}${rangeSuffix} · ${confirmed} confirmed by the other side · ${disagreements} ${disagreementNoun}`
+  return `${total} ${noun}${rangeSuffix} · ${confirmed} saved as confirmed · ${disagreements} ${disagreementNoun}`
+}
+
+/** How many exchanges this node served and how many it asked for, counted
+ *  from this node's OWN records among the rows listed. A record that only
+ *  arrived from the other side (`mine.state === 'absent'`) takes its role
+ *  from their record, so it is never counted as something you did. */
+export function servedAskedLine(rows: readonly ExchangeLedgerRow[]): string {
+  const own = rows.filter((row) => row.raw.mine.state !== 'absent')
+  const served = own.filter((row) => row.roleTag === 'SERVED').length
+  return `You served ${served} · you asked ${own.length - served}`
 }

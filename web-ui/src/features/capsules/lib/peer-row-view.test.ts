@@ -24,6 +24,7 @@ import {
   matchTallyText,
   meshMetaLine,
   peerAliasLine,
+  unlinkedNodeId,
   peerDisplayId,
   periodRangeText,
   peerSortKey,
@@ -96,7 +97,7 @@ describe('withYouCounts — fold-in finding 1: confirmed comes from the ONE gate
       confirmed_siblings: [confirmedSibling(), confirmedSibling()]
     })
     expect(withYouCounts(row)).toEqual({ requested: 24, served: 12, confirmed: 2 })
-    expect(withYouCountsText(withYouCounts(row))).toBe('24 requested · 12 served · 2 confirmed')
+    expect(withYouCountsText(withYouCounts(row))).toBe('24 requested · 12 served · 2 saved as confirmed')
   })
 
   it('PINNED: the inspector Overview count equals the Peers table count — one predicate, one number, two surfaces', () => {
@@ -428,12 +429,19 @@ describe('peerAliasLine — D3: aliases on ONE row, never extra peers', () => {
     expect(peerAliasLine(row)).toBe('signed by 71eb777777777777 · node a70d3967bea3b22f… · endpoint e5ba9d1001')
   })
 
-  it('labels the UNLINKED node-id row honestly — the id is from our own records, no signing key linked yet', () => {
+  it('labels the UNLINKED node-id row honestly — known from our own records, no signed record from them yet', () => {
     const row = baseRow({
       peer_id: 'node:a70d3967bea3b22f',
       identity: { signing_key_id: null, endpoint_id: null, node_id: `a70d3967bea3b22f${'a'.repeat(48)}` }
     })
-    expect(peerAliasLine(row)).toBe('node id from your own records — no signing key linked yet')
+    expect(unlinkedNodeId(row)).toBe(`a70d3967bea3b22f${'a'.repeat(48)}`)
+    expect(peerAliasLine(row)).toBe('Known from your records · no signed record from them yet')
+    // A key this node knows for that node (host-announced or configured): the
+    // row names it, claiming no source, never "no signing key linked".
+    expect(peerAliasLine(row, 'e'.repeat(64))).toBe(
+      `Known from your records · its signing key ${'e'.repeat(16)} is known to this node`
+    )
+    expect(dealtWithRowView(row, undefined, [], 'e'.repeat(64)).aliasLine).toContain('is known to this node')
   })
 
   it('degrades to null (no line, never a fabricated identity) when the row carries no identity evidence', () => {
@@ -453,14 +461,14 @@ describe('peerAliasLine — D3: aliases on ONE row, never extra peers', () => {
 describe('unattributedExchangesLine', () => {
   it('states the count as a fact, never implying pending work', () => {
     expect(unattributedExchangesLine(3)).toBe(
-      '3 exchanges have no counterparty recorded yet. They appear under Exchanges.'
+      '3 exchanges have no other side recorded yet. They appear under Exchanges.'
     )
     expect(unattributedExchangesLine(3)).not.toMatch(/not resolved yet/i)
   })
 
   it('uses singular grammar for a count of one', () => {
     expect(unattributedExchangesLine(1)).toBe(
-      '1 exchange has no counterparty recorded yet. They appear under Exchanges.'
+      '1 exchange has no other side recorded yet. They appear under Exchanges.'
     )
   })
 })

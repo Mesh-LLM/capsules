@@ -107,7 +107,7 @@ function PeerExchangesTab({
               {point.direction === 'requested' ? (
                 <>
                   <span aria-hidden="true">·</span>
-                  <span>{point.adjudication ? point.adjudication.verdict : 'NOT_CHECKED'}</span>
+                  <span>{point.adjudication ? point.adjudication.verdict : 'no verdict'}</span>
                 </>
               ) : null}
             </div>

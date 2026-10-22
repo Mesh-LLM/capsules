@@ -46,7 +46,7 @@ const RETIRED_PHRASES = [
   // + look findings (2026-09-26): one
   // term per thing, plain words, no designer notation on the face.
   'Closed by the other side', // -> "Confirmed by the other side"
-  'recomputed in browser', // -> "recomputed here"
+  'recomputed in browser', // -> "checked in your browser"
   'none sealed', // Disputes judged -> "none"
   '{ yours ', // bracket strip -> "Yours ● sealed —— Theirs ● same"
   '✓ same request and answer as yours', // -> "✓ They recorded the same request and answer"
@@ -75,7 +75,49 @@ const RETIRED_PHRASES = [
   'The next one will be checked against it',
   'Register a checkpoint',
   'The response bytes hash to the digest',
-  'disagree about the request or the answer'
+  'disagree about the request or the answer',
+  // Evidence page demo pass (#44): record push is off by default, so their
+  // record never "usually" arrives; one plain word per state; no dead
+  // controls; no internal terms on the face.
+  'usually arrives on its own',
+  'normally arrives when the exchange',
+  'usually comes when the exchange finishes',
+  'not asked for',
+  'You haven’t asked for their record',
+  'OPEN · ',
+  'Twins only',
+  'View refusal',
+  'View statement',
+  'Ask them to state it',
+  'fetch peer capsule',
+  'asked-and-unanswered',
+  'local twin only',
+  'margin_tau: {',
+  'no signing key linked',
+  'key pinned on first contact',
+  'keeping its half',
+  'Your capsule',
+  'capsule reference',
+  '(x-mesh-twin-bracket)',
+  // Review of #44: a peer's key may be host-announced or configured
+  // (CAPSULES_PEER_KEYS); the page can't tell which, so it claims no source.
+  'with their announced key',
+  'is announced',
+  'key they announced',
+  'key this peer announces',
+  'no announced key for them',
+  // Review round 2 of #44: "the key this node has for them" (wording owner).
+  'signed with their signing key',
+  // "recompute" is an internal term on screen (Sherlock2, #45)
+  'does not recompute',
+  'could not be recomputed',
+  'recompute in-browser',
+  'recomputed in-browser',
+  'not recomputable',
+  'NOT recompute',
+  'Not adjudicated',
+  'Your side is sealed',
+  'recomputed here'
 ] as const
 
 const HERE = dirname(fileURLToPath(import.meta.url))

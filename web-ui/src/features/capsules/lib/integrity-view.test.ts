@@ -44,7 +44,7 @@ describe('buildSetupSteps — ledger-ux-from-the-user §6, three steps in value 
     expect(steps[0].body).toMatch(/does not make your records true/)
     expect(steps[1].body).toMatch(/only your own claim about who you are/)
     expect(steps[1].body).not.toMatch(/prove|`/)
-    expect(steps[2].body).toMatch(/usually arrives on its own/)
+    expect(steps[2].body).toMatch(/arrives on its own only if their node sends records/)
     expect(steps[2].body).not.toMatch(/corroboration|half/i)
     // The retired "never asked" framing is gone -- a half can arrive by push.
     expect(steps[2].status).not.toMatch(/never asked/)
@@ -258,7 +258,7 @@ describe('buildRegistrationCopy — only renders once a checkpoint exists', () =
       'key configured',
       null,
       null,
-      'key pinned on first contact, not configured'
+      'key taken from its first answer, not configured'
     ])
     expect(witnessRows({})).toEqual([])
   })

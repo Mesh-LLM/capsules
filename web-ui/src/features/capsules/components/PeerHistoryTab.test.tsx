@@ -26,7 +26,8 @@ function section(name: string): HTMLElement {
 describe('PeerHistoryTab', () => {
   it('on the captured two-node peer, every un-asked part reads as never asked, with no zero', () => {
     render(<PeerHistoryTab row={CAPTURED_PEER} />)
-    expect(within(section('Their log, as shown to you')).getByText(/^Never asked/)).toBeInTheDocument()
+    // Points to where it can be asked: the exchange row's history ask.
+    expect(within(section('Their log, as shown to you')).getByText(/^Not asked yet\. Use “Ask for their history”/)).toBeInTheDocument()
     expect(within(section('What others say')).getByText(/^Never asked/)).toBeInTheDocument()
     expect(within(section('Asked of you')).getByText(/^Not shown/)).toBeInTheDocument()
 
@@ -55,7 +56,7 @@ describe('PeerHistoryTab', () => {
     const hovers = Array.from(region.querySelectorAll('[aria-describedby]')).map(
       (element) => document.getElementById(element.getAttribute('aria-describedby') ?? '')?.textContent ?? ''
     )
-    expect(hovers.join(' ')).toContain('hasn’t asked for their log')
+    expect(hovers.join(' ')).toContain('hasn’t asked for their history')
     expect(hovers.join(' ')).not.toContain('fetched and checked')
   })
 

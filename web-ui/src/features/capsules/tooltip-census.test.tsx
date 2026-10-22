@@ -109,7 +109,7 @@ const REQUIRED = {
   integrity: [
     'integrity_tile:Sealed',
     'integrity_tile:Shared with a witness',
-    'integrity_tile:Confirmed by the other side',
+    'integrity_tile:Saved as confirmed',
     'integrity_tile:Disagreements',
     'integrity:chain_strip',
     'integrity:close_card',
@@ -273,7 +273,7 @@ describe('tooltip census -- every chip type the Evidence tab ships has a plain o
     const user = userEvent.setup()
     render(<LedgerPageContent />, { wrapper })
     await user.click(await screen.findByRole('tab', { name: /exchanges/i }))
-    await screen.findAllByText(/You haven’t asked for their record\./)
+    await screen.findAllByText('Waiting for theirs')
     expectCovered(REQUIRED.exchanges, censusOnScreen(), 'face')
   })
 

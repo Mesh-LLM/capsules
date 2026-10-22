@@ -8,9 +8,8 @@
 //   3. No leaked internal IDs or tool names in the empty state, and no
 //      sidecar URL box anywhere
 //   4. Exchanges header shows two counts, never a ratio
-//   5. The Exchanges served / asked strip strip on Exchanges never crashes on an absent
-//      served-summary and never fabricates a number; it renders
-//      NOTHING on a null card rather than a "no data" line
+//   5. The Exchanges served / asked line counts the rows below by role, and
+//      never a number the page doesn't hold
 //   6. The exceptions-first line above the table, and the Ledger badge's
 //      "This node's copy" rename
 import { cleanup, render, screen, within } from '@testing-library/react'
@@ -68,7 +67,15 @@ vi.mock('@/features/capsules/api/recordsClient', async (importOriginal) => {
 })
 
 vi.mock('@/features/capsules/api/evidenceRequestClient', () => ({
-  askForRecord: vi.fn().mockResolvedValue({ kind: 'no_answer', message: 'no reply' })
+  announcedKeyFor: vi.fn().mockResolvedValue(null),
+  askForRecord: vi.fn().mockResolvedValue({ kind: 'no_answer', message: 'no reply' }),
+  askForHistory: vi.fn().mockResolvedValue({
+    kind: 'answer',
+    answer: {},
+    verification: { state: 'artifact', records: [], checkpoints: 2 },
+    requestDigest: 'f'.repeat(64),
+    announcedKeyId: 'e'.repeat(64)
+  })
 }))
 vi.mock('@/features/capsules/api/client', () => ({
   fetchCapsuleLedger: vi.fn().mockResolvedValue({ records: [], nodePubKeyPem: null })
@@ -147,7 +154,7 @@ describe('LedgerPageContent', () => {
     // The default pane A mock carries no card: the node did not say whether a
     // witness is set, so the line does not say it is off.
     expect(await screen.findByTestId('hero-status-line')).toHaveTextContent(
-      /^0 records · 0 confirmed by the other side · 0 disagreements · no outside witness$/
+      /^0 records · 0 saved as confirmed · 0 disagreements · no outside witness$/
     )
   })
 
@@ -354,7 +361,7 @@ describe('LedgerPageContent', () => {
 
     expect(await screen.findByText('peer-1')).toBeInTheDocument()
     expect(
-      await screen.findByText('3 exchanges have no counterparty recorded yet. They appear under Exchanges.')
+      await screen.findByText('3 exchanges have no other side recorded yet. They appear under Exchanges.')
     ).toBeInTheDocument()
     expect(screen.queryByText(/unknown peer/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/peer identity not resolved yet/i)).not.toBeInTheDocument()
@@ -420,7 +427,7 @@ describe('LedgerPageContent', () => {
     // Navigate to Exchanges tab
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
-    // Wait for data. Matched on "confirmed by the other side" (unique to
+    // Wait for data. Matched on "saved as confirmed" (unique to
     // this line) rather than "3 exchange" -- the exceptions-first line
     // below it also states the same total, so a bare "3 exchange" query is
     // ambiguous between the two.
@@ -433,7 +440,7 @@ describe('LedgerPageContent', () => {
     // The Exchanges headline (the hero line above says the same counts).
     const headerEl = await screen.findByTestId('exchanges-headline')
     expect(headerEl.textContent).toMatch(/3 exchange/)
-    expect(headerEl.textContent).toMatch(/0 confirmed by the other side/)
+    expect(headerEl.textContent).toMatch(/0 saved as confirmed/)
 
     // Ratios and percentages must NOT appear
     const bodyText = document.body.textContent ?? ''
@@ -469,7 +476,7 @@ describe('LedgerPageContent', () => {
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
     const headerEl = await screen.findByTestId('exchanges-headline')
-    expect(headerEl.textContent).toBe('1 exchange · 0 confirmed by the other side · 0 disagreements')
+    expect(headerEl.textContent).toBe('1 exchange · 0 saved as confirmed · 0 disagreements')
     expect(headerEl.textContent).not.toMatch(/registered/)
     // Nothing needs attention, so no second line repeats the count.
     expect(screen.queryByText(/sealed by you/)).not.toBeInTheDocument()
@@ -568,7 +575,7 @@ describe('LedgerPageContent', () => {
     }
   }
 
-  it('Exchanges hides the served / asked strip entirely on a null card — never a "no data" line above real rows', async () => {
+  it('Exchanges counts the rows it lists by role: "You served n · you asked m", never a fold it doesn’t have', async () => {
     const { fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
     vi.mocked(fetchPaneCList).mockResolvedValue(oneCleanExchangeRow())
 
@@ -576,15 +583,11 @@ describe('LedgerPageContent', () => {
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
-    // fetchPaneA's default mock (card: null) — never a crash, never a
-    // fabricated number, and (per the header-copy rule) no absence
-    // message either: the card renders nothing at all. The coverage-
-    // statement branches themselves (witnessed / not-reconciled / failed)
-    // are unit-tested directly against the pure `servedAskedCoverage` function
-    // in exchanges-served-view.test.ts — fetchPaneA is shared by three query sites
-    // on this page, so asserting a specific override's exact caller here
-    // would be an order-dependent test, not a real wiring check.
     await screen.findByTestId('exchanges-headline')
+    const role = oneCleanExchangeRow().rows[0].role_tag
+    expect(screen.getByTestId('served-asked-line')).toHaveTextContent(
+      role === 'SERVED' ? 'You served 1 · you asked 0' : 'You served 0 · you asked 1'
+    )
     expect(screen.queryByText('No served-summary data available yet.')).not.toBeInTheDocument()
   })
 
@@ -817,9 +820,8 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     // resolve to "not asked").
     expect(await screen.findByRole('group', { name: 'Exchange exch-clean-00' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Exchange exch-alarm-07' })).toBeInTheDocument()
-    expect(screen.getByText('OPEN · not held')).toBeInTheDocument()
-    expect(screen.queryByText('CLOSED')).not.toBeInTheDocument()
-    expect(screen.getAllByText('OPEN').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Waiting for theirs').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Confirmed')).not.toBeInTheDocument()
     // Neither row carries a counterparty (the
     // default fetchPaneB mock returns no rows), so the OPEN row's ask
     // action is gated -- a fact, never a fabricated "not yet asked" ask
@@ -827,16 +829,19 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     // exchange whose peer is unrecorded), so the gated text names that truth.
     expect(screen.getByText('Other side: not known')).toBeInTheDocument()
     expect(screen.queryByText('nothing to ask yet')).not.toBeInTheDocument()
-    expect(screen.queryByText('You haven’t asked for their record.')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Ask them for their record' })).not.toBeInTheDocument()
+    // The asks stay on the row, disabled with the reason: never a button
+    // pointed at nobody, never one that clicks into nothing.
+    for (const button of screen.getAllByRole('button', { name: 'Ask them for their record' })) {
+      expect(button).toBeDisabled()
+    }
 
     // `▸ checks` expands the full nine-property detail inline, under the
     // row -- never a dialog.
     const alarmRow = screen.getByLabelText('Exchange exch-alarm-07')
     await user.click(within(alarmRow).getByRole('button', { name: 'How we checked ▸' }))
     const checksRegion = await screen.findByRole('region', { name: /Security checks for exch-alarm-07/ })
-    expect(checksRegion).toHaveTextContent('content binding')
-    expect(checksRegion).toHaveTextContent('producer signature')
+    expect(checksRegion).toHaveTextContent('words match')
+    expect(checksRegion).toHaveTextContent('signed')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
@@ -934,7 +939,7 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
-    expect(await screen.findByText('You haven’t asked for their record.')).toBeInTheDocument()
+    expect(await screen.findByText('Their record hasn’t arrived yet.')).toBeInTheDocument()
     const askButton = await screen.findByRole('button', { name: 'Ask them for their record' })
 
     await user.click(askButton)
@@ -945,7 +950,13 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
       'c'.repeat(64),
       expect.objectContaining({ nonce: 'nonce-known', digests: null })
     )
-    expect(await screen.findByText(/^Asked .*No reply yet\.$/)).toBeInTheDocument()
+    expect(await screen.findByText(/^Asked .*No verified reply yet\.$/)).toBeInTheDocument()
+
+    // Their history: asked of the same node, its verified outcome on the row.
+    const { askForHistory } = await import('@/features/capsules/api/evidenceRequestClient')
+    await user.click(screen.getByRole('button', { name: 'Ask for their history' }))
+    expect(askForHistory).toHaveBeenCalledWith('c'.repeat(64))
+    expect(await screen.findByText(/^Their history is verified: 2 checkpoints of their log/)).toBeInTheDocument()
 
     // Nothing on this row ever opens a dialog -- not the ask action, not
     // the `▸ checks` toggle either.
@@ -1042,8 +1053,8 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
 
     // One header for the newer day (1 exchange, unconfirmed) and one for
     // the older day (2 exchanges, unconfirmed) -- never a header per row.
-    expect(screen.getByText('Wednesday 23 Sep · 1 exchange · 0 confirmed')).toBeInTheDocument()
-    expect(screen.getByText('Tuesday 22 Sep · 2 exchanges · 0 confirmed')).toBeInTheDocument()
+    expect(screen.getByText('Wednesday 23 Sep · 1 exchange · 0 saved as confirmed')).toBeInTheDocument()
+    expect(screen.getByText('Tuesday 22 Sep · 2 exchanges · 0 saved as confirmed')).toBeInTheDocument()
   })
 })
 
@@ -1118,9 +1129,9 @@ describe('LedgerPageContent — Part B1: Integrity chain strip', () => {
     // The four first-person stat cards, with real (non-literal) counts.
     expect(await screen.findByText('Sealed')).toBeInTheDocument()
     expect(screen.getByText('Shared with a witness')).toBeInTheDocument()
-    expect(screen.getByText('Confirmed by the other side')).toBeInTheDocument()
+    expect(screen.getByText('Saved as confirmed')).toBeInTheDocument()
     expect(screen.getByText('Disagreements')).toBeInTheDocument()
-    expect(screen.getAllByText('2').length).toBeGreaterThan(0) // Sealed 2, Confirmed by the other side 2
+    expect(screen.getAllByText('2').length).toBeGreaterThan(0) // Sealed 2, Saved as confirmed 2
     // A prominent, honest zero -- Registered 0 is present in the document,
     // not suppressed behind a muted "no data" fallback line.
     expect(screen.getAllByText('0').length).toBeGreaterThan(0)
@@ -1137,11 +1148,11 @@ describe('LedgerPageContent — Part B1: Integrity chain strip', () => {
     expect(document.getElementById(sealedGlyph.getAttribute('aria-describedby') as string)).toHaveTextContent(
       INTEGRITY_TILE_INFO.sealed
     )
-    const closedGlyph = screen.getByRole('button', { name: 'About Confirmed by the other side' })
+    const closedGlyph = screen.getByRole('button', { name: 'About Saved as confirmed' })
     expect(document.getElementById(closedGlyph.getAttribute('aria-describedby') as string)).toHaveTextContent(
       INTEGRITY_TILE_INFO.confirmedByOtherSide
     )
-    for (const label of ['Sealed', 'Shared with a witness', 'Confirmed by the other side', 'Disagreements']) {
+    for (const label of ['Sealed', 'Shared with a witness', 'Saved as confirmed', 'Disagreements']) {
       expect(screen.getByRole('button', { name: `About ${label}` })).toBeInTheDocument()
     }
     const chainGlyph = screen.getByRole('button', { name: 'About the chain coverage bar' })
@@ -1162,7 +1173,7 @@ describe('LedgerPageContent — Part B1: Integrity chain strip', () => {
 
     expect(await screen.findByText('Sealed')).toBeInTheDocument()
     expect(screen.getByText('Shared with a witness')).toBeInTheDocument()
-    expect(screen.getByText('Confirmed by the other side')).toBeInTheDocument()
+    expect(screen.getByText('Saved as confirmed')).toBeInTheDocument()
     expect(screen.getByText('Disagreements')).toBeInTheDocument()
 
     const bodyText = document.body.textContent ?? ''
@@ -1239,7 +1250,7 @@ describe('LedgerPageContent — Integrity Close card', () => {
 
     const card = await screen.findByTestId('close-card')
     expect(within(card).getByText('none yet')).toBeInTheDocument()
-    expect(within(card).getByText(/So far: 2 exchanges · 0 confirmed by the other side/)).toBeInTheDocument()
+    expect(within(card).getByText(/So far: 2 exchanges · 0 saved as confirmed/)).toBeInTheDocument()
     expect(within(card).getByText('2 paid · 1 settled by your wallet · provider’s book: not available')).toBeInTheDocument()
     expect(within(card).getByText('2 payment records not matched to an exchange here.')).toBeInTheDocument()
     // The recorded amount stays in the row's own entries: the card never
@@ -1299,7 +1310,7 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
     await screen.findByText(/Have a witness hold your checkpoints/)
     expect(screen.getByText(/Bind an owner identity/)).toBeInTheDocument()
     expect(screen.getByText(/Get the other side’s record/)).toBeInTheDocument()
-    expect(screen.getByText(/Their record usually arrives on its own/)).toBeInTheDocument()
+    expect(screen.getByText(/arrives on its own only if their node sends records/)).toBeInTheDocument()
     expect(screen.getByText(/does not make your records true/)).toBeInTheDocument()
     expect(screen.getByText(/only your own claim about who you are/)).toBeInTheDocument()
   })
@@ -1775,7 +1786,7 @@ describe('LedgerPageContent — real twin bracket + Twins-only filter', () => {
     expect(screen.getByRole('group', { name: 'Exchange twin-exch-0' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Exchange twin-exch-1' })).toBeInTheDocument()
     expect(
-      screen.getByText('A client marked these two requests as one pair (x-mesh-twin-bracket).')
+      screen.getByText('A client marked these two requests as one pair.')
     ).toBeInTheDocument()
     // Never a computed verdict.
     expect(screen.getByText('not adjudicated')).toBeInTheDocument()
@@ -1795,7 +1806,7 @@ describe('LedgerPageContent — real twin bracket + Twins-only filter', () => {
     expect(screen.queryByText(/Side-by-side check/)).not.toBeInTheDocument()
   })
 
-  it('"Twins only" actually filters to bracket rows now that a real bracket id exists', async () => {
+  it('"Sent to two machines" actually filters to bracket rows now that a real bracket id exists', async () => {
     const { fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
     vi.mocked(fetchPaneCList).mockResolvedValue(twinBracketPayload())
 
@@ -1811,7 +1822,7 @@ describe('LedgerPageContent — real twin bracket + Twins-only filter', () => {
     const stateSection = (await screen.findByText('State')).closest('section')
     if (!stateSection) throw new Error('State filter section not found')
     await user.click(within(stateSection).getByRole('button', { name: 'None' }))
-    await user.click(within(stateSection).getByLabelText(/Twins only,/))
+    await user.click(within(stateSection).getByLabelText(/Sent to two machines,/))
 
     expect(await screen.findByRole('group', { name: 'Exchange twin-exch-0' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Exchange twin-exch-1' })).toBeInTheDocument()
@@ -1830,7 +1841,7 @@ describe('LedgerPageContent — a served exchange with no other side', () => {
     vi.clearAllMocks()
   })
 
-  it('is badged LOCAL, and the state filter counts it under "This node only", not "Open"', async () => {
+  it('is badged "No other side", and the state filter counts it there, not under "Waiting for theirs"', async () => {
     const { fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
     const served = (key: string, counterparty: string | null) => ({
       exchange_key: key,
@@ -1855,16 +1866,16 @@ describe('LedgerPageContent — a served exchange with no other side', () => {
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
     const local = await screen.findByRole('group', { name: 'Exchange local-exch' })
-    expect(within(local).getByText('LOCAL')).toBeInTheDocument()
-    expect(within(local).queryByText(/^OPEN/)).not.toBeInTheDocument()
+    expect(within(local).getByText('No other side')).toBeInTheDocument()
+    expect(within(local).queryByText('Waiting for theirs')).not.toBeInTheDocument()
     const remote = screen.getByRole('group', { name: 'Exchange remote-exch' })
-    expect(within(remote).getByText('OPEN')).toBeInTheDocument()
+    expect(within(remote).getByText('Waiting for theirs')).toBeInTheDocument()
 
     await user.click(screen.getByLabelText('Filter exchanges'))
     const stateSection = (await screen.findByText('State')).closest('section')
     if (!stateSection) throw new Error('State filter section not found')
-    expect(within(stateSection).getByLabelText(/^Open, 1 /)).toBeInTheDocument()
-    expect(within(stateSection).getByLabelText(/^This node only, 1 /)).toBeInTheDocument()
+    expect(within(stateSection).getByLabelText(/^Waiting for theirs, 1 /)).toBeInTheDocument()
+    expect(within(stateSection).getByLabelText(/^No other side, 1 /)).toBeInTheDocument()
   })
 })
 
@@ -1939,9 +1950,56 @@ describe('LedgerPageContent — twin pairs on Peers', () => {
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /peers/i }))
 
-    expect(await screen.findByText('Twin pairs: 3 · answers differed: 3 · not adjudicated')).toBeInTheDocument()
+    expect(await screen.findByText('Sent to two machines: 3 · answers differed: 3 · not adjudicated')).toBeInTheDocument()
     expect(document.querySelectorAll('[data-peer-twins="true"]')).toHaveLength(1)
     const lines = Array.from(document.querySelectorAll('[data-peer-twins="true"]')).map((el) => el.textContent ?? '')
     for (const line of lines) expect(line).not.toMatch(/dishonest|honest|bad|flag|lie|cheat|wrong|suspicious/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A peer known only from our own records: the key this node knows for it
+// comes from the plugin's peer-key route, which merges the host's announced
+// keys with the operator's CAPSULES_PEER_KEYS. On a host with no
+// plugin_keys.v1 the configured key is all there is; the line claims no source.
+// ---------------------------------------------------------------------------
+
+describe('LedgerPageContent — a peer known only from your records', () => {
+  const NODE = 'c'.repeat(64)
+  async function renderNodeOnlyPeer(key: string | null) {
+    const { fetchPaneB } = await import('@/features/capsules/api/sidecarClient')
+    vi.mocked(fetchPaneB).mockResolvedValue({
+      rows: [
+        {
+          peer_id: 'node:cccccccccccccccc',
+          identity: { signing_key_id: null, endpoint_id: null, node_id: NODE },
+          exchange_count: 1,
+          last_seen: null
+        }
+      ],
+      peer_count: 1
+    } as never)
+    const { announcedKeyFor } = await import('@/features/capsules/api/evidenceRequestClient')
+    vi.mocked(announcedKeyFor).mockResolvedValue(key)
+    render(<LedgerPageContent />, { wrapper: makeWrapper() })
+    return announcedKeyFor
+  }
+
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('names the signing key this node knows for it (here only configured), claiming no source', async () => {
+    const announcedKeyFor = await renderNodeOnlyPeer('e'.repeat(64))
+    expect(
+      await screen.findByText(`Known from your records · its signing key ${'e'.repeat(16)} is known to this node`)
+    ).toBeInTheDocument()
+    expect(announcedKeyFor).toHaveBeenCalledWith(NODE)
+    expect(document.body.textContent).not.toMatch(/announced|no signing key linked/)
+  })
+
+  it('with no key known (no plugin_keys.v1 and none configured), says no signed record yet', async () => {
+    await renderNodeOnlyPeer(null)
+    expect(await screen.findByText('Known from your records · no signed record from them yet')).toBeInTheDocument()
   })
 })

@@ -14,24 +14,34 @@ import {
   ENTRY_ROW_CHIP_LABEL,
   ENTRY_ROW_CHIP_ORDER
 } from '@/features/capsules/lib/entry-row-chips'
-import type { EntryRowChipMark } from '@/features/capsules/lib/entry-row-chips'
+import type { EntryRowChipKey, EntryRowChipMark } from '@/features/capsules/lib/entry-row-chips'
 import type { ChecksRow } from '@/features/capsules/lib/security-checks-view'
 import { HoverChip } from '@/features/capsules/components/HoverChip'
 import { ENTRY_CHIP_RESULT_TOOLTIPS } from '@/features/capsules/lib/tooltip-copy'
 
+/** The hover for one chip's result. Only the checkpoint chip has a `◐`. */
+function chipTooltip(chip: EntryRowChipKey, mark: EntryRowChipMark): string {
+  const byMark: Partial<Record<EntryRowChipMark, string>> = ENTRY_CHIP_RESULT_TOOLTIPS[chip]
+  return byMark[mark] ?? ENTRY_CHIP_RESULT_TOOLTIPS[chip]['–']
+}
+
 const MARK_COLOR: Record<EntryRowChipMark, string> = {
   '✓': 'var(--color-good-text)',
   '✗': 'var(--color-bad-text)',
-  '–': 'var(--color-fg-faint)'
+  '–': 'var(--color-fg-faint)',
+  '◐': 'var(--color-fg-dim)'
 }
 
 export function ExchangeRowChips({
   checks,
+  checkpointCovered = null,
   onChipActivate
 }: {
   /** The row's check results -- the same `buildChecksRows` output the
    *  `▸ checks` panel renders, so the two can never disagree. */
   checks: readonly ChecksRow[]
+  /** Whether a checkpoint covers this row's record, by the node's count. */
+  checkpointCovered?: boolean | null
   /** The property key (`security-checks-view.ts`'s `ChecksRow.key`) this
    *  chip links to, not the chip's own short label. */
   onChipActivate: (propertyKey: string) => void
@@ -39,12 +49,12 @@ export function ExchangeRowChips({
   return (
     <div aria-label="checks summary" className="flex flex-wrap items-center gap-2.5" role="group">
       {ENTRY_ROW_CHIP_ORDER.map((chip) => {
-        const mark = entryRowChipMark(checks, chip)
+        const mark = entryRowChipMark(checks, chip, checkpointCovered)
         const label = ENTRY_ROW_CHIP_LABEL[chip]
         const propertyKey = entryRowChipPropertyKey(chip)
         // Hover for the meaning, click for the full check (UX §8 rule 2).
         return (
-          <HoverChip census={`entry_chip:${chip}`} key={chip} label={ENTRY_CHIP_RESULT_TOOLTIPS[chip][mark]}>
+          <HoverChip census={`entry_chip:${chip}`} key={chip} label={chipTooltip(chip, mark)}>
             <span
               aria-label={`${label}: jump to that check`}
               className="ui-control-ghost inline-flex cursor-pointer items-center gap-1 font-mono text-xs"

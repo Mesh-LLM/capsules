@@ -26,7 +26,7 @@ export const INTEROP_PROFILE = 'evidence-interop/0'
  *  or no announced key to check it under. `unknown` for anything else. */
 export type EvidenceVerification =
   | { state: 'refusal'; reason: string }
-  | { state: 'artifact'; records: number[] }
+  | { state: 'artifact'; records: number[]; checkpoints?: number }
   | { state: 'not_evidence'; why: string }
   | { state: 'no_announced_key' }
   | { state: 'unknown' }
@@ -68,6 +68,22 @@ export function askByDigestsRequest(digests: ExchangeDigests): Record<string, un
   }
 }
 
+/** The registered derivation that lists the peer's checkpoints, each with
+ *  the proof that it extends the one before (-00 registry,
+ *  `evidence_artifact::build`). */
+export const HISTORY_CARD_DERIVATION = 'history_card/1'
+
+/** The -00 request for the peer's history card: its whole log, as the
+ *  `history_card/1` derivation, under the freshest checkpoint it holds. */
+export function askForHistoryRequest(): Record<string, unknown> {
+  return {
+    profile: INTEROP_PROFILE,
+    coverage: { min_freshness: 1 },
+    subject: { full_history: null },
+    derivation: HISTORY_CARD_DERIVATION
+  }
+}
+
 export type ExchangeDigests = { request: string; response: string }
 
 /** How to name the exchange to the other side: the client nonce our record
@@ -85,7 +101,11 @@ function parseVerification(value: unknown): EvidenceVerification {
       return typeof v.reason === 'string' ? { state: 'refusal', reason: v.reason } : { state: 'unknown' }
     case 'artifact':
       return Array.isArray(v.records) && v.records.every((i) => Number.isInteger(i))
-        ? { state: 'artifact', records: v.records as number[] }
+        ? {
+            state: 'artifact',
+            records: v.records as number[],
+            ...(Number.isInteger(v.checkpoints) ? { checkpoints: v.checkpoints as number } : {})
+          }
         : { state: 'unknown' }
     case 'not_evidence':
       return { state: 'not_evidence', why: typeof v.why === 'string' ? v.why : 'it did not verify' }
@@ -97,8 +117,11 @@ function parseVerification(value: unknown): EvidenceVerification {
 }
 
 /** The key this node was told `peerId` signs with, or `null` when none is
- *  announced or the route can't say: an unknown key is never a guess. */
-async function announcedKeyFor(peerId: string): Promise<string | null> {
+ *  announced or the route can't say: an unknown key is never a guess. The
+ *  plugin's `peer-key` route reads the host's announced keys (on a host with
+ *  `plugin_keys.v1`) and the operator's `CAPSULES_PEER_KEYS`; off such a
+ *  host it answers from the operator's map alone, or `null`. */
+export async function announcedKeyFor(peerId: string): Promise<string | null> {
   try {
     const body = await getPluginJson<{ announced_key_id?: unknown }>(peerKeyRoute(peerId))
     return typeof body.announced_key_id === 'string' ? body.announced_key_id.toLowerCase() : null
@@ -124,6 +147,12 @@ export async function askForRecord(peerId: string, subject: AskSubject): Promise
     byNonce.verification.state === 'refusal' &&
     byNonce.verification.reason === 'no_such_subject'
   return noRecord && digests ? ask(peerId, askByDigestsRequest(digests)) : byNonce
+}
+
+/** Ask `peerId` for its history card. The reply is judged in
+ *  `ask-for-history.ts`. */
+export function askForHistory(peerId: string): Promise<EvidenceAskReply> {
+  return ask(peerId, askForHistoryRequest())
 }
 
 async function ask(peerId: string, request: Record<string, unknown>): Promise<EvidenceAskReply> {

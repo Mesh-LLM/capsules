@@ -6,17 +6,20 @@
 // Checks column (Part 3) so the two
 // never drift into different wording for the same properties -- verbatim
 // order from `manifesto-the-tenth-check-v6`'s table.
+//
+// The labels are on screen, so they are plain words (the row chips use the
+// same ones); the property keys stay the engineer's.
 export const NINE_PROPERTY_LABELS: Record<string, string> = {
-  content_binding: 'content binding',
-  producer_signature: 'producer signature',
-  task_binding: 'task binding',
-  local_inclusion: 'local inclusion',
-  checkpoint_signature: 'checkpoint signature',
-  external_registration: 'external registration',
-  continuity: 'continuity',
-  identity_authority: 'identity/authority',
-  capture_coverage: 'capture coverage',
-  outcome_corroboration: 'outcome corroboration'
+  content_binding: 'words match',
+  producer_signature: 'signed',
+  task_binding: 'tied to the request',
+  local_inclusion: 'in a checkpoint',
+  checkpoint_signature: 'checkpoint signed',
+  external_registration: 'witnessed',
+  continuity: 'builds on the last checkpoint',
+  identity_authority: 'owner link',
+  capture_coverage: 'captured in full',
+  outcome_corroboration: 'their record'
 }
 
 // These two are ALWAYS recomputed in-browser — never trusted from sidecar.
