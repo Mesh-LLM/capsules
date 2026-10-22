@@ -1129,9 +1129,9 @@ describe('LedgerPageContent — Part B1: Integrity chain strip', () => {
     // The four first-person stat cards, with real (non-literal) counts.
     expect(await screen.findByText('Sealed')).toBeInTheDocument()
     expect(screen.getByText('Shared with a witness')).toBeInTheDocument()
-    expect(screen.getByText('Confirmed by the other side')).toBeInTheDocument()
+    expect(screen.getByText('Saved as confirmed')).toBeInTheDocument()
     expect(screen.getByText('Disagreements')).toBeInTheDocument()
-    expect(screen.getAllByText('2').length).toBeGreaterThan(0) // Sealed 2, Confirmed by the other side 2
+    expect(screen.getAllByText('2').length).toBeGreaterThan(0) // Sealed 2, Saved as confirmed 2
     // A prominent, honest zero -- Registered 0 is present in the document,
     // not suppressed behind a muted "no data" fallback line.
     expect(screen.getAllByText('0').length).toBeGreaterThan(0)
@@ -1148,11 +1148,11 @@ describe('LedgerPageContent — Part B1: Integrity chain strip', () => {
     expect(document.getElementById(sealedGlyph.getAttribute('aria-describedby') as string)).toHaveTextContent(
       INTEGRITY_TILE_INFO.sealed
     )
-    const closedGlyph = screen.getByRole('button', { name: 'About Confirmed by the other side' })
+    const closedGlyph = screen.getByRole('button', { name: 'About Saved as confirmed' })
     expect(document.getElementById(closedGlyph.getAttribute('aria-describedby') as string)).toHaveTextContent(
       INTEGRITY_TILE_INFO.confirmedByOtherSide
     )
-    for (const label of ['Sealed', 'Shared with a witness', 'Confirmed by the other side', 'Disagreements']) {
+    for (const label of ['Sealed', 'Shared with a witness', 'Saved as confirmed', 'Disagreements']) {
       expect(screen.getByRole('button', { name: `About ${label}` })).toBeInTheDocument()
     }
     const chainGlyph = screen.getByRole('button', { name: 'About the chain coverage bar' })
@@ -1173,7 +1173,7 @@ describe('LedgerPageContent — Part B1: Integrity chain strip', () => {
 
     expect(await screen.findByText('Sealed')).toBeInTheDocument()
     expect(screen.getByText('Shared with a witness')).toBeInTheDocument()
-    expect(screen.getByText('Confirmed by the other side')).toBeInTheDocument()
+    expect(screen.getByText('Saved as confirmed')).toBeInTheDocument()
     expect(screen.getByText('Disagreements')).toBeInTheDocument()
 
     const bodyText = document.body.textContent ?? ''

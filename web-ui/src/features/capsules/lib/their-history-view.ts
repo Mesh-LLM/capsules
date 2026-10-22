@@ -161,7 +161,7 @@ export function dealingsText(row: PaneBRow): string {
   const summary = confirmedByOtherSide(row)
   const differ = /· (\d+) differ$/.exec(confirmedByOtherSideText(summary))
   const differText = differ ? ` · ${differ[1]} differ` : ''
-  return `${plural(row.exchange_count ?? 0, 'exchange')} · ${summary.confirmed} confirmed by the other side${differText}`
+  return `${plural(row.exchange_count ?? 0, 'exchange')} · ${summary.confirmed} saved as confirmed${differText}`
 }
 
 // ---------------------------------------------------------------------------

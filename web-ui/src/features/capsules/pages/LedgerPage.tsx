@@ -1365,7 +1365,7 @@ function IntegritySection() {
           />
           <IntegrityStatCard
             info={INTEGRITY_TILE_INFO.confirmedByOtherSide}
-            label="Confirmed by the other side"
+            label="Saved as confirmed"
             value={closedByOtherSideCount}
           />
           <IntegrityStatCard

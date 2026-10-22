@@ -109,7 +109,7 @@ const REQUIRED = {
   integrity: [
     'integrity_tile:Sealed',
     'integrity_tile:Shared with a witness',
-    'integrity_tile:Confirmed by the other side',
+    'integrity_tile:Saved as confirmed',
     'integrity_tile:Disagreements',
     'integrity:chain_strip',
     'integrity:close_card',

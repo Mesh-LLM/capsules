@@ -191,7 +191,7 @@ describe('verdicts on their exchanges, by provenance', () => {
 describe('what others say, dealings', () => {
   it('two counts, never a ratio', () => {
     expect(othersSayView(SEGMENT_ROW).text).toBe('Asked 3 references · 2 answered')
-    expect(dealingsText(CLEAN)).toBe('24 exchanges · 16 confirmed by the other side')
+    expect(dealingsText(CLEAN)).toBe('24 exchanges · 16 saved as confirmed')
   })
 
   it('names refusal records as records of THEM refusing, not references declining', () => {
