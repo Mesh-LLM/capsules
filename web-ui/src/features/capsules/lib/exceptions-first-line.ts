@@ -96,7 +96,7 @@ export function exchangesHeadline(
   const noun = total === 1 ? 'exchange' : 'exchanges'
   const rangeSuffix = rangeLabel ? `, ${rangeLabel}` : ''
   const disagreementNoun = disagreements === 1 ? 'disagreement' : 'disagreements'
-  return `${total} ${noun}${rangeSuffix} · ${confirmed} confirmed by the other side · ${disagreements} ${disagreementNoun}`
+  return `${total} ${noun}${rangeSuffix} · ${confirmed} saved as confirmed · ${disagreements} ${disagreementNoun}`
 }
 
 /** How many exchanges this node served and how many it asked for, counted

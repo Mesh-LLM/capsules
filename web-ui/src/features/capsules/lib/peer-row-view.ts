@@ -131,7 +131,7 @@ export function withYouCounts(row: PaneBRow): WithYouCounts {
 }
 
 export function withYouCountsText(counts: WithYouCounts): string {
-  return `${counts.requested} requested · ${counts.served} served · ${counts.confirmed} confirmed`
+  return `${counts.requested} requested · ${counts.served} served · ${counts.confirmed} saved as confirmed`
 }
 
 // ---------------------------------------------------------------------------

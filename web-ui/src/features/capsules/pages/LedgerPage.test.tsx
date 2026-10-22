@@ -154,7 +154,7 @@ describe('LedgerPageContent', () => {
     // The default pane A mock carries no card: the node did not say whether a
     // witness is set, so the line does not say it is off.
     expect(await screen.findByTestId('hero-status-line')).toHaveTextContent(
-      /^0 records · 0 confirmed by the other side · 0 disagreements · no outside witness$/
+      /^0 records · 0 saved as confirmed · 0 disagreements · no outside witness$/
     )
   })
 
@@ -427,7 +427,7 @@ describe('LedgerPageContent', () => {
     // Navigate to Exchanges tab
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
-    // Wait for data. Matched on "confirmed by the other side" (unique to
+    // Wait for data. Matched on "saved as confirmed" (unique to
     // this line) rather than "3 exchange" -- the exceptions-first line
     // below it also states the same total, so a bare "3 exchange" query is
     // ambiguous between the two.
@@ -440,7 +440,7 @@ describe('LedgerPageContent', () => {
     // The Exchanges headline (the hero line above says the same counts).
     const headerEl = await screen.findByTestId('exchanges-headline')
     expect(headerEl.textContent).toMatch(/3 exchange/)
-    expect(headerEl.textContent).toMatch(/0 confirmed by the other side/)
+    expect(headerEl.textContent).toMatch(/0 saved as confirmed/)
 
     // Ratios and percentages must NOT appear
     const bodyText = document.body.textContent ?? ''
@@ -476,7 +476,7 @@ describe('LedgerPageContent', () => {
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
     const headerEl = await screen.findByTestId('exchanges-headline')
-    expect(headerEl.textContent).toBe('1 exchange · 0 confirmed by the other side · 0 disagreements')
+    expect(headerEl.textContent).toBe('1 exchange · 0 saved as confirmed · 0 disagreements')
     expect(headerEl.textContent).not.toMatch(/registered/)
     // Nothing needs attention, so no second line repeats the count.
     expect(screen.queryByText(/sealed by you/)).not.toBeInTheDocument()
@@ -1053,8 +1053,8 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
 
     // One header for the newer day (1 exchange, unconfirmed) and one for
     // the older day (2 exchanges, unconfirmed) -- never a header per row.
-    expect(screen.getByText('Wednesday 23 Sep · 1 exchange · 0 confirmed')).toBeInTheDocument()
-    expect(screen.getByText('Tuesday 22 Sep · 2 exchanges · 0 confirmed')).toBeInTheDocument()
+    expect(screen.getByText('Wednesday 23 Sep · 1 exchange · 0 saved as confirmed')).toBeInTheDocument()
+    expect(screen.getByText('Tuesday 22 Sep · 2 exchanges · 0 saved as confirmed')).toBeInTheDocument()
   })
 })
 
@@ -1250,7 +1250,7 @@ describe('LedgerPageContent — Integrity Close card', () => {
 
     const card = await screen.findByTestId('close-card')
     expect(within(card).getByText('none yet')).toBeInTheDocument()
-    expect(within(card).getByText(/So far: 2 exchanges · 0 confirmed by the other side/)).toBeInTheDocument()
+    expect(within(card).getByText(/So far: 2 exchanges · 0 saved as confirmed/)).toBeInTheDocument()
     expect(within(card).getByText('2 paid · 1 settled by your wallet · provider’s book: not available')).toBeInTheDocument()
     expect(within(card).getByText('2 payment records not matched to an exchange here.')).toBeInTheDocument()
     // The recorded amount stays in the row's own entries: the card never

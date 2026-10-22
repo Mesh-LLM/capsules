@@ -81,7 +81,7 @@ type RecordCandidate = {
 const instant = fullTimeInstant
 
 /** A record of theirs whose contents don't produce the id it claims. */
-const ALTERED = 'their record doesn’t match its own id: it was changed after it was sealed'
+const ALTERED = 'their record doesn’t match its own id, so it isn’t the record that was sealed'
 
 const NO_VERDICT_WHY: Record<Exclude<RecordVerdict, { kind: 'closed' } | { kind: 'contradicted' }>['why'], string> = {
   not_verified: 'it didn’t check out',

@@ -1218,7 +1218,7 @@ function CloseCard({
         />
       </span>
       <p className="type-caption text-fg-dim" data-close-inference="true">
-        So far: {counts.exchanges} exchanges · {counts.closed} confirmed by the other side
+        So far: {counts.exchanges} exchanges · {counts.closed} saved as confirmed
       </p>
       <p className="type-caption text-fg-dim" data-close-settlement="true">
         {settlementCloseLine(counts, payments)}

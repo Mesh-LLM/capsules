@@ -51,7 +51,7 @@ function witnessPhrase(state: WitnessState): string {
 export function heroStatusLine(counts: HeroCounts): string {
   return [
     plural(counts.records, 'record'),
-    `${counts.confirmed} confirmed by the other side`,
+    `${counts.confirmed} saved as confirmed`,
     plural(counts.disagreements, 'disagreement'),
     witnessPhrase(counts.witness)
   ].join(' · ')

@@ -77,13 +77,13 @@ describe('dayHeaderIndices', () => {
 describe('dayTallyLine', () => {
   it('renders the vocabulary-ruled words -- "exchanges"/"confirmed", never "balanced"', () => {
     const line = dayTallyLine({ label: 'Tuesday 23 Sep', count: 42, confirmedCount: 0 })
-    expect(line).toBe('Tuesday 23 Sep · 42 exchanges · 0 confirmed')
+    expect(line).toBe('Tuesday 23 Sep · 42 exchanges · 0 saved as confirmed')
     expect(line).not.toMatch(/balanced/i)
   })
 
   it('singularises "exchange" at a count of exactly one', () => {
     expect(dayTallyLine({ label: 'Tuesday 23 Sep', count: 1, confirmedCount: 1 })).toBe(
-      'Tuesday 23 Sep · 1 exchange · 1 confirmed'
+      'Tuesday 23 Sep · 1 exchange · 1 saved as confirmed'
     )
   })
 })

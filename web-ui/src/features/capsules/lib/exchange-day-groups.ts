@@ -72,5 +72,5 @@ export function dayHeaderIndices(rows: readonly ExchangeLedgerRow[]): ReadonlySe
 /** The header's own rendered line -- vocabulary-ruled words only
  *  ("exchanges"/"confirmed"; never "balanced", the wallet's word). */
 export function dayTallyLine(tally: DayTally): string {
-  return `${tally.label} · ${tally.count} exchange${tally.count === 1 ? '' : 's'} · ${tally.confirmedCount} confirmed`
+  return `${tally.label} · ${tally.count} exchange${tally.count === 1 ? '' : 's'} · ${tally.confirmedCount} saved as confirmed`
 }

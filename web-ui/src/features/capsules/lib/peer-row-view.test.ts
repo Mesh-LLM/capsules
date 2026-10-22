@@ -97,7 +97,7 @@ describe('withYouCounts — fold-in finding 1: confirmed comes from the ONE gate
       confirmed_siblings: [confirmedSibling(), confirmedSibling()]
     })
     expect(withYouCounts(row)).toEqual({ requested: 24, served: 12, confirmed: 2 })
-    expect(withYouCountsText(withYouCounts(row))).toBe('24 requested · 12 served · 2 confirmed')
+    expect(withYouCountsText(withYouCounts(row))).toBe('24 requested · 12 served · 2 saved as confirmed')
   })
 
   it('PINNED: the inspector Overview count equals the Peers table count — one predicate, one number, two surfaces', () => {

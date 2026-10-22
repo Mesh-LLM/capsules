@@ -116,7 +116,7 @@ const CASES: Case[] = [
     ask: asks(asked(record('agrees', ID_MISMATCH_UNSIGNED))),
     state: 'contradicted',
     source: 'asked',
-    askNote: { verified: true, text: /^Their record doesn’t match its own id: it was changed after it was sealed\.$/ }
+    askNote: { verified: true, text: /^Their record doesn’t match its own id, so it isn’t the record that was sealed\.$/ }
   },
   {
     name: 'a bad signature over a matching id is no verdict, even if its answer differs',
