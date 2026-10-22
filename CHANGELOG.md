@@ -8,6 +8,13 @@ the interop profile's signed envelope, which a node on 0.1.4 cannot read, and an
 0.1.4 no longer reproduce. A node on 0.1.4 also sends unsigned requests, which this version refuses
 for records and Standard History under the default settings.
 
+**Signing needs a host that announces plugin keys (`plugin_keys.v1`, mesh-llm #2299).** No mesh-llm
+release has it yet: it is on mesh-llm main and is expected in 0.79.0. On 0.78.1 or older, this
+version's requests go out unsigned, so two upgraded nodes with the default settings answer each
+other no record and no Standard History. `share_history_segments = peers` and
+`share_standard_history = on` keep answering unsigned requests, and the records status
+(`requests_signed`) shows which case a node is in.
+
 ### Changed
 
 - **A record of an exchange this node served for a peer now names the peer that asked, so that peer
