@@ -1598,9 +1598,19 @@ mod tests {
                 &AnchorClient::new("http://127.0.0.1:1"),
             )
             .unwrap();
+        // An anchor is pinned by the SHA-256 of its checkpoint's COSE
+        // statement, as written beside the record in checkpoints.jsonl.
+        let line: Value = std::fs::read_to_string(state.ledger_dir().join("checkpoints.jsonl"))
+            .unwrap()
+            .lines()
+            .last()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .unwrap();
+        assert_eq!(line["mmr_size"], json!(covering.checkpoint.mmr_size));
+        let statement = hex::decode(line["checkpoint_cose"].as_str().unwrap()).unwrap();
         let request = json!({
             "subject": {"record": emitted.capsule_id},
-            "coverage": {"expected_pin": covering.checkpoint.digest()},
+            "coverage": {"expected_pin": hex::encode(Sha256::digest(&statement))},
         });
         let announced = announced();
         let ask_node = |ledger_dir: &Path, bytes: &[u8]| {
