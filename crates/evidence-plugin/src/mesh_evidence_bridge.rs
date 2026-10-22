@@ -479,8 +479,11 @@ pub struct MeshEvidenceRequestArgs {
     /// with an explicit `"verify": false`. The result is
     /// `{"answer": <the peer's JSON>, "request_digest", "verification"}`
     /// (`evidence_answer::verify_response`, or `no_announced_key` when the
-    /// registry names no key for the peer). With `"verify": false` it is the
-    /// peer's JSON alone, for a caller that verifies it itself.
+    /// registry names no key for the peer), and `held`: the `capsule_id` of
+    /// the record now held on this node when the request named one exchange
+    /// by its digests and exactly that record verified, else empty. With
+    /// `"verify": false` it is the peer's JSON alone, for a caller that
+    /// verifies it itself.
     #[serde(default = "verify_by_default")]
     pub verify: bool,
 }
@@ -567,12 +570,12 @@ pub async fn handle_mesh_evidence_request(
     }))
 }
 
-/// The records a verified answer to a record request served, held on this
-/// node (`record_push_bridge::hold_asked_record`), so an asked record counts
-/// as saved like a pushed one: the `capsule_id`s now held. Only a request for
-/// records (no derivation) whose answer verified as an artifact; a record
-/// the receiver refuses, or a store that fails, is left out and logged --
-/// the answer itself still goes back to the caller.
+/// The record this node asked for, held on this node
+/// (`record_push_bridge::hold_asked_record`) so it counts as saved like a
+/// pushed one: the `capsule_id` now held, or none. Only the one record of
+/// the exchange the ask names is held ([`asked_digests`], [`asked_record`]).
+/// A record the receiver refuses, or a store that fails, is left out and
+/// logged; the answer itself still goes back.
 async fn hold_asked_records(
     capsules: &std::sync::Arc<crate::capsule_emit::CapsuleState>,
     peer_id: &str,
@@ -580,36 +583,100 @@ async fn hold_asked_records(
     answer: &serde_json::Value,
     verification: &serde_json::Value,
 ) -> Vec<String> {
+    let Some(digests) = asked_digests(request, capsules.ledger_dir()) else {
+        return Vec::new();
+    };
+    let Some(record) = asked_record(request, &digests, answer, verification) else {
+        return Vec::new();
+    };
+    let id = serde_json::from_slice::<serde_json::Value>(&record)
+        .ok()
+        .and_then(|r| {
+            r.get("capsule_id")
+                .and_then(|i| i.as_str())
+                .map(str::to_string)
+        });
+    match crate::record_push_bridge::hold_asked_record(capsules, peer_id, &record).await {
+        Ok(true) => id.into_iter().collect(),
+        Ok(false) => {
+            tracing::info!(peer_id, capsule_id = ?id, "an asked record was not held: the receiver refused it");
+            Vec::new()
+        }
+        Err(error) => {
+            tracing::warn!(%error, peer_id, capsule_id = ?id, "an asked record could not be held");
+            Vec::new()
+        }
+    }
+}
+
+/// The two digests of the exchange a record ask names: from the request
+/// itself (`exchange-digests:<request>:<response>`), or, for an ask by
+/// client nonce, from this node's own one record carrying that nonce. `None`
+/// for any other request (a derivation, a record id, a history), or a nonce
+/// on no own record or on more than one.
+fn asked_digests(
+    request: &serde_json::Value,
+    ledger_dir: &std::path::Path,
+) -> Option<(String, String)> {
+    if request.get("derivation").is_some() {
+        return None;
+    }
+    let correlation = request.pointer("/subject/correlation")?.as_str()?;
+    if let Some(digests) = correlation.strip_prefix("exchange-digests:") {
+        let (request_digest, response_digest) = digests.split_once(':')?;
+        return Some((request_digest.to_string(), response_digest.to_string()));
+    }
+    let mut own = crate::evidence_panes::read_capsule_records(ledger_dir)
+        .into_iter()
+        .filter(|record| {
+            crate::evidence_log::record_correlation_ids(record)
+                .iter()
+                .any(|id| id == correlation)
+        })
+        .filter_map(|record| {
+            let digest = |d: &str| record.pointer(d)?.as_str().map(str::to_string);
+            Some((
+                digest("/effect/request_digest")?,
+                digest("/effect/response_digest")?,
+            ))
+        });
+    let one = own.next()?;
+    own.next().is_none().then_some(one)
+}
+
+/// The bytes of the one record a verified answer to a record request serves
+/// with both `digests`, or `None`: an answer that did not verify as an
+/// artifact, or one proving no such record or more than one.
+fn asked_record(
+    request: &serde_json::Value,
+    (request_digest, response_digest): &(String, String),
+    answer: &serde_json::Value,
+    verification: &serde_json::Value,
+) -> Option<Vec<u8>> {
     if request.get("derivation").is_some()
         || verification.get("state").and_then(|s| s.as_str()) != Some("artifact")
     {
-        return Vec::new();
+        return None;
     }
     let proven: Vec<u64> = verification
         .get("records")
         .and_then(|r| r.as_array())
         .map(|r| r.iter().filter_map(|i| i.as_u64()).collect())
         .unwrap_or_default();
-    let mut held = Vec::new();
-    for record in served_records(answer, &proven) {
-        let id = serde_json::from_slice::<serde_json::Value>(&record)
-            .ok()
-            .and_then(|r| {
-                r.get("capsule_id")
-                    .and_then(|i| i.as_str())
-                    .map(str::to_string)
-            });
-        match crate::record_push_bridge::hold_asked_record(capsules, peer_id, &record).await {
-            Ok(true) => held.extend(id),
-            Ok(false) => {
-                tracing::info!(peer_id, capsule_id = ?id, "an asked record was not held: the receiver refused it")
-            }
-            Err(error) => {
-                tracing::warn!(%error, peer_id, capsule_id = ?id, "an asked record could not be held")
-            }
-        }
-    }
-    held
+    let mut matching = served_records(answer, &proven).into_iter().filter(|bytes| {
+        serde_json::from_slice::<serde_json::Value>(bytes).is_ok_and(|record| {
+            record
+                .pointer("/effect/request_digest")
+                .and_then(|d| d.as_str())
+                == Some(request_digest.as_str())
+                && record
+                    .pointer("/effect/response_digest")
+                    .and_then(|d| d.as_str())
+                    == Some(response_digest.as_str())
+        })
+    });
+    let one = matching.next()?;
+    matching.next().is_none().then_some(one)
 }
 
 /// The bodies of the records an answer serves at the `proven` leaf indices:
@@ -731,6 +798,113 @@ mod tests {
         assert!(served_records(&answer, &[]).is_empty());
         assert!(served_records(&serde_json::json!({}), &[3]).is_empty());
         assert!(served_records(&serde_json::json!({"artifact": "%%"}), &[3]).is_empty());
+    }
+
+    /// Only the one record an exchange-digests ask names is held: not for a
+    /// nonce or derivation request, not for an answer that did not verify,
+    /// and not when the answer proves no matching record or more than one.
+    #[test]
+    fn asked_record_is_only_the_one_record_the_ask_names() {
+        use base64::Engine as _;
+        let (req, resp) = ("1".repeat(64), "2".repeat(64));
+        let record = |id: &str, rq: &str, rs: &str| {
+            serde_json::to_vec(&serde_json::json!({
+                "capsule_id": id, "effect": {"request_digest": rq, "response_digest": rs},
+            }))
+            .unwrap()
+        };
+        let answer = |records: &[(u64, Vec<u8>)]| {
+            let artifact = serde_json::json!({"records": records.iter().map(|(i, b)| {
+                serde_json::json!({"leaf_index": i, "body": hex::encode(b)})
+            }).collect::<Vec<_>>()});
+            serde_json::json!({"artifact": base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(serde_json::to_vec(&artifact).unwrap())})
+        };
+        let ask = serde_json::json!({"subject": {"correlation": format!("exchange-digests:{req}:{resp}")}});
+        let digests = (req.clone(), resp.clone());
+        let verified = |leaves: &[u64]| serde_json::json!({"state": "artifact", "records": leaves});
+        let theirs = record("theirs", &req, &resp);
+        let other = record("other", &req, &"3".repeat(64));
+
+        // The one matching record, beside one for another exchange: held.
+        let both = answer(&[(4, theirs.clone()), (5, other.clone())]);
+        assert_eq!(
+            asked_record(&ask, &digests, &both, &verified(&[4, 5])),
+            Some(theirs.clone())
+        );
+        // Two records carrying both digests: neither is held.
+        let twice = answer(&[(4, theirs.clone()), (6, record("again", &req, &resp))]);
+        assert_eq!(
+            asked_record(&ask, &digests, &twice, &verified(&[4, 6])),
+            None
+        );
+        // None proven, or not an artifact: nothing.
+        assert_eq!(asked_record(&ask, &digests, &both, &verified(&[5])), None);
+        let refusal = serde_json::json!({"state": "refusal", "reason": "not_authorized"});
+        assert_eq!(asked_record(&ask, &digests, &both, &refusal), None);
+        // A derivation: nothing, even with a matching record.
+        let mut derived = ask.clone();
+        derived["derivation"] = serde_json::json!("history_card/1");
+        assert_eq!(
+            asked_record(&derived, &digests, &both, &verified(&[4])),
+            None
+        );
+    }
+
+    /// The exchange an ask names: by its digests in the request, or by a
+    /// client nonce on exactly one of this node's own records; nothing for a
+    /// derivation, a nonce on no own record, or one on two.
+    #[test]
+    fn asked_digests_come_from_the_request_or_our_one_record_with_the_nonce() {
+        let dir = tempfile::tempdir().unwrap();
+        let capsules = crate::capsule_emit::CapsuleState::open(dir.path(), "me").unwrap();
+        let exchange =
+            |nonce: &'static str, body: &'static [u8]| crate::capsule_emit::ExchangeRecord {
+                model: "m",
+                client_nonce: Some(nonce),
+                request_bytes: body,
+                response_bytes:
+                    br#"{"id":"x","choices":[{"message":{"role":"assistant","content":"y"}}]}"#,
+                latency_ms: 1.0,
+                exchange_id: None,
+                requesting_party: None,
+                host_provenance: None,
+            };
+        let once = capsules
+            .emit_for_exchange(&exchange("nonce-once", br#"{"a":1}"#))
+            .unwrap()
+            .capsule;
+        capsules
+            .emit_for_exchange(&exchange("nonce-twice", br#"{"a":2}"#))
+            .unwrap();
+        capsules
+            .emit_for_exchange(&exchange("nonce-twice", br#"{"a":3}"#))
+            .unwrap();
+        let ask = |c: &str| serde_json::json!({"subject": {"correlation": c}});
+        let ledger = capsules.ledger_dir();
+
+        assert_eq!(
+            asked_digests(&ask("exchange-digests:aa:bb"), ledger),
+            Some(("aa".into(), "bb".into()))
+        );
+        assert_eq!(
+            asked_digests(&ask("nonce-once"), ledger),
+            Some((
+                once["effect"]["request_digest"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+                once["effect"]["response_digest"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            ))
+        );
+        assert_eq!(asked_digests(&ask("nonce-twice"), ledger), None);
+        assert_eq!(asked_digests(&ask("nonce-never"), ledger), None);
+        let mut derived = ask("nonce-once");
+        derived["derivation"] = serde_json::json!("history_card/1");
+        assert_eq!(asked_digests(&derived, ledger), None);
     }
 
     /// The remote-OOM bound: bytes up to the cap pass through untouched; one
