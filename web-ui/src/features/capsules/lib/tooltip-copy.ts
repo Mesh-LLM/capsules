@@ -31,6 +31,11 @@ export const HERO_TOOLTIPS = {
 export const OWNER_LINKED_PHRASE = 'linked to your owner account (self-asserted)'
 export const OWNER_NOT_LINKED_PHRASE = 'not linked to an owner'
 
+/** Record push is off by default (INSTALL.md "Quiet by default"), so their
+ *  record arriving by itself is the exception, never the expectation. */
+export const THEIR_RECORD_ARRIVES_IF_PUSHED =
+  'Their record arrives on its own only if their node sends records (off by default). Otherwise, ask for it on the exchange row.'
+
 /** p2 item 5: why an action is disabled -- said on hover, never a silent grey. */
 export const SAMPLE_DATA_UNAVAILABLE = 'Not available on sample data.'
 
@@ -83,7 +88,8 @@ export const THEIR_LOG_TOOLTIPS = {
   failed: 'Your node fetched their log and it didn’t check out on this machine, so none of it is shown as checked.',
   refused: 'They refused to show their log. Nothing of it is checked here.',
   no_answer: 'Your node asked for their log and no answer has been checked here yet.',
-  not_asked: 'Your node hasn’t asked for their log, so nothing of it is checked here.'
+  not_asked:
+    'Your node hasn’t asked for their history, so nothing of it is checked here. “Ask for their history” on an exchange with them asks, and shows the checked answer on that row.'
 } as const
 
 /** The peer drill's "Their history" sections
@@ -187,7 +193,7 @@ export const ENTRY_CHIP_RESULT_TOOLTIPS = {
 
 /** The (i) on a peer's twin pairs line. Facts only, never a judgement. */
 export const PEER_TWINS_TOOLTIP =
-  'Twin pairs: a client sent the same request to this node and to another one, and marked the two as one pair. “Answers differed” compares the two sealed answers byte for byte; it is a comparison, not a ruling. “Not adjudicated” means no referee has ruled on the pair.'
+  'A client sent the same request to this node and to another one, and marked the two as one pair. “Answers differed” compares the two sealed answers byte for byte; it is a comparison, not a ruling. “Not adjudicated” means no referee has ruled on the pair.'
 
 /** The LOCAL badge's (i): a served exchange with no other side recorded. */
 export const LOCAL_ONLY_TOOLTIP =

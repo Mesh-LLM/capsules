@@ -435,7 +435,7 @@ export function ExchangeStreamRow({
               {row.counterparty ? (
                 <span className="font-mono">{row.counterparty}</span>
               ) : (
-                <span className="text-fg-dim">counterparty not recorded</span>
+                <span className="text-fg-dim">other side not recorded</span>
               )}
               {modelIdentity ? (
                 <>
@@ -630,14 +630,14 @@ export function ExchangeStreamRow({
                   </span>
                 ))
               : null}
-            <CopyableId label="exch" value={row.exchangeKey} />
+            <CopyableId label="exchange" value={row.exchangeKey} />
             <SeeInLogsLink exchangeKey={row.exchangeKey} />
             <span className="text-fg-faint">·</span>
             {(row.raw.mine.capsule_id ?? row.raw.mine.text) ? (
-              <CopyableId label="rec" value={(row.raw.mine.capsule_id ?? row.raw.mine.text) as string} />
+              <CopyableId label="record" value={(row.raw.mine.capsule_id ?? row.raw.mine.text) as string} />
             ) : (
               <span className="inline-flex items-center gap-1">
-                <span className="text-fg-faint">rec</span>
+                <span className="text-fg-faint">record</span>
                 <span>—</span>
               </span>
             )}

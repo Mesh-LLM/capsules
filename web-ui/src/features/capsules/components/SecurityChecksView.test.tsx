@@ -107,7 +107,7 @@ describe('SecurityChecksView — two labelled groups, no counts', () => {
       Array.from(group.children).indexOf(actuallyHappenedHeading) + 1
     )
     expect(rowsAfterHeading).toHaveLength(1)
-    expect(within(rowsAfterHeading[0] as HTMLElement).getByText('outcome corroboration')).toBeInTheDocument()
+    expect(within(rowsAfterHeading[0] as HTMLElement).getByText('their record')).toBeInTheDocument()
   })
 })
 
@@ -149,9 +149,9 @@ describe('SecurityChecksView — p2 item 2: chip-only rows, each sentence moved 
 
   it('a row reads name -> your chip -> their chip', () => {
     render(<SecurityChecksView identity={RECOMPUTED_MATCH} localRecord={null} row={ledgerRow(paneCRow())} />)
-    const line = document.querySelector('[data-check-line="content binding"]') as HTMLElement
+    const line = document.querySelector('[data-check-line="words match"]') as HTMLElement
     const [name, yours, theirs] = Array.from(line.children) as HTMLElement[]
-    expect(name.textContent).toBe('content binding')
+    expect(name.textContent).toBe('words match')
     expect(yours.querySelector('[data-detail]')).not.toBeNull()
     expect(theirs.querySelector('[data-detail]')).not.toBeNull()
   })
@@ -220,16 +220,16 @@ describe('SecurityChecksView — capture_coverage: sentence or not present, neve
     // Several other checkpoint-dependent rows are ALSO "not present" with
     // no properties at all -- scope to the label that precedes the
     // capture_coverage single line specifically.
-    const captureCoverageLine = screen.getByText('capture coverage').closest('p')
-    expect(captureCoverageLine?.textContent?.trim()).toBe('capture coverage not present')
+    const captureCoverageLine = screen.getByText('captured in full').closest('p')
+    expect(captureCoverageLine?.textContent?.trim()).toBe('captured in full not present')
   })
 })
 
-describe('SecurityChecksView — identity/authority: two facts rendered under one row', () => {
+describe('SecurityChecksView — owner link: two facts rendered under one row', () => {
   it('renders both a "binding" and an "authority" fact, each with its own state', () => {
     render(<SecurityChecksView identity={RECOMPUTED_MATCH} localRecord={null} row={ledgerRow(paneCRow())} />)
-    expect(screen.getByText('identity/authority · binding')).toBeInTheDocument()
-    expect(screen.getByText('identity/authority · authority')).toBeInTheDocument()
+    expect(screen.getByText('owner link · binding')).toBeInTheDocument()
+    expect(screen.getByText('owner link · authority')).toBeInTheDocument()
     // p2 item 4: an empty owner reads "No owner set", never a literal "…".
     const authority = cellWithDetail('No owner set — not bound to a person.')
     expect(chipTooltip(authority)).toContain('No owner set — not bound to a person.')
@@ -258,16 +258,16 @@ describe('SecurityChecksView — rendered property set', () => {
       (el) => el.getAttribute('data-block-heading') === 'checks'
     )?.parentElement as HTMLElement
     for (const label of [
-      'content binding',
-      'producer signature',
-      'task binding',
-      'local inclusion',
-      'checkpoint signature',
-      'external registration',
-      'continuity',
-      'identity/authority · binding',
-      'capture coverage',
-      'outcome corroboration'
+      'words match',
+      'signed',
+      'tied to the request',
+      'in a checkpoint',
+      'checkpoint signed',
+      'witnessed',
+      'builds on the last checkpoint',
+      'owner link · binding',
+      'captured in full',
+      'their record'
     ]) {
       expect(within(checksBlock).getByText(label)).toBeInTheDocument()
     }
@@ -285,7 +285,7 @@ describe('SecurityChecksView — WHAT IT COMMITS TO block: ✓ same only after a
     expect(within(commitsBlock).queryByText('✓ same')).not.toBeInTheDocument()
   })
 
-  it('once a real fetch holds the peer\'s own matching record, "✓ same" renders for the fields with a genuine peer-record equivalent (request digest, response digest, model identity) -- never for task binding/served by, which have none', () => {
+  it('once a real fetch holds the peer\'s own matching record, "✓ same" renders for the fields with a genuine peer-record equivalent (request digest, response digest, model identity) -- never for tied to the request/served by, which have none', () => {
     const localRecord = {
       effect: { request_digest: 'a'.repeat(64), response_digest: 'b'.repeat(64) },
       model_attestation: { model_id: 'model-x' }
@@ -311,7 +311,7 @@ describe('SecurityChecksView — WHAT IT COMMITS TO block: ✓ same only after a
     const commitsBlock = Array.from(container.querySelectorAll('[data-block-heading]')).find(
       (el) => el.getAttribute('data-block-heading') === 'what it commits to'
     )?.parentElement as HTMLElement
-    // request digest, response digest, model identity -- NOT task binding, NOT served by.
+    // request digest, response digest, model identity -- NOT tied to the request, NOT served by.
     expect(within(commitsBlock).getAllByText('✓ same')).toHaveLength(3)
   })
 

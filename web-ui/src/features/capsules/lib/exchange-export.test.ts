@@ -30,14 +30,14 @@ describe('exchangeRowsToCsv', () => {
   })
 
   it('never renders Checks as a count in the CSV either', () => {
-    const csv = exchangeRowsToCsv([row({ checksText: 'checkpoint signature' })])
-    expect(csv).toContain('checkpoint signature')
+    const csv = exchangeRowsToCsv([row({ checksText: 'checkpoint signed' })])
+    expect(csv).toContain('checkpoint signed')
     expect(csv).not.toMatch(/\d\/\d/)
   })
 
   it('quotes a field containing a comma', () => {
-    const csv = exchangeRowsToCsv([row({ checksText: 'checkpoint signature, continuity' })])
-    expect(csv).toContain('"checkpoint signature, continuity"')
+    const csv = exchangeRowsToCsv([row({ checksText: 'checkpoint signed, continuity' })])
+    expect(csv).toContain('"checkpoint signed, continuity"')
   })
 })
 

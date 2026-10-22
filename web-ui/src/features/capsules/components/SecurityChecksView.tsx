@@ -291,7 +291,7 @@ export function SecurityChecksView({
                 type="button"
                 variant="outline"
               >
-                fetch peer capsule &amp; recompute here
+                Get their record and check it here
               </Button>
             ) : null}
           </div>

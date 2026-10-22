@@ -36,7 +36,7 @@ describe('peerTwinTally', () => {
     const tally = peerTwinTally('node:adversary', DEMO_ROWS)
     expect(tally).toEqual({ pairs: 3, differed: 3, adjudicated: 0 })
     const text = peerTwinText(tally!)
-    expect(text).toBe('Twin pairs: 3 · answers differed: 3 · not adjudicated')
+    expect(text).toBe('Sent to two machines: 3 · answers differed: 3 · not adjudicated')
     expect(text).not.toMatch(JUDGEMENT_WORDS)
   })
 
@@ -66,9 +66,9 @@ describe('peerTwinTally', () => {
       twinRow('a1', 'node:p', { bracket_id: 'b1', same_answer: false, other_row: 'x1', verdict: 'contradicted:node:p' }),
       twinRow('a2', 'node:p', { bracket_id: 'b2', same_answer: false, other_row: 'x2' })
     ]
-    expect(peerTwinText(peerTwinTally('node:p', one)!)).toBe('Twin pairs: 2 · answers differed: 2 · 1 adjudicated, 1 not')
+    expect(peerTwinText(peerTwinTally('node:p', one)!)).toBe('Sent to two machines: 2 · answers differed: 2 · 1 adjudicated, 1 not')
     const all = [twinRow('a1', 'node:p', { bracket_id: 'b1', same_answer: true, other_row: 'x1', verdict: 'corroborated' })]
-    expect(peerTwinText(peerTwinTally('node:p', all)!)).toBe('Twin pairs: 1 · answers differed: 0 · adjudicated')
+    expect(peerTwinText(peerTwinTally('node:p', all)!)).toBe('Sent to two machines: 1 · answers differed: 0 · adjudicated')
   })
 
   it("a peer's row view carries the line only when it has pairs", () => {
@@ -81,7 +81,7 @@ describe('peerTwinTally', () => {
         last_seen: null
       }) as unknown as Parameters<typeof dealtWithRowView>[0]
     expect(dealtWithRowView(paneB('node:adversary'), undefined, DEMO_ROWS).twins).toBe(
-      'Twin pairs: 3 · answers differed: 3 · not adjudicated'
+      'Sent to two machines: 3 · answers differed: 3 · not adjudicated'
     )
     expect(dealtWithRowView(paneB('node:other'), undefined, DEMO_ROWS).twins).toBeNull()
     expect(dealtWithRowView(paneB('node:adversary')).twins).toBeNull()

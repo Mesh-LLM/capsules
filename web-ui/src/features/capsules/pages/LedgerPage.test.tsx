@@ -360,7 +360,7 @@ describe('LedgerPageContent', () => {
 
     expect(await screen.findByText('peer-1')).toBeInTheDocument()
     expect(
-      await screen.findByText('3 exchanges have no counterparty recorded yet. They appear under Exchanges.')
+      await screen.findByText('3 exchanges have no other side recorded yet. They appear under Exchanges.')
     ).toBeInTheDocument()
     expect(screen.queryByText(/unknown peer/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/peer identity not resolved yet/i)).not.toBeInTheDocument()
@@ -839,8 +839,8 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     const alarmRow = screen.getByLabelText('Exchange exch-alarm-07')
     await user.click(within(alarmRow).getByRole('button', { name: 'How we checked ▸' }))
     const checksRegion = await screen.findByRole('region', { name: /Security checks for exch-alarm-07/ })
-    expect(checksRegion).toHaveTextContent('content binding')
-    expect(checksRegion).toHaveTextContent('producer signature')
+    expect(checksRegion).toHaveTextContent('words match')
+    expect(checksRegion).toHaveTextContent('signed')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
@@ -1309,7 +1309,7 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
     await screen.findByText(/Have a witness hold your checkpoints/)
     expect(screen.getByText(/Bind an owner identity/)).toBeInTheDocument()
     expect(screen.getByText(/Get the other side’s record/)).toBeInTheDocument()
-    expect(screen.getByText(/Their record usually arrives on its own/)).toBeInTheDocument()
+    expect(screen.getByText(/arrives on its own only if their node sends records/)).toBeInTheDocument()
     expect(screen.getByText(/does not make your records true/)).toBeInTheDocument()
     expect(screen.getByText(/only your own claim about who you are/)).toBeInTheDocument()
   })
@@ -1785,7 +1785,7 @@ describe('LedgerPageContent — real twin bracket + Twins-only filter', () => {
     expect(screen.getByRole('group', { name: 'Exchange twin-exch-0' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Exchange twin-exch-1' })).toBeInTheDocument()
     expect(
-      screen.getByText('A client marked these two requests as one pair (x-mesh-twin-bracket).')
+      screen.getByText('A client marked these two requests as one pair.')
     ).toBeInTheDocument()
     // Never a computed verdict.
     expect(screen.getByText('not adjudicated')).toBeInTheDocument()
@@ -1949,7 +1949,7 @@ describe('LedgerPageContent — twin pairs on Peers', () => {
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /peers/i }))
 
-    expect(await screen.findByText('Twin pairs: 3 · answers differed: 3 · not adjudicated')).toBeInTheDocument()
+    expect(await screen.findByText('Sent to two machines: 3 · answers differed: 3 · not adjudicated')).toBeInTheDocument()
     expect(document.querySelectorAll('[data-peer-twins="true"]')).toHaveLength(1)
     const lines = Array.from(document.querySelectorAll('[data-peer-twins="true"]')).map((el) => el.textContent ?? '')
     for (const line of lines) expect(line).not.toMatch(/dishonest|honest|bad|flag|lie|cheat|wrong|suspicious/i)

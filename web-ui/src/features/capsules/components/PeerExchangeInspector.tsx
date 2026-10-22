@@ -41,12 +41,12 @@ export function PeerExchangeInspector({ point, onClose }: PeerExchangeInspectorP
           </SharedModalHeader>
           <SharedModalBody className="flex flex-col gap-3 px-5 py-4 text-sm text-fg-dim">
             <div>
-              <p className="text-xs font-medium text-fg-faint">Your capsule</p>
+              <p className="text-xs font-medium text-fg-faint">Your record</p>
               <p className="font-mono text-xs">{point.mineCapsuleId ?? '—'}</p>
               <p className="text-[11px] text-fg-faint">recorded — digest only, not decoded on this view</p>
             </div>
             <div>
-              <p className="text-xs font-medium text-fg-faint">Their answer (their capsule reference)</p>
+              <p className="text-xs font-medium text-fg-faint">Their record, as they named it</p>
               <p className="font-mono text-xs">{point.theirsCapsuleId ?? '—'}</p>
               <p className="text-[11px] text-fg-faint">digest only, not decoded on this view</p>
             </div>
@@ -74,15 +74,15 @@ export function PeerExchangeInspector({ point, onClose }: PeerExchangeInspectorP
                       label={point.adjudication.verdict}
                       tone={toneForState(VERDICT_STATE[point.adjudication.verdict] ?? 'NOT_CHECKED')}
                     />
-                    <p className="text-xs">margin_tau: {point.adjudication.marginTau ?? 'not recorded'}</p>
+                    <p className="text-xs">margin: {point.adjudication.marginTau ?? 'not recorded'}</p>
                     <p className="text-xs">
-                      referee: {point.adjudication.refereeId ?? 'no independent referee (local twin only)'}
+                      referee: {point.adjudication.refereeId ?? 'no independent referee'}
                     </p>
                     <p className="font-mono text-[11px] text-fg-faint">{point.adjudication.adjudicationCapsuleId}</p>
                   </div>
                 ) : (
                   <p className="text-xs">
-                    <StatusPill dot label="NOT_CHECKED" tone={toneForState('NOT_CHECKED')} /> — no adjudication sealed
+                    <StatusPill dot label="no verdict" tone={toneForState('NOT_CHECKED')} /> — no adjudication sealed
                     for this exchange. A no-verdict, a referee-unreachable case, and an owner-absent case all look
                     identical from this ledger, so none of them are guessed at.
                   </p>

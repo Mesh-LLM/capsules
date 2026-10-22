@@ -17,7 +17,7 @@ import { parseVerdict, type ParsedVerdict } from '@/features/capsules/lib/adjudi
  *  the two requests as one pair with the `x-mesh-twin-bracket` header. The
  *  host never sends a second copy of a request by itself, so nothing here
  *  says the comparison "ran automatically" or names a sampling rate. */
-export const TWIN_PAIR_SENTENCE = 'A client marked these two requests as one pair (x-mesh-twin-bracket).'
+export const TWIN_PAIR_SENTENCE = 'A client marked these two requests as one pair.'
 
 /**
  * The COMPARISON block's parameters line -- "temp 0 · seed 1 · model

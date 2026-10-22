@@ -73,7 +73,7 @@ describe('their history -- "never asked" is never a zero', () => {
   it('each part of an un-asked peer says so in words', () => {
     expect(theirLogView(NEVER_ASKED)).toEqual({
       kind: 'not_asked',
-      text: 'Never asked — your node hasn’t asked for their log.'
+      text: 'Not asked yet. Use “Ask for their history” on an exchange with them, under Exchanges.'
     })
     expect(othersSayView(NEVER_ASKED).kind).toBe('never_asked')
     expect(othersSayView(NEVER_ASKED).text).not.toMatch(/\d/)
@@ -132,7 +132,7 @@ describe('their log, as shown to you', () => {
   })
 
   it('says one of a kind in the singular, and never echoes a kind it has no words for', () => {
-    expect(kindCountText('exchange_twin', 1)).toBe('1 twin exchange')
+    expect(kindCountText('exchange_twin', 1)).toBe('1 exchange sent to two machines')
     expect(kindCountText('exchange', 2)).toBe('2 exchanges')
     expect(kindCountText('best_score', 2)).toBe('2 entries of another kind')
   })

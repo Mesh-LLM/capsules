@@ -68,7 +68,7 @@ export function reasonLabel(reason: string): string {
 /** Chain-segment kinds (`SHARING-POLICY.md` "History segments") in plain words. */
 const KIND_LABELS: Record<string, readonly [string, string]> = {
   exchange: ['exchange', 'exchanges'],
-  exchange_twin: ['twin exchange', 'twin exchanges'],
+  exchange_twin: ['exchange sent to two machines', 'exchanges sent to two machines'],
   card: ['history card', 'history cards'],
   adjudication: ['verdict', 'verdicts'],
   adjudication_delivery_receipt: ['verdict delivered to them', 'verdicts delivered to them'],
@@ -120,7 +120,10 @@ export function theirLogView(row: PaneBRow): TheirLogView {
     if (askedThisPeer(row)) {
       return { kind: 'no_answer', text: 'Asked — no answer from them has been checked here yet.' }
     }
-    return { kind: 'not_asked', text: 'Never asked — your node hasn’t asked for their log.' }
+    return {
+      kind: 'not_asked',
+      text: 'Not asked yet. Use “Ask for their history” on an exchange with them, under Exchanges.'
+    }
   }
   // Coarsened (sharing policy default): per-checkpoint counts only. The UI
   // never reads `leaf_digests`, even when a peer volunteers them.

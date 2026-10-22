@@ -512,10 +512,10 @@ describe('ExchangeStreamRow — counterparty field', () => {
   it('renders the node id when a counterparty is attributed', () => {
     render(<ExchangeStreamRow  {...toggleProps()} rail={NO_RAIL} row={makeRow('closed')} />)
     expect(screen.getByText('node:aa11bb22')).toBeInTheDocument()
-    expect(screen.queryByText('counterparty not recorded')).not.toBeInTheDocument()
+    expect(screen.queryByText('other side not recorded')).not.toBeInTheDocument()
   })
 
-  it('ADVERSARIAL: reads "counterparty not recorded" — never "unknown peer", never "peer identity not resolved yet" — when unattributed', () => {
+  it('ADVERSARIAL: reads "other side not recorded" — never "unknown peer", never "peer identity not resolved yet" — when unattributed', () => {
     render(
       <ExchangeStreamRow
         {...toggleProps()}
@@ -523,7 +523,7 @@ describe('ExchangeStreamRow — counterparty field', () => {
         row={makeRow('closed', { counterparty: null })}
       />
     )
-    expect(screen.getByText('counterparty not recorded')).toBeInTheDocument()
+    expect(screen.getByText('other side not recorded')).toBeInTheDocument()
     expect(screen.queryByText(/unknown peer/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/peer identity not resolved yet/i)).not.toBeInTheDocument()
   })

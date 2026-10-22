@@ -62,7 +62,7 @@ describe('buildChecksRows — rendered property set (accept: == manifesto ten na
 
   it('NINE_PROPERTY_LABELS itself carries all ten (9+1, not 8+1)', () => {
     expect(Object.keys(NINE_PROPERTY_LABELS)).toEqual(MANIFESTO_TEN_PROPERTY_KEYS)
-    expect(NINE_PROPERTY_LABELS.task_binding).toBe('task binding')
+    expect(NINE_PROPERTY_LABELS.task_binding).toBe('tied to the request')
   })
 
   it('every row but outcome_corroboration is grouped "what this node said it did"; outcome_corroboration alone is "what actually happened"', () => {
@@ -232,7 +232,7 @@ describe('buildChecksRows — capture_coverage: fixed sentence or not present, n
   })
 })
 
-describe('buildChecksRows — identity/authority: two facts, not one state', () => {
+describe('buildChecksRows — owner link: two facts, not one state', () => {
   it('binding is "not present" and authority is always "not present" when nothing is bound', () => {
     const rows = buildChecksRows(paneCRow({ properties: null }), NOT_RECOMPUTED)
     const identityAuthority = rows.find((r) => r.key === 'identity_authority')
@@ -779,7 +779,7 @@ describe('buildCommitsToRows — theirs column, finding 2 corrected', () => {
     expect(rows.find((r) => r.label === 'served by')?.yours).toBe('this node')
   })
 
-  it('task binding never claims a theirs comparison -- no peer-record equivalent exists', () => {
+  it('tied to the request never claims a theirs comparison -- no peer-record equivalent exists', () => {
     const theirsRecompute: PeerRecomputeState = {
       status: 'found',
       idMatch: true,
@@ -788,7 +788,7 @@ describe('buildCommitsToRows — theirs column, finding 2 corrected', () => {
       fetch: () => {}
     }
     const rows = buildCommitsToRows(paneCRow(), LOCAL_RECORD, theirsRecompute)
-    expect(rows.find((r) => r.label === 'task binding')?.theirs).toBeNull()
+    expect(rows.find((r) => r.label === 'tied to the request')?.theirs).toBeNull()
   })
 })
 

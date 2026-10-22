@@ -158,7 +158,7 @@ describe('exceptionsFirstLine', () => {
     )
     expect(line.startsWith('2 exchanges need your attention')).toBe(true)
     expect(line).not.toMatch(/Nothing needs your attention/)
-    expect(line).toMatch(/1 failed · 1 mismatched · 0 asked-and-unanswered/)
+    expect(line).toMatch(/1 own record fails its checks · 1 disagree · 0 asked, no reply/)
     expect(line).not.toMatch(/confirmed by anyone else/)
   })
 

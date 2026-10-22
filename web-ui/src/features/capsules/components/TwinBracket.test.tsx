@@ -82,7 +82,7 @@ describe('TwinBracket — v3 §5, OBSERVE-ONLY', () => {
       </TwinBracket>
     )
     expect(
-      screen.getByText('A client marked these two requests as one pair (x-mesh-twin-bracket).')
+      screen.getByText('A client marked these two requests as one pair.')
     ).toBeInTheDocument()
   })
 

@@ -459,14 +459,14 @@ describe('peerAliasLine — D3: aliases on ONE row, never extra peers', () => {
 describe('unattributedExchangesLine', () => {
   it('states the count as a fact, never implying pending work', () => {
     expect(unattributedExchangesLine(3)).toBe(
-      '3 exchanges have no counterparty recorded yet. They appear under Exchanges.'
+      '3 exchanges have no other side recorded yet. They appear under Exchanges.'
     )
     expect(unattributedExchangesLine(3)).not.toMatch(/not resolved yet/i)
   })
 
   it('uses singular grammar for a count of one', () => {
     expect(unattributedExchangesLine(1)).toBe(
-      '1 exchange has no counterparty recorded yet. They appear under Exchanges.'
+      '1 exchange has no other side recorded yet. They appear under Exchanges.'
     )
   })
 })

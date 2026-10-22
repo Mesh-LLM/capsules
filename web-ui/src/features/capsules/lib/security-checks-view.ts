@@ -107,7 +107,7 @@ export function buildIdentityRow(
   // the fetch action for exactly this row).
   const theirsCapsuleId = row.theirs.capsule_id && isDigestShaped(row.theirs.capsule_id) ? row.theirs.capsule_id : null
   return {
-    label: 'capsule id',
+    label: 'record id',
     yours: { value: row.mine.capsule_id ?? '—', note: yoursNote },
     theirs: theirsHeld(row)
       ? { value: theirsCapsuleId ?? 'not given', note: theirsIdentityNote(theirsRecompute) }
@@ -346,7 +346,7 @@ export function buildCommitsToRows(
           ? theirsFor(responseDigestRaw, ['effect', 'response_digest'])
           : null
     },
-    { label: 'task binding', yours: taskBinding, theirs: null },
+    { label: 'tied to the request', yours: taskBinding, theirs: null },
     {
       label: 'model identity',
       yours: modelIdentity,

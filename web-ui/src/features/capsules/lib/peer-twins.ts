@@ -42,5 +42,5 @@ export function peerTwinText(tally: PeerTwinTally): string {
       : tally.adjudicated === tally.pairs
         ? 'adjudicated'
         : `${tally.adjudicated} adjudicated, ${tally.pairs - tally.adjudicated} not`
-  return `Twin pairs: ${tally.pairs} · answers differed: ${tally.differed} · ${ruled}`
+  return `Sent to two machines: ${tally.pairs} · answers differed: ${tally.differed} · ${ruled}`
 }

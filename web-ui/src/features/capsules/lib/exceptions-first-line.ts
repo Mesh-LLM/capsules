@@ -73,7 +73,8 @@ export function exceptionsFirstLine(tally: ExceptionsFirstTally, rangeLabel: str
   const { total, needingAttention, failed, mismatched, askedUnanswered } = tally
   const noun = total === 1 ? 'exchange' : 'exchanges'
   const rangeSuffix = rangeLabel ? `, ${rangeLabel}` : ''
-  const breakdown = `${failed} failed · ${mismatched} mismatched · ${askedUnanswered} asked-and-unanswered`
+  const ownFails = failed === 1 ? 'own record fails its checks' : 'own records fail their checks'
+  const breakdown = `${failed} ${ownFails} · ${mismatched} disagree · ${askedUnanswered} asked, no reply`
 
   if (needingAttention === 0) {
     return `${total} sealed by you${rangeSuffix}.`

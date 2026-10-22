@@ -40,7 +40,7 @@ function twinRow(overrides: Partial<PaneCRow> = {}): ExchangeLedgerRow {
 
 describe('the twin pair sentence', () => {
   it('says a client marked the pair, never that it ran automatically or at a rate', () => {
-    expect(TWIN_PAIR_SENTENCE).toBe('A client marked these two requests as one pair (x-mesh-twin-bracket).')
+    expect(TWIN_PAIR_SENTENCE).toBe('A client marked these two requests as one pair.')
     expect(TWIN_PAIR_SENTENCE).not.toMatch(/automatic|1 in|sampl/i)
   })
 })

@@ -36,7 +36,7 @@ export function isUnattributedPeerRow(row: PaneBRow): boolean {
  *  at all -- a stated fact (R-C), never phrased as pending work. */
 export function unattributedExchangesLine(count: number): string {
   const subject = count === 1 ? 'exchange has' : 'exchanges have'
-  return `${count} ${subject} no counterparty recorded yet. They appear under Exchanges.`
+  return `${count} ${subject} no other side recorded yet. They appear under Exchanges.`
 }
 
 // ---------------------------------------------------------------------------
@@ -561,7 +561,7 @@ export function dealtWithRowView(
   // at all (see its own doc comment) -- callers filter those out before
   // reaching here, but this fallback keeps the view honest, never `null`,
   // if ever called directly with one.
-  const displayId = peerDisplayId(row) ?? 'counterparty not recorded'
+  const displayId = peerDisplayId(row) ?? 'other side not recorded'
   return {
     key: row.peer_id ?? displayId,
     displayId,

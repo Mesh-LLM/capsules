@@ -75,7 +75,30 @@ const RETIRED_PHRASES = [
   'The next one will be checked against it',
   'Register a checkpoint',
   'The response bytes hash to the digest',
-  'disagree about the request or the answer'
+  'disagree about the request or the answer',
+  // Evidence page demo pass (#44): record push is off by default, so their
+  // record never "usually" arrives; one plain word per state; no dead
+  // controls; no internal terms on the face.
+  'usually arrives on its own',
+  'normally arrives when the exchange',
+  'usually comes when the exchange finishes',
+  'not asked for',
+  'You haven’t asked for their record',
+  'OPEN · ',
+  'Twins only',
+  'View refusal',
+  'View statement',
+  'Ask them to state it',
+  'fetch peer capsule',
+  'asked-and-unanswered',
+  'local twin only',
+  'margin_tau: {',
+  'no signing key linked',
+  'key pinned on first contact',
+  'keeping its half',
+  'Your capsule',
+  'capsule reference',
+  '(x-mesh-twin-bracket)'
 ] as const
 
 const HERE = dirname(fileURLToPath(import.meta.url))

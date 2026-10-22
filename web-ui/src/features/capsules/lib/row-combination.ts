@@ -20,11 +20,6 @@ export type RowCombinationInput = {
   askPeer?: string | null
 }
 
-/** Record push is off by default (INSTALL.md "Quiet by default"), so their
- *  record arriving by itself is the exception, never the expectation. */
-export const THEIR_RECORD_ARRIVES_IF_PUSHED =
-  'Their record arrives on its own only if their node sends records (off by default). Otherwise, ask for it on the exchange row.'
-
 export const WITNESS_HOLDS_IT = ' A witness you don’t run also holds your checkpoint.'
 
 export function rowCombinationText(input: RowCombinationInput): string {

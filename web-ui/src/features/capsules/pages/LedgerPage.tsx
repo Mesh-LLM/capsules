@@ -23,7 +23,6 @@ import { fetchCapsuleLedger } from '@/features/capsules/api/client'
 import { announcedKeyFor, askForHistory, askForRecord } from '@/features/capsules/api/evidenceRequestClient'
 import { judgeAskReply, type AskOutcome, type AskTarget } from '@/features/capsules/lib/ask-for-record'
 import { judgeHistoryReply, type HistoryOutcome } from '@/features/capsules/lib/ask-for-history'
-import { THEIR_RECORD_ARRIVES_IF_PUSHED } from '@/features/capsules/lib/row-combination'
 import type { CapsuleRecord } from '@/features/capsules/api/types'
 import {
   PaneFetchError,
@@ -139,6 +138,7 @@ import {
   CLOSE_CARD_COUNTS_TOOLTIP,
   CLOSE_CARD_TOOLTIP,
   SAMPLE_DATA_UNAVAILABLE,
+  THEIR_RECORD_ARRIVES_IF_PUSHED,
   SETTLEMENT_REFUSED_NOTE
 } from '@/features/capsules/lib/tooltip-copy'
 import type { PaymentsPresence } from '@/features/capsules/api/sidecarTypes'
@@ -838,7 +838,7 @@ function ExchangesSection({
               aria-label="Search exchanges"
               className="ui-control h-8 w-52 rounded-[var(--radius)] border-border-soft pl-8 text-[length:var(--density-type-caption)]"
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Exchange ID or counterparty…"
+              placeholder="Exchange ID or other side…"
               ref={searchInputRef}
               value={search}
             />
