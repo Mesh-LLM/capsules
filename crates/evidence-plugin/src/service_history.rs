@@ -218,6 +218,11 @@ fn verify_with(
     if !is_derivation(req.derivation.as_ref()) {
         return Err(fail("the request sent does not name this derivation"));
     }
+    // The definition answers `full_history` only: an answer for any other
+    // subject is no Service History, however consistently it is signed.
+    if !matches!(req.subject, Subject::FullHistory) {
+        return Err(fail("the request sent is not a full_history request"));
+    }
     if !matches!(req.coverage, Coverage::ExpectedPin(_)) {
         return Err(fail("the anchor does not satisfy the requested coverage"));
     }

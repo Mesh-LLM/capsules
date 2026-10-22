@@ -486,6 +486,63 @@ fn an_answer_under_another_profile_than_asked_is_not_evidence() {
     }
 }
 
+/// The definition answers only `full_history`. A responder that answers
+/// another subject, with every subject in the artifact, the card and the
+/// summary rewritten to match and the envelope signed again, is not
+/// evidence of a Service History.
+#[test]
+fn an_answer_for_another_subject_than_full_history_is_not_evidence() {
+    fn set_subjects(v: &mut Value, subject: &Value) {
+        match v {
+            Value::Object(map) => {
+                for (k, child) in map.iter_mut() {
+                    if k == "subject" {
+                        *child = subject.clone();
+                    } else {
+                        set_subjects(child, subject);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|c| set_subjects(c, subject)),
+            _ => {}
+        }
+    }
+    let (dir, cps) = node_with(&[]);
+    let sent = request_for(DEFINITION_DIGEST, latest_pin(&cps));
+    let wire = wire_of(ask(dir.path(), &sent));
+    let subject = json!({"checkpoints": null});
+    let mut asked: Value = serde_json::from_slice(&sent).unwrap();
+    asked["subject"] = subject.clone();
+    let asked = serde_json::to_vec(&asked).unwrap();
+    let mut artifact = artifact_of(&wire);
+    set_subjects(&mut artifact, &subject);
+    let card = jcs::to_string(&artifact["history_card"]).unwrap();
+    artifact["history_card_digest"] = json!(hex::encode(Sha256::digest(card.as_bytes())));
+    let env = envelope_of(&wire);
+    let parts = EnvelopeParts {
+        subject: Subject::Checkpoints,
+        derivation: env.derivation.clone(),
+        anchor: env.anchor.clone(),
+        artifact: jcs::to_string(&artifact).unwrap().into_bytes(),
+        verification: env
+            .verification
+            .iter()
+            .zip(&env.verification_content)
+            .map(|(v, o)| (v.kind.clone(), o.clone()))
+            .collect(),
+        issued_at: env.issued_at.clone(),
+    };
+    let signed = envelope::sign(&asked, parts, &node_key()).unwrap();
+    let mut rewritten: Value = serde_json::from_slice(&signed.encode(Binding::Json)).unwrap();
+    if let Some(r) = wire.get(evidence_artifact::WITNESS_RECEIPTS) {
+        rewritten[evidence_artifact::WITNESS_RECEIPTS] = r.clone();
+    }
+    assert_eq!(
+        verified(&asked, &rewritten).unwrap_err(),
+        "the request sent is not a full_history request"
+    );
+}
+
 /// A declared member this verifier does not implement is reported as not
 /// checked, never failed or dropped, and the card is still checked.
 #[test]
