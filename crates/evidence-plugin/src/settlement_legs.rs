@@ -137,6 +137,9 @@ impl<V> Bounded<V> {
 struct OwnTerms {
     capsule: Value,
     capsule_id: String,
+    /// The invoice's amount (msat), and whether it is the final invoice.
+    amount_msat: u64,
+    final_invoice: bool,
 }
 
 #[derive(Default)]
@@ -146,8 +149,9 @@ struct Inner {
     /// Payer: the payment hash whose terms leg the delivered leg cites, by
     /// exchange id: the final invoice's, else the deposit's.
     cited_hash: Bounded<String>,
-    /// Payer: the exchanges whose bill the host accounted (`final_accounted`).
-    accounted: Bounded<()>,
+    /// Payer: the bill (msat) the host accounted (`final_accounted`), by
+    /// exchange id.
+    accounted: Bounded<u64>,
     /// Payer: the serving peer, by exchange id.
     peer: Bounded<String>,
     /// Payer: payment hashes whose terms leg is not pushed yet, by exchange id.
@@ -258,7 +262,7 @@ impl Legs {
         self.expire(Instant::now());
         let role = event.role.unwrap_or(Role::Payer);
         if role == Role::Payer && event.phase == Phase::FinalAccounted {
-            self.payer_accounted(capsules, &event.exchange_id);
+            self.payer_accounted(capsules, &event.exchange_id, event.amount_msat);
             return Vec::new();
         }
         let Some(hash) = event.payment_hash.as_deref() else {
@@ -336,6 +340,8 @@ impl Legs {
                 OwnTerms {
                     capsule: sealed.capsule.clone(),
                     capsule_id: sealed.capsule_id.clone(),
+                    amount_msat: event.amount_msat,
+                    final_invoice: event.phase == Phase::OutputInvoiceIssued,
                 },
             );
             if !inner.cited_hash.contains(&exchange_id) {
@@ -494,10 +500,10 @@ impl Legs {
 
     /// Payer: the host accounted the exchange's bill (`final_accounted`), so
     /// every invoice it will issue for the exchange has been seen.
-    fn payer_accounted(&self, capsules: &CapsuleState, exchange_id: &str) {
+    fn payer_accounted(&self, capsules: &CapsuleState, exchange_id: &str, bill_msat: u64) {
         let delivered = {
             let mut inner = self.inner();
-            inner.accounted.insert(exchange_id.to_string(), ());
+            inner.accounted.insert(exchange_id.to_string(), bill_msat);
             Self::delivered_due(&mut inner, exchange_id)
         };
         if let Some((terms_ref, digest)) = delivered {
@@ -508,17 +514,28 @@ impl Legs {
     /// The payer's delivered leg is due once the bill is accounted and the
     /// response digest is known. It cites the final invoice's terms leg, or
     /// the deposit's when the deposit covered the bill; with neither there is
-    /// nothing to cite and no leg. The exchange's entries are then cleared, so
-    /// a later event for the same id starts afresh.
+    /// nothing to cite and no leg. The host's lifecycle events are best
+    /// effort, so a final invoice's event can be lost: the deposit is cited
+    /// only when the accounted bill is within its amount. The exchange's
+    /// entries are then cleared, so a later event for the same id starts
+    /// afresh.
     fn delivered_due(inner: &mut Inner, exchange_id: &str) -> Option<(String, String)> {
-        if !inner.accounted.contains(exchange_id) {
-            return None;
-        }
+        let bill_msat = *inner.accounted.get(exchange_id)?;
         let digest = inner.response.get(exchange_id)?.clone();
         let terms = inner
             .cited_hash
             .get(exchange_id)
             .and_then(|hash| inner.own_terms.get(hash))
+            .filter(|terms| {
+                let covered = terms.final_invoice || bill_msat <= terms.amount_msat;
+                if !covered {
+                    tracing::debug!(
+                        %exchange_id,
+                        "the bill exceeds the deposit and no final invoice was seen; no delivered leg"
+                    );
+                }
+                covered
+            })
             .map(|terms| terms.capsule_id.clone());
         inner.accounted.remove(exchange_id);
         inner.cited_hash.remove(exchange_id);
@@ -652,9 +669,13 @@ mod tests {
         parse_and_check(&serde_json::to_vec(&body).unwrap()).expect("a host-shaped event")
     }
 
-    /// The payer host's `final_accounted` for `exchange_id`.
+    /// The payer host's `final_accounted` for `exchange_id`, a bill of 1000.
     fn accounted(exchange_id: &str) -> PaymentLifecycleEvent {
-        let mut body = host_shaped_event(exchange_id, Phase::FinalAccounted, None, None, 1000);
+        accounted_bill(exchange_id, 1000)
+    }
+
+    fn accounted_bill(exchange_id: &str, bill_msat: u64) -> PaymentLifecycleEvent {
+        let mut body = host_shaped_event(exchange_id, Phase::FinalAccounted, None, None, bill_msat);
         body["role"] = json!("payer");
         body["event_ref"] = json!("");
         body["event_ref"] = json!(crate::producer::jcs::json_digest(&body).unwrap());
@@ -944,6 +965,28 @@ mod tests {
         );
         let [_, cited_hash, accounted, _, _, response, ..] = legs.held();
         assert_eq!((cited_hash, accounted, response), (0, 0, 0));
+    }
+
+    /// The host drops a lifecycle event it cannot deliver in time, so the
+    /// final invoice's event can be lost while the deposit's and the
+    /// accounted bill arrive. A bill above the deposit was not covered by
+    /// it, so the deposit is not cited.
+    #[test]
+    fn a_bill_above_the_deposit_with_its_final_invoice_lost_gets_no_delivered_leg() {
+        let (a, b) = dirs();
+        let pair = Pair::open(a.path(), b.path());
+        let legs = pair.payer.settlement_legs();
+        pair.payer_event(Phase::InputInvoiceIssued, 0, INPUT, &[]);
+        pair.payer_event(Phase::InputSettlementObserved, 0, INPUT, &[("fee_msat", 0)]);
+        legs.on_exchange(&pair.payer, "ex", Some(PROVIDER_PEER), Some(RESPONSE));
+        legs.on_lifecycle(&pair.payer, &accounted_bill("ex", 1500));
+        assert_eq!(kinds(&legs_of(a.path())), ["terms", "payer_observed"]);
+        let [_, cited_hash, accounted, _, _, response, ..] = legs.held();
+        assert_eq!(
+            (cited_hash, accounted, response),
+            (0, 0, 0),
+            "the exchange's entries are cleared"
+        );
     }
 
     #[test]
