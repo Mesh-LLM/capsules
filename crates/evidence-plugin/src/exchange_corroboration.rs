@@ -214,8 +214,16 @@ pub enum Verified {
     Failed(String),
 }
 
-/// Check `response` to the request `sent` against the responder's `key`.
-pub fn verify(sent: &[u8], response: &Value, key: &ed25519_dalek::VerifyingKey) -> Verified {
+/// Check `response` to the request `sent` against the responder's `key`,
+/// and its witness receipts under the witness keys the operator configured
+/// (`checkpoint_cadence::active_witness_keys`), as any answer is checked
+/// (`evidence_answer::verify_response`).
+pub fn verify(
+    sent: &[u8],
+    response: &Value,
+    key: &ed25519_dalek::VerifyingKey,
+    witness_keys: &std::collections::BTreeMap<String, String>,
+) -> Verified {
     let digest = evidence_request::digest::request_digest(sent);
     if response.get("reason").is_some() {
         return match refusal::verify_for(response, key, &digest) {
@@ -223,7 +231,7 @@ pub fn verify(sent: &[u8], response: &Value, key: &ed25519_dalek::VerifyingKey) 
             Err(e) => Verified::Failed(format!("the refusal does not verify: {e}")),
         };
     }
-    match verify_artifact(sent, response, key) {
+    match verify_artifact(sent, response, key, witness_keys) {
         Ok((anchor, halves)) => Verified::Halves { anchor, halves },
         Err(why) => Verified::Failed(why),
     }
@@ -236,6 +244,7 @@ fn verify_artifact(
     sent: &[u8],
     response: &Value,
     key: &ed25519_dalek::VerifyingKey,
+    witness_keys: &std::collections::BTreeMap<String, String>,
 ) -> Result<(String, Vec<Half>), String> {
     let req = request::parse_json(sent).map_err(|_| "the request sent is not a -00 request")?;
     if !matches!(req.subject, Subject::Correlation(_)) {
@@ -244,7 +253,9 @@ fn verify_artifact(
     if !is_derivation(req.derivation.as_ref()) {
         return Err("the request sent does not name this derivation".into());
     }
-    let checked = crate::evidence_artifact::check(sent, &req, response, key, &|_| None)
+    let witness_key =
+        |ts_url: &str| crate::evidence_answer::configured_witness_key(witness_keys, ts_url);
+    let checked = crate::evidence_artifact::check(sent, &req, response, key, &witness_key)
         .map_err(|e| e.to_string())?;
     Ok((checked.anchor, checked.halves))
 }
@@ -612,11 +623,13 @@ pub fn request_for(key: &str) -> Value {
 #[derive(Clone, Debug)]
 pub enum Reply {
     /// An answer arrived: the bytes sent, the JSON received, and the peer's
-    /// key from Z's trust policy (`None` when the policy names none).
+    /// key from Z's trust policy (`None` when the policy names none), and
+    /// the witness keys Z's operator configured.
     Answered {
         sent: Vec<u8>,
         answer: Value,
         key: Option<Box<ed25519_dalek::VerifyingKey>>,
+        witness_keys: std::collections::BTreeMap<String, String>,
     },
     /// Nothing arrived by the deadline (unreachable, no channel, silence).
     Nothing(String),
@@ -626,8 +639,13 @@ pub enum Reply {
 
 fn verified(reply: &Reply) -> Result<Verified, Outcome> {
     match reply {
-        Reply::Answered { sent, answer, key } => match key {
-            Some(key) => Ok(verify(sent, answer, key)),
+        Reply::Answered {
+            sent,
+            answer,
+            key,
+            witness_keys,
+        } => match key {
+            Some(key) => Ok(verify(sent, answer, key, witness_keys)),
             None => Err(Outcome::Unverifiable {
                 why: "Z's trust policy names no key for this peer".into(),
             }),
@@ -794,6 +812,7 @@ async fn ask(
             key: crate::peer_keys::announced_key_in(registry, peer)
                 .and_then(|key_id| verifying_key(&key_id))
                 .map(Box::new),
+            witness_keys: crate::checkpoint_cadence::active_witness_keys(),
         },
         Err(SendError::NotOpened(e)) => Reply::Nothing(format!("could not reach the peer: {e}")),
         Err(SendError::NoAnswer(e)) => Reply::Nothing(format!("no answer by the deadline{e}")),

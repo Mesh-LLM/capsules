@@ -197,7 +197,12 @@ fn a_half_is_answered_by_its_nonce_digest_with_exactly_the_derivation_members() 
 
     let sent = unsigned(&key);
     let wire = wire_of(ask(dir.path(), &sent, true));
-    let Verified::Halves { halves, .. } = verify(&sent, &wire, &node_key().verifying_key()) else {
+    let Verified::Halves { halves, .. } = verify(
+        &sent,
+        &wire,
+        &node_key().verifying_key(),
+        &Default::default(),
+    ) else {
         panic!("verifies");
     };
     assert_eq!(halves.len(), 1);
@@ -391,7 +396,7 @@ fn a_tampered_inclusion_proof_is_unverifiable() {
     // Re-signed by the responder's own key, so only the proof is wrong.
     let tampered = resigned(&sent, &wire, artifact, &node_key());
     assert!(matches!(
-        verify(&sent, &tampered, &node_key().verifying_key()),
+        verify(&sent, &tampered, &node_key().verifying_key(), &Default::default()),
         Verified::Failed(why) if why.contains("not included")
     ));
 }
@@ -433,9 +438,75 @@ fn an_answer_under_another_key_is_unverifiable() {
     let sent = unsigned(&digest_of(NONCE));
     let wire = wire_of(ask(dir.path(), &sent, true));
     assert!(matches!(
-        verify(&sent, &wire, &other_node_key().verifying_key()),
+        verify(
+            &sent,
+            &wire,
+            &other_node_key().verifying_key(),
+            &Default::default()
+        ),
         Verified::Failed(_)
     ));
+}
+
+/// Every checkpoint of `dir` carries a receipt from `WITNESS` minted by
+/// `witness`.
+fn witnessed_by(dir: &std::path::Path, witness: &SigningKey) {
+    use crate::evidence_answer::tests::{mint_receipt, WITNESS};
+    let path = dir.join("checkpoints.jsonl");
+    let lines: Vec<Value> = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|l| {
+            let mut cp: Value = serde_json::from_str(l).unwrap();
+            let mut json_form = cp.clone();
+            json_form.as_object_mut().unwrap().remove("checkpoint_cose");
+            let record: cll::checkpoint::CheckpointRecord =
+                serde_json::from_value(json_form).unwrap();
+            let entry: [u8; 32] = Sha256::digest(hex::decode(record.digest()).unwrap()).into();
+            cp["witnesses"] = json!([{
+                "ts_url": WITNESS, "entry_hash": hex::encode(entry),
+                "receipt_b64": mint_receipt(&entry, witness),
+                "leaf_index": 0, "tree_size": 1,
+            }]);
+            cp
+        })
+        .collect();
+    write_jsonl(&path, &lines);
+}
+
+#[test]
+fn a_receipt_that_fails_under_the_configured_witness_key_is_not_evidence() {
+    use crate::evidence_answer::tests::WITNESS;
+    let witness = SigningKey::from_bytes(&[21; 32]);
+    let impostor = SigningKey::from_bytes(&[22; 32]);
+    let dir = node_with(&[served_half()], &node_key());
+    witnessed_by(dir.path(), &witness);
+    let sent = unsigned(&digest_of(NONCE));
+    let wire = wire_of(ask(dir.path(), &sent, true));
+    let keys_of = |k: &SigningKey| {
+        [(
+            WITNESS.to_string(),
+            hex::encode(k.verifying_key().to_bytes()),
+        )]
+        .into_iter()
+        .collect()
+    };
+    let node = node_key().verifying_key();
+    assert!(matches!(
+        verify(&sent, &wire, &node, &keys_of(&witness)),
+        Verified::Halves { .. }
+    ));
+    assert!(matches!(
+        verify(&sent, &wire, &node, &Default::default()),
+        Verified::Halves { .. }
+    ));
+    assert!(
+        matches!(
+            verify(&sent, &wire, &node, &keys_of(&impostor)),
+            Verified::Failed(_)
+        ),
+        "a receipt under another key than the configured one is refused"
+    );
 }
 
 #[test]
@@ -567,6 +638,7 @@ fn reply_from(records: &[Value], key: &SigningKey, share: bool) -> Reply {
         sent,
         answer,
         key: Some(Box::new(key.verifying_key())),
+        witness_keys: Default::default(),
     }
 }
 
