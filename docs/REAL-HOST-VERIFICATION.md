@@ -11,9 +11,9 @@ a real `mesh-llm` process.
 `mesh-llm-host-runtime` is not a crates.io crate, and building mesh-llm needs
 its full native runtime toolchain. The real-host tests are therefore
 `#[ignore]`d and need `MESH_LLM_HOST_BIN` to point at a `mesh-llm` binary.
-The nightly end-to-end workflow (`.github/workflows/e2e.yml`) runs the
-two-node scenarios against a pinned mesh-llm release instead; see
-CONTRIBUTING.md, "Tier 2".
+The nightly end-to-end workflow (`.github/workflows/e2e.yml`) runs them, and
+the mutant check below, against a pinned mesh-llm release, after the two-node
+scenarios; see CONTRIBUTING.md, "Tier 2".
 
 ## Running them
 
@@ -54,4 +54,5 @@ cargo test --test host_runtime_e2e --features mutant-blocked-model-served \
 
 The malformed-body case is refused by the host's own request parsing, so
 `mutant-malformed-body-served` can only be seen through the stand-in host
-(`tests/interop.rs`), not here.
+(`tests/interop.rs`), not here. Both mutants are also in `gates/mutants.json`,
+which every pull request runs against the stand-in host.

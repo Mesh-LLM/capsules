@@ -12,8 +12,9 @@
 //! `mesh-llm-host-runtime` is not published to crates.io and pulls in
 //! mesh-llm's native GPU/runtime toolchain (iroh, skippy-runtime, etc.) —
 //! exactly the reason `tests/interop.rs` gives for not depending on it
-//! directly. This repo's CI cannot build that workspace, so this test cannot
-//! run there. See `docs/REAL-HOST-VERIFICATION.md` for how to run it.
+//! directly. This repo's CI cannot build that workspace, so the nightly e2e
+//! workflow runs this test against a pinned mesh-llm release. See
+//! `docs/REAL-HOST-VERIFICATION.md` for how to run it.
 //!
 //! Run with:
 //!   MESH_LLM_HOST_BIN=/path/to/mesh-llm/target/debug/mesh-llm \
