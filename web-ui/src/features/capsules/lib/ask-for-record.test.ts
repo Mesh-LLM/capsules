@@ -337,7 +337,7 @@ describe('judgeAskReply', () => {
     })
     expect(askReplyNote(await judged({ ...trustingJudges, recomputeIdMatch: async () => false }))).toEqual({
       verified: false,
-      text: 'Their record is in their log, but it is not verified: its id does not recompute'
+      text: 'Their record is in their log, but it is not verified: its id doesn’t match its contents'
     })
     expect(askReplyNote(await judged({ ...trustingJudges, recomputeIdMatch: async () => null }))?.verified).toBe(false)
   })

@@ -193,7 +193,7 @@ export const ENTRY_CHIP_RESULT_TOOLTIPS = {
 
 /** The (i) on a peer's twin pairs line. Facts only, never a judgement. */
 export const PEER_TWINS_TOOLTIP =
-  'A client sent the same request to this node and to another one, and marked the two as one pair. “Answers differed” compares the two sealed answers byte for byte; it is a comparison, not a ruling. “Not adjudicated” means no referee has ruled on the pair.'
+  'A client sent the same request to this node and to another one, and marked the two as one pair. “Answers differed” compares the two sealed answers byte for byte; it is a comparison, not a ruling. “No ruling yet” means no referee has ruled on the pair.'
 
 /** The LOCAL badge's (i): a served exchange with no other side recorded. */
 export const LOCAL_ONLY_TOOLTIP =

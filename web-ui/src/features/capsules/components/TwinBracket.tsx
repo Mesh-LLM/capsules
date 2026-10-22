@@ -83,7 +83,7 @@ export function TwinBracket({ bracketId, rows, children }: TwinBracketProps) {
   const canCompare = textA !== null && textB !== null
   const answer = twinAnswerState(rows)
   const { verdict, capsuleId } = twinVerdict(rows)
-  const notAdjudicated = notAdjudicatedLine(twinRefereeRow(rows)) ?? 'Not adjudicated yet.'
+  const notAdjudicated = notAdjudicatedLine(twinRefereeRow(rows)) ?? 'No ruling yet.'
 
   const handleSave = () => {
     saveTextFile(

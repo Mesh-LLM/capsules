@@ -98,7 +98,16 @@ const RETIRED_PHRASES = [
   'keeping its half',
   'Your capsule',
   'capsule reference',
-  '(x-mesh-twin-bracket)'
+  '(x-mesh-twin-bracket)',
+  // "recompute" is an internal term on screen (Sherlock2, #45)
+  'does not recompute',
+  'could not be recomputed',
+  'recompute in-browser',
+  'recomputed in-browser',
+  'not recomputable',
+  'NOT recompute',
+  'Not adjudicated',
+  'Your side is sealed'
 ] as const
 
 const HERE = dirname(fileURLToPath(import.meta.url))

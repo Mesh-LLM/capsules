@@ -157,7 +157,7 @@ export function rowAskControls(input: RowAskInput): { record: RowAskControl; his
       input.kind === 'closed'
         ? 'Their record is already here and checks out.'
         : input.kind === 'contradicted'
-          ? 'Their record is already here; Compare shows where it differs.'
+          ? 'Their record is already here; Compare shows where it disagrees.'
           : null
     const unnamed = input.target ? null : 'Your record doesn’t name this exchange in a way they can look up.'
     record = {
@@ -378,7 +378,7 @@ export function askReplyNote(outcome: AskOutcome): { verified: boolean; text: st
         }
       }
       const problems = [
-        idMatch === true ? null : idMatch === false ? 'its id does not recompute' : 'its id could not be recomputed',
+        idMatch === true ? null : idMatch === false ? 'its id doesn’t match its contents' : 'its id couldn’t be checked',
         signatureOk === true ? null : 'it is not signed with their announced key'
       ].filter((p): p is string => p !== null)
       return {
