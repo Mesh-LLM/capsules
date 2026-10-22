@@ -940,14 +940,14 @@ fn with_evidence_operations(
             )
             .input::<MeshEvidenceRequestArgs>()
             .handle({
-                let ledger_dir = capsules_for_delivery.ledger_dir().to_path_buf();
+                let capsules = capsules_for_delivery.clone();
                 let self_peer = self_peer.clone();
                 move |args, context| {
                     let self_id = self_peer.current();
                     Box::pin(mesh_evidence_bridge::handle_mesh_evidence_request(
                         args,
                         context,
-                        ledger_dir.clone(),
+                        capsules.clone(),
                         self_id,
                     ))
                 }

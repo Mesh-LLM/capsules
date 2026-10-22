@@ -499,9 +499,10 @@ fn verify_by_default() -> bool {
 pub async fn handle_mesh_evidence_request(
     mut args: MeshEvidenceRequestArgs,
     context: &mut PluginContext<'_>,
-    ledger_dir: std::path::PathBuf,
+    capsules: std::sync::Arc<crate::capsule_emit::CapsuleState>,
     self_id: Option<String>,
 ) -> PluginResult<serde_json::Value> {
+    let ledger_dir = capsules.ledger_dir().to_path_buf();
     if args.peer_id.trim().is_empty() {
         return Err(PluginError::invalid_params("peer_id must not be empty"));
     }
@@ -550,11 +551,96 @@ pub async fn handle_mesh_evidence_request(
         ),
         None => serde_json::json!({"state": "no_announced_key"}),
     };
+    let held = hold_asked_records(
+        &capsules,
+        &args.peer_id,
+        &args.request,
+        &answer,
+        &verification,
+    )
+    .await;
     Ok(serde_json::json!({
         "answer": answer,
         "request_digest": evidence_request::digest::request_digest(&request_bytes),
         "verification": verification,
+        "held": held,
     }))
+}
+
+/// The records a verified answer to a record request served, held on this
+/// node (`record_push_bridge::hold_asked_record`), so an asked record counts
+/// as saved like a pushed one: the `capsule_id`s now held. Only a request for
+/// records (no derivation) whose answer verified as an artifact; a record
+/// the receiver refuses, or a store that fails, is left out and logged --
+/// the answer itself still goes back to the caller.
+async fn hold_asked_records(
+    capsules: &std::sync::Arc<crate::capsule_emit::CapsuleState>,
+    peer_id: &str,
+    request: &serde_json::Value,
+    answer: &serde_json::Value,
+    verification: &serde_json::Value,
+) -> Vec<String> {
+    if request.get("derivation").is_some()
+        || verification.get("state").and_then(|s| s.as_str()) != Some("artifact")
+    {
+        return Vec::new();
+    }
+    let proven: Vec<u64> = verification
+        .get("records")
+        .and_then(|r| r.as_array())
+        .map(|r| r.iter().filter_map(|i| i.as_u64()).collect())
+        .unwrap_or_default();
+    let mut held = Vec::new();
+    for record in served_records(answer, &proven) {
+        let id = serde_json::from_slice::<serde_json::Value>(&record)
+            .ok()
+            .and_then(|r| {
+                r.get("capsule_id")
+                    .and_then(|i| i.as_str())
+                    .map(str::to_string)
+            });
+        match crate::record_push_bridge::hold_asked_record(capsules, peer_id, &record).await {
+            Ok(true) => held.extend(id),
+            Ok(false) => {
+                tracing::info!(peer_id, capsule_id = ?id, "an asked record was not held: the receiver refused it")
+            }
+            Err(error) => {
+                tracing::warn!(%error, peer_id, capsule_id = ?id, "an asked record could not be held")
+            }
+        }
+    }
+    held
+}
+
+/// The bodies of the records an answer serves at the `proven` leaf indices:
+/// the envelope's `artifact` is the artifact's JSON as unpadded base64url,
+/// and each of its `records` carries its ledger line hex-encoded (`body`).
+fn served_records(answer: &serde_json::Value, proven: &[u64]) -> Vec<Vec<u8>> {
+    use base64::Engine as _;
+    let Some(artifact) = answer
+        .get("artifact")
+        .and_then(|a| a.as_str())
+        .and_then(|a| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(a)
+                .ok()
+        })
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+    else {
+        return Vec::new();
+    };
+    artifact
+        .get("records")
+        .and_then(|r| r.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|r| {
+            r.get("leaf_index")
+                .and_then(|i| i.as_u64())
+                .is_some_and(|i| proven.contains(&i))
+        })
+        .filter_map(|r| hex::decode(r.get("body")?.as_str()?).ok())
+        .collect()
 }
 
 /// Add this node's id as the request's `requester_id`, unless the request
@@ -622,6 +708,30 @@ pub(crate) fn record_requested_adjudication(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the records whose leaf indices were proven are taken from an
+    /// answer, each decoded from its hex line; an answer with no artifact, or
+    /// one that does not decode, gives none.
+    #[test]
+    fn served_records_takes_only_the_proven_leaves() {
+        use base64::Engine as _;
+        let artifact = serde_json::json!({"records": [
+            {"leaf_index": 3, "body": hex::encode(br#"{"capsule_id":"a"}"#)},
+            {"leaf_index": 4, "body": hex::encode(br#"{"capsule_id":"b"}"#)},
+            {"leaf_index": 5, "body": "not hex"},
+        ]});
+        let answer = serde_json::json!({
+            "artifact": base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(serde_json::to_vec(&artifact).unwrap()),
+        });
+        assert_eq!(
+            served_records(&answer, &[3, 5]),
+            vec![br#"{"capsule_id":"a"}"#.to_vec()]
+        );
+        assert!(served_records(&answer, &[]).is_empty());
+        assert!(served_records(&serde_json::json!({}), &[3]).is_empty());
+        assert!(served_records(&serde_json::json!({"artifact": "%%"}), &[3]).is_empty());
+    }
 
     /// The remote-OOM bound: bytes up to the cap pass through untouched; one
     /// byte over is a descriptive error, never an unbounded buffer.

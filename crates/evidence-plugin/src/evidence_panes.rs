@@ -1416,7 +1416,7 @@ fn dealt_with_row(
     // CLOSED, but the presence of a held half is a structural fact stated here.
     let held_half_count = confirmed_siblings.len();
     let half_state = if held_half_count > 0 {
-        format!("their half held (received by push) for {held_half_count} of {total}")
+        format!("their half held for {held_half_count} of {total}")
     } else {
         "their half not held".to_string()
     };
