@@ -15,6 +15,27 @@ other no record and no Standard History. `share_history_segments = peers` and
 `share_standard_history = on` keep answering unsigned requests, and the records status
 (`requests_signed`) shows which case a node is in.
 
+### Verified on live hosts, and not
+
+- **T3 and T7 passed on three nodes built from mesh-llm main (95f9b48), not on a stock release.**
+  The run was on 2026-10-22, with this release's plugin (265ede5) on each node and default
+  settings.
+  - T7: two nodes that had never exchanged with the provider each asked for its checkpoints,
+    `history_card/1` and `served_summary/1`. All six asks got a signed `policy_declined` that
+    verifies, the same for both askers except for the request binding, and nothing was advertised.
+  - T3: after an exchange, the provider's served record named the node that asked, with the same
+    id the host announces for that node. Once a checkpoint covered the record, that node asked for
+    it and got it, and the answer verifies. A node that signed for itself while stating that
+    node's id got a signed `not_authorized`, and nothing was read from the ledger.
+- **Not run on a stock mesh-llm release.** No release has `plugin_keys.v1` yet (see above), so a
+  stock 0.78.1 host cannot run T3. The run repeats on a mesh-llm 0.79 candidate before this release
+  is tagged.
+- **A referee verdict on live hosts,** which 0.1.4 said would wait on 0.1.5, has still not run. It is
+  covered by tests only.
+- **Exchange corroboration and the payer's delivered leg for a deposit-covered bill** are covered by
+  tests only. Matching both halves of a host-served exchange by client nonce also needs the host to
+  pass the nonce on its served terminal event (Mesh-LLM/mesh-llm#2464).
+
 ### Changed
 
 - **Strangers get no record under `share_history_segments = peers`, and nobody gets an underived
