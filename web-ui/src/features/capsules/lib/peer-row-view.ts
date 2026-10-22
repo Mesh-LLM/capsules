@@ -76,14 +76,15 @@ export function unlinkedNodeId(row: PaneBRow): string | null {
  *  evidence carries), the unlinked note for a node-id-only row, and `null`
  *  when the row carries no identity evidence at all. `announcedKeyId` is the
  *  key this node was told the unlinked node signs with (the plugin's
- *  `peer-key` route: the host's announced keys and the operator's map), or
- *  `null` when none is, or on a host that announces none. */
+ *  `peer-key` route), or `null` when none is. The route merges the host's
+ *  announced keys with the operator's `CAPSULES_PEER_KEYS` and doesn't say
+ *  which one a key came from, so the line claims no source. */
 export function peerAliasLine(row: PaneBRow, announcedKeyId: string | null = null): string | null {
   const { signingKeyId, endpointId, nodeId } = peerIdentityAliases(row)
   if (!signingKeyId) {
     if (!unlinkedNodeId(row)) return null
     return announcedKeyId
-      ? `Known from your records · its key ${announcedKeyId.slice(0, 16)} is announced`
+      ? `Known from your records · its signing key ${announcedKeyId.slice(0, 16)} is known to this node`
       : 'Known from your records · no signed record from them yet'
   }
   const parts = [`signed by ${signingKeyId.slice(0, 16)}`]

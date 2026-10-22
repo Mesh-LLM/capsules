@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ExchangeStreamRow } from '@/features/capsules/components/ExchangeStreamRow'
+import { settleRowAsk } from '@/features/capsules/lib/ask-for-record'
 import { exchangeRowDomId } from '@/features/capsules/lib/exchange-pages'
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import {
@@ -410,7 +411,7 @@ describe('ExchangeStreamRow — the states render distinct text/status/action', 
     )
     const expected: Array<[string, string]> = [
       [`their id ${'a'.repeat(12)}…`, 'The id of their record; it’s a fingerprint of the record itself.'],
-      ['signature ✓', 'Signed with the key this peer announces.'],
+      ['signature ✓', 'Signed with this peer’s signing key, as this node knows it.'],
       ['request =', 'The same request as in your record.'],
       ['response =', 'The same answer as in your record.']
     ]
@@ -1341,11 +1342,11 @@ describe('ExchangeStreamRow — a row closed from the record "Ask them for their
     render(
       <ExchangeStreamRow
         {...toggleProps()}
-        askOutcome={{
+        askOutcome={settleRowAsk(null, {
           kind: 'record',
           at: '2026-09-28T23:00:00Z',
           evidence: { status: 'found', idMatch: true, signatureOk: true, peerRecord: theirs, fetch: vi.fn() }
-        }}
+        })}
         rail={NO_RAIL}
         row={makeRow('open_not_given')}
       />
@@ -1360,11 +1361,11 @@ describe('ExchangeStreamRow — whether their reply to "Ask them for their recor
     render(
       <ExchangeStreamRow
         {...toggleProps()}
-        askOutcome={{
+        askOutcome={settleRowAsk(null, {
           kind: 'no_reply',
           at: '2026-09-28T23:00:00Z',
           detail: 'their reply did not verify: a proof does not verify against the anchor'
-        }}
+        })}
         rail={NO_RAIL}
         row={makeRow('open_not_given')}
       />
@@ -1379,11 +1380,11 @@ describe('ExchangeStreamRow — whether their reply to "Ask them for their recor
     render(
       <ExchangeStreamRow
         {...toggleProps()}
-        askOutcome={{
+        askOutcome={settleRowAsk(null, {
           kind: 'record',
           at: '2026-09-28T23:00:00Z',
           evidence: { status: 'found', idMatch: true, signatureOk: true, peerRecord: theirs, fetch: vi.fn() }
-        }}
+        })}
         rail={NO_RAIL}
         row={makeRow('open_not_given')}
       />
@@ -1398,25 +1399,25 @@ describe('ExchangeStreamRow — whether their reply to "Ask them for their recor
     render(
       <ExchangeStreamRow
         {...toggleProps()}
-        askOutcome={{
+        askOutcome={settleRowAsk(null, {
           kind: 'record',
           at: '2026-09-28T23:00:00Z',
           evidence: { status: 'found', idMatch: true, signatureOk: false, peerRecord: theirs, fetch: vi.fn() }
-        }}
+        })}
         rail={NO_RAIL}
         row={makeRow('open_not_given')}
       />
     )
     const note = document.querySelector('[data-ask-reply-verified]') as HTMLElement
     expect(note).toHaveAttribute('data-ask-reply-verified', 'false')
-    expect(note).toHaveTextContent('it is not signed with their announced key')
+    expect(note).toHaveTextContent('it is not signed with their signing key')
   })
 
   it('shows no note while the ask is in flight', () => {
     render(
       <ExchangeStreamRow
         {...toggleProps()}
-        askOutcome={{ kind: 'asking', at: '2026-09-28T23:00:00Z' }}
+        askOutcome={settleRowAsk(null, { kind: 'asking', at: '2026-09-28T23:00:00Z' })}
         rail={NO_RAIL}
         row={makeRow('open_not_given')}
       />
@@ -1484,5 +1485,40 @@ describe('ExchangeStreamRow — the two asks on the row face', () => {
     rerender(<ExchangeStreamRow {...toggleProps()} checkpointCovered rail={NO_RAIL} row={makeRow('open_not_held')} />)
     expect(chip()).toHaveTextContent('◐')
     expect(chip().closest('[data-census-chip]')).toHaveTextContent('A checkpoint on this node covers this record')
+  })
+})
+
+describe('ExchangeStreamRow — the record an ask returned feeds the state, the checks and Compare alike', () => {
+  it('a signed record with a different answer reads Disagree, and Compare opens checks that compare it', async () => {
+    const user = userEvent.setup()
+    const theirs = fixtureHalfBody({ capsuleId: 'theirs-1', responseDigest: 'e'.repeat(64) })
+    const askOutcome = settleRowAsk(null, {
+      kind: 'record',
+      at: '2026-09-28T23:00:00Z',
+      evidence: { status: 'found', idMatch: true, signatureOk: true, peerRecord: theirs, fetch: vi.fn() }
+    })
+    const onToggleChecks = vi.fn()
+    const row = makeRow('open_not_held')
+    const { rerender } = render(
+      <ExchangeStreamRow {...toggleProps()} askOutcome={askOutcome} onToggleChecks={onToggleChecks} rail={NO_RAIL} row={row} />
+    )
+    expect(screen.getByText('Disagree')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Compare' }))
+    expect(onToggleChecks).toHaveBeenCalledWith(row)
+
+    rerender(<ExchangeStreamRow {...toggleProps()} askOutcome={askOutcome} checksExpanded rail={NO_RAIL} row={row} />)
+    // Their record is the one the ask brought, compared field by field; the
+    // panel's fetch still runs a real fetch, never the asked record's no-op.
+    expect(screen.getAllByText('✕ differs').length).toBeGreaterThan(0)
+    await user.click(screen.getByRole('button', { name: 'Get their record and check it here' }))
+    expect(NOT_FETCHED.fetch).toHaveBeenCalled()
+  })
+
+  it('a failed retry after their signed refusal keeps the refusal, and says the retry failed', () => {
+    let ask = settleRowAsk(null, { kind: 'refused', at: '2026-09-28T23:00:00Z', reason: 'not_authorized' })
+    ask = settleRowAsk(ask, { kind: 'no_reply', at: '2026-09-28T23:10:00Z', detail: 'HTTP 502' })
+    render(<ExchangeStreamRow {...toggleProps()} askOutcome={ask} rail={NO_RAIL} row={makeRow('open_not_held')} />)
+    expect(screen.getByText('Declined')).toBeInTheDocument()
+    expect(document.querySelector('[data-ask-retry="true"]')).toHaveTextContent(/^Asked again .*: no verified reply \(HTTP 502\)\.$/)
   })
 })

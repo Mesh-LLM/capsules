@@ -484,6 +484,14 @@ describe('rightCellText — the load-bearing distinction', () => {
     const text = rightCellText(stateOf('open_asked', '2026-10-22T14:03:00Z'))
     expect(text).not.toContain('2026-10-22T14:03:00Z')
     expect(text).toBe(`Asked ${formatExchangeTimestamp('2026-10-22T14:03:00Z')}. No verified reply yet.`)
+    const offset = rightCellText(stateOf('open_asked', '2026-10-22T16:03:00+02:00'))
+    expect(offset).toBe(`Asked ${formatExchangeTimestamp('2026-10-22T16:03:00+02:00')}. No verified reply yet.`)
+  })
+
+  it('leaves a time with no zone, or anything else, as the row carries it', () => {
+    for (const raw of ['2026-10-22T14:03:00', '2026-10-22', '4 Sep', 'not a date', '2026-10-22T14:03Z']) {
+      expect(rightCellText(stateOf('open_asked', raw))).toBe(`Asked ${raw}. No verified reply yet.`)
+    }
   })
 
   it('renders the exact copy from v3 §2 for each state', () => {

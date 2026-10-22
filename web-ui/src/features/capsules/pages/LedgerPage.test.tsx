@@ -67,6 +67,7 @@ vi.mock('@/features/capsules/api/recordsClient', async (importOriginal) => {
 })
 
 vi.mock('@/features/capsules/api/evidenceRequestClient', () => ({
+  announcedKeyFor: vi.fn().mockResolvedValue(null),
   askForRecord: vi.fn().mockResolvedValue({ kind: 'no_answer', message: 'no reply' }),
   askForHistory: vi.fn().mockResolvedValue({
     kind: 'answer',
@@ -1953,5 +1954,52 @@ describe('LedgerPageContent — twin pairs on Peers', () => {
     expect(document.querySelectorAll('[data-peer-twins="true"]')).toHaveLength(1)
     const lines = Array.from(document.querySelectorAll('[data-peer-twins="true"]')).map((el) => el.textContent ?? '')
     for (const line of lines) expect(line).not.toMatch(/dishonest|honest|bad|flag|lie|cheat|wrong|suspicious/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A peer known only from our own records: the key this node knows for it
+// comes from the plugin's peer-key route, which merges the host's announced
+// keys with the operator's CAPSULES_PEER_KEYS. On a host with no
+// plugin_keys.v1 the configured key is all there is; the line claims no source.
+// ---------------------------------------------------------------------------
+
+describe('LedgerPageContent — a peer known only from your records', () => {
+  const NODE = 'c'.repeat(64)
+  async function renderNodeOnlyPeer(key: string | null) {
+    const { fetchPaneB } = await import('@/features/capsules/api/sidecarClient')
+    vi.mocked(fetchPaneB).mockResolvedValue({
+      rows: [
+        {
+          peer_id: 'node:cccccccccccccccc',
+          identity: { signing_key_id: null, endpoint_id: null, node_id: NODE },
+          exchange_count: 1,
+          last_seen: null
+        }
+      ],
+      peer_count: 1
+    } as never)
+    const { announcedKeyFor } = await import('@/features/capsules/api/evidenceRequestClient')
+    vi.mocked(announcedKeyFor).mockResolvedValue(key)
+    render(<LedgerPageContent />, { wrapper: makeWrapper() })
+    return announcedKeyFor
+  }
+
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('names the signing key this node knows for it (here only configured), claiming no source', async () => {
+    const announcedKeyFor = await renderNodeOnlyPeer('e'.repeat(64))
+    expect(
+      await screen.findByText(`Known from your records · its signing key ${'e'.repeat(16)} is known to this node`)
+    ).toBeInTheDocument()
+    expect(announcedKeyFor).toHaveBeenCalledWith(NODE)
+    expect(document.body.textContent).not.toMatch(/announced|no signing key linked/)
+  })
+
+  it('with no key known (no plugin_keys.v1 and none configured), says no signed record yet', async () => {
+    await renderNodeOnlyPeer(null)
+    expect(await screen.findByText('Known from your records · no signed record from them yet')).toBeInTheDocument()
   })
 })

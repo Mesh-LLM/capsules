@@ -436,10 +436,12 @@ describe('peerAliasLine — D3: aliases on ONE row, never extra peers', () => {
     })
     expect(unlinkedNodeId(row)).toBe(`a70d3967bea3b22f${'a'.repeat(48)}`)
     expect(peerAliasLine(row)).toBe('Known from your records · no signed record from them yet')
-    // A host (or operator) that announces this node's key: the row names it,
-    // never "no signing key linked".
-    expect(peerAliasLine(row, 'e'.repeat(64))).toBe(`Known from your records · its key ${'e'.repeat(16)} is announced`)
-    expect(dealtWithRowView(row, undefined, [], 'e'.repeat(64)).aliasLine).toContain('is announced')
+    // A key this node knows for that node (host-announced or configured): the
+    // row names it, claiming no source, never "no signing key linked".
+    expect(peerAliasLine(row, 'e'.repeat(64))).toBe(
+      `Known from your records · its signing key ${'e'.repeat(16)} is known to this node`
+    )
+    expect(dealtWithRowView(row, undefined, [], 'e'.repeat(64)).aliasLine).toContain('is known to this node')
   })
 
   it('degrades to null (no line, never a fabricated identity) when the row carries no identity evidence', () => {

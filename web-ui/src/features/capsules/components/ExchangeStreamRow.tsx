@@ -26,12 +26,14 @@ import { theirContentText, yourContentFixedText } from '@/features/capsules/lib/
 import { isServedForPay, type ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
 import {
   askReplyNote,
+  askRetryNote,
   askTarget,
   otherSideNodeId,
   rowAskControls,
-  stateAfterAsk,
-  type AskOutcome,
+  rowEvidence,
+  stateWithAsk,
   type AskTarget,
+  type RowAsk,
   type RowAskControl
 } from '@/features/capsules/lib/ask-for-record'
 import { historyNote, type HistoryOutcome } from '@/features/capsules/lib/ask-for-history'
@@ -42,10 +44,8 @@ import {
   bracketStrip,
   bracketStripText,
   closedPropertyCellItems,
-  deriveRightCellState,
   isAlarmState,
   isAskAction,
-  pushedHalfRecompute,
   rightCellAction,
   rightCellDetail,
   type RightCellStateKind,
@@ -214,8 +214,9 @@ export type ExchangeStreamRowProps = {
   onToggleContent: (row: ExchangeLedgerRow) => void
   /** Toggle ② -- flips `checksExpanded` for this row (the `▸/▾ checks` control). */
   onToggleChecks: (row: ExchangeLedgerRow) => void
-  /** What "Ask them for their record" produced for this row, if it asked. */
-  askOutcome?: AskOutcome | null
+  /** What "Ask them for their record" produced for this row, if it asked:
+   *  the latest reply and the latest verified one (`settleRowAsk`). */
+  askOutcome?: RowAsk | null
   /** Sends the ask. Absent where the page can't ask (a saved sample): the
    *  button stays, disabled, saying why. */
   onAskForRecord?: (row: ExchangeLedgerRow, target: AskTarget) => void
@@ -255,15 +256,23 @@ export function ExchangeStreamRow({
   // pane already correlated (its capsule_id recomputed before the query
   // resolved). Either way the SAME gate below judges it, and the checks panel
   // shows the same evidence.
+  // A record an ask returned is one more source, judged by the same gate; the
+  // ONE record chosen (`rowEvidence`) feeds the state, the checks panel and
+  // Compare alike.
   const peerFetch = usePeerLedgerRecompute(row.raw)
-  const theirsRecompute = peerFetch.status === 'found' ? peerFetch : (pushedHalfRecompute(row.raw) ?? peerFetch)
-  const gateState = deriveRightCellState(row.raw, theirsRecompute, localRecord)
-  // Once this row has asked the other side for its record, their reply (or
-  // its absence) is the state: a record goes through the same gate as a
-  // pushed one (`ask-for-record.ts`), a signed refusal reads as one.
-  const state = askOutcome ? stateAfterAsk(row.raw, askOutcome, localRecord) : gateState
+  const judged = rowEvidence(row.raw, localRecord, peerFetch, askOutcome)
+  // "Get their record and check it here" always runs the live fetch, whichever
+  // record is shown (a pushed or asked one carries no fetch of its own).
+  const theirsRecompute = judged.evidence ? { ...judged.evidence, fetch: peerFetch.fetch } : peerFetch
+  // A verdict from their record wins; otherwise the latest verified reply to
+  // an ask stands, and a failed retry never replaces it.
+  const state = stateWithAsk(judged.gate, askOutcome)
   // Whether the plugin verified their reply, and if not, why: said on the row.
-  const askNote = askOutcome ? askReplyNote(askOutcome) : null
+  const askNote = askOutcome ? askReplyNote(askOutcome.verified ?? askOutcome.latest) : null
+  const retryNote = askRetryNote(
+    askOutcome,
+    judged.gate.kind === 'open_refused' || judged.gate.kind === 'open_absent'
+  )
   const alarm = isAlarmState(state)
   // Whom to ask, and how to name the exchange, from our own record of it.
   const askFor = askTarget(localRecord ?? (row.raw.mine.record as CapsuleRecord | undefined) ?? null)
@@ -293,7 +302,8 @@ export function ExchangeStreamRow({
     canAsk: onAskForRecord !== undefined && onAskForHistory !== undefined,
     roleTag: row.roleTag,
     servedForPay,
-    recordAsk: askOutcome,
+    otherSideKnown: row.counterparty !== null,
+    recordAsk: askOutcome?.latest ?? null,
     historyAsk: historyOutcome
   })
   const action = rightCellAction(state)
@@ -311,9 +321,7 @@ export function ExchangeStreamRow({
   })
   // Confirmed from a record this page fetched, not one the node holds: say
   // it isn't saved, so a reload reopening the row is never a surprise.
-  const closedFromFetch =
-    state.kind === 'closed' &&
-    (askOutcome?.kind === 'record' || (peerFetch.status === 'found' && !pushedHalfRecompute(row.raw)))
+  const closedFromFetch = state.kind === 'closed' && (judged.source === 'asked' || judged.source === 'fetched')
   // Your own copy failed "words match" or "signed". Whatever
   // the badge says (Confirmed included), the row says so.
   const ownRecordFails = entryRowChipMark(checksRows, 'content') === '✗' || entryRowChipMark(checksRows, 'sig') === '✗'
@@ -500,6 +508,11 @@ export function ExchangeStreamRow({
                 role="note"
               >
                 {askNote.text}
+              </p>
+            ) : null}
+            {retryNote ? (
+              <p className="text-xs text-fg-dim" data-ask-retry="true" role="note">
+                {retryNote}
               </p>
             ) : null}
             {closedFromFetch ? (

@@ -19,7 +19,8 @@ import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
  *  when they signed their refusal. */
 export type HistoryOutcome =
   | { kind: 'asking'; at: string }
-  | { kind: 'verified'; at: string; checkpoints: number }
+  /** `checkpoints` is `null` when the plugin's verification didn't say how many. */
+  | { kind: 'verified'; at: string; checkpoints: number | null }
   | { kind: 'refused'; at: string; reason: string }
   | { kind: 'failed'; at: string; detail: string }
 
@@ -49,7 +50,7 @@ export function judgeHistoryReply(reply: EvidenceAskReply, askedAt: string): His
     case 'artifact':
       // The plugin checked every listed checkpoint under their announced key
       // and each consistency proof; with none listed it would have failed.
-      return { kind: 'verified', at: askedAt, checkpoints: verification.checkpoints ?? 0 }
+      return { kind: 'verified', at: askedAt, checkpoints: verification.checkpoints ?? null }
   }
 }
 
@@ -76,11 +77,12 @@ export function historyNote(outcome: HistoryOutcome): { verified: boolean; text:
     case 'asking':
       return null
     case 'verified': {
+      // An unknown count is said as unknown, never as zero.
       const n = outcome.checkpoints
-      const listed = `${n} checkpoint${n === 1 ? '' : 's'}`
+      const listed = n === null ? 'the checkpoints' : `${n} checkpoint${n === 1 ? '' : 's'}`
       return {
         verified: true,
-        text: `Their history is verified: ${listed} of their log, each signed with their announced key and each extending the one before.`
+        text: `Their history is verified: ${listed} of their log, each signed with their signing key and each extending the one before.`
       }
     }
     case 'refused':

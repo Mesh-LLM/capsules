@@ -151,7 +151,7 @@ export const ROW_STATE_TOOLTIPS = {
 /** The per-property cells a CLOSED row shows, each with its own (i). */
 export const CLOSED_CELL_TOOLTIPS = {
   their_id: 'The id of their record; it’s a fingerprint of the record itself.',
-  signature: 'Signed with the key this peer announces.',
+  signature: 'Signed with this peer’s signing key, as this node knows it.',
   request: 'The same request as in your record.',
   response: 'The same answer as in your record.'
 } as const
@@ -277,7 +277,7 @@ export const CHAIN_STRIP_TOOLTIP =
  *  exact terms, but each hover is still one plain sentence. */
 export const CHECK_CHIP_TOOLTIPS: Record<string, string> = {
   content_binding: 'Whether the record’s contents still match its id.',
-  producer_signature: 'Whether the record is signed with the key its node announces.',
+  producer_signature: 'Whether the record is signed with its node’s signing key.',
   task_binding: 'Whether the record is tied to the request it answers.',
   local_inclusion: 'Whether a checkpoint on the node that sealed it covers this record.',
   checkpoint_signature: 'Whether that checkpoint is signed by the node that made it.',

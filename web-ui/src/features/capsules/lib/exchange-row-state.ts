@@ -307,11 +307,16 @@ export function deriveRightCellState(
   return { kind: 'open_not_held', date: null }
 }
 
-/** A statement's or ask's date: an RFC 3339 time in the viewer's own time
- *  zone, never a raw ISO stamp; any other form as the row carries it. */
+/** A full RFC 3339 timestamp, zone included (`Z` or `±hh:mm`): the only form
+ *  that names one instant. */
+const RFC3339_WITH_ZONE = /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/
+
+/** A statement's or ask's date: a full RFC 3339 time in the viewer's own time
+ *  zone, never a raw stamp. Any other form (no zone, a bare date, garbage) is
+ *  shown as the row carries it: guessing its zone would invent a time. */
 function dateOrFallback(date: string | null): string {
   if (!date) return 'date unavailable'
-  return /^\d{4}-\d{2}-\d{2}T/.test(date) ? formatExchangeTimestamp(date) : date
+  return RFC3339_WITH_ZONE.test(date) ? formatExchangeTimestamp(date) : date
 }
 
 // ---------------------------------------------------------------------------

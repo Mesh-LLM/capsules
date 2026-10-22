@@ -21,7 +21,13 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { TabPanel } from '@/components/ui/TabPanel'
 import { fetchCapsuleLedger } from '@/features/capsules/api/client'
 import { announcedKeyFor, askForHistory, askForRecord } from '@/features/capsules/api/evidenceRequestClient'
-import { judgeAskReply, type AskOutcome, type AskTarget } from '@/features/capsules/lib/ask-for-record'
+import {
+  judgeAskReply,
+  settleRowAsk,
+  type AskOutcome,
+  type AskTarget,
+  type RowAsk
+} from '@/features/capsules/lib/ask-for-record'
 import { judgeHistoryReply, type HistoryOutcome } from '@/features/capsules/lib/ask-for-history'
 import type { CapsuleRecord } from '@/features/capsules/api/types'
 import {
@@ -58,7 +64,8 @@ import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import {
   exceptionsFirstLine,
   exceptionsFirstTally,
-  exchangesHeadline
+  exchangesHeadline,
+  servedAskedLine
 } from '@/features/capsules/lib/exceptions-first-line'
 import {
   LEDGER_PAGE_SIZE,
@@ -184,13 +191,6 @@ function DisabledReason({ reason, children }: { reason: string | null; children:
       <span className="inline-flex">{children}</span>
     </HoverChip>
   )
-}
-
-/** How many of the listed exchanges this node served and how many it asked
- *  for: a count of the rows below, by role, nothing more. */
-export function servedAskedLine(rows: readonly ExchangeLedgerRow[]): string {
-  const served = rows.filter((row) => row.roleTag === 'SERVED').length
-  return `You served ${served} · you asked ${rows.length - served}`
 }
 
 // ---------------------------------------------------------------------------
@@ -478,13 +478,17 @@ function ExchangesSection({
   // the mesh (this plugin's `mesh_evidence_request` tool), judged in
   // `ask-for-record.ts`. The row shows "Asked …" at once, then whatever
   // their reply proves. A saved sample can't ask anyone.
-  const [askOutcomes, setAskOutcomes] = useState<ReadonlyMap<string, AskOutcome>>(() => new Map())
+  // Per row, the latest reply and the latest verified one (`settleRowAsk`):
+  // a failed retry never erases what an earlier reply proved.
+  const [askOutcomes, setAskOutcomes] = useState<ReadonlyMap<string, RowAsk>>(() => new Map())
   const handleAskForRecord = useCallback((row: ExchangeLedgerRow, target: AskTarget) => {
     const askedAt = new Date().toISOString()
     const record = row.raw.mine.record as { effect?: { request_digest?: unknown } } | undefined
     const requestDigest = typeof record?.effect?.request_digest === 'string' ? record.effect.request_digest : null
     const settle = (outcome: AskOutcome) =>
-      setAskOutcomes((previous) => new Map(previous).set(row.exchangeKey, outcome))
+      setAskOutcomes((previous) =>
+        new Map(previous).set(row.exchangeKey, settleRowAsk(previous.get(row.exchangeKey), outcome))
+      )
     settle({ kind: 'asking', at: askedAt })
     void askForRecord(target.peerId, target)
       .then((reply) => judgeAskReply(reply, requestDigest, askedAt))

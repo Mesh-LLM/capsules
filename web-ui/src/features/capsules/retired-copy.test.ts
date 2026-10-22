@@ -99,6 +99,13 @@ const RETIRED_PHRASES = [
   'Your capsule',
   'capsule reference',
   '(x-mesh-twin-bracket)',
+  // Review of #44: a peer's key may be host-announced or configured
+  // (CAPSULES_PEER_KEYS); the page can't tell which, so it claims no source.
+  'with their announced key',
+  'is announced',
+  'key they announced',
+  'key this peer announces',
+  'no announced key for them',
   // "recompute" is an internal term on screen (Sherlock2, #45)
   'does not recompute',
   'could not be recomputed',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { exceptionsFirstLine, exceptionsFirstTally } from '@/features/capsules/lib/exceptions-first-line'
+import { exceptionsFirstLine, exceptionsFirstTally, servedAskedLine } from '@/features/capsules/lib/exceptions-first-line'
 import { buildExchangeLedgerRows } from '@/features/capsules/lib/exchange-ledger'
 import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
 
@@ -191,5 +191,36 @@ describe('exceptionsFirstLine', () => {
       null
     )
     expect(line).not.toMatch(/\d+\/\d+/)
+  })
+})
+
+describe('servedAskedLine', () => {
+  it('counts only this node’s own records: served, asked, local, twin and paid count; a record only received from them never does', () => {
+    const rows = buildExchangeLedgerRows(
+      [
+        paneCRow({ exchange_key: 'served', role_tag: 'SERVED', counterparty: 'node:aa' }),
+        paneCRow({ exchange_key: 'asked', role_tag: 'ASKED', counterparty: 'node:aa' }),
+        paneCRow({ exchange_key: 'local', role_tag: 'SERVED', counterparty: null }),
+        paneCRow({ exchange_key: 'twin-a', role_tag: 'ASKED', counterparty: 'node:aa', twin_bracket_id: 'b1' }),
+        paneCRow({ exchange_key: 'twin-b', role_tag: 'ASKED', counterparty: 'node:bb', twin_bracket_id: 'b1' }),
+        paneCRow({
+          exchange_key: 'paid',
+          role_tag: 'SERVED',
+          counterparty: null,
+          provider_settlement: { state: 'terms_only', entries: [] } as never
+        }),
+        // Their record only, unpaired: its role is theirs (they served), not ours.
+        paneCRow({
+          exchange_key: 'received-only',
+          role_tag: 'SERVED',
+          counterparty: 'node:aa',
+          mine: { state: 'absent', capsule_id: null },
+          theirs: { state: 'NOT_CHECKED', capsule_id: 'a'.repeat(64), peer_id: 'node:aa' }
+        })
+      ],
+      new Map()
+    )
+    expect(rows).toHaveLength(7)
+    expect(servedAskedLine(rows)).toBe('You served 3 · you asked 3')
   })
 })

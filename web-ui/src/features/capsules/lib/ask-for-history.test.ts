@@ -26,8 +26,18 @@ describe('judgeHistoryReply', () => {
     expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: 3 })
     expect(historyNote(outcome)).toEqual({
       verified: true,
-      text: 'Their history is verified: 3 checkpoints of their log, each signed with their announced key and each extending the one before.'
+      text: 'Their history is verified: 3 checkpoints of their log, each signed with their signing key and each extending the one before.'
     })
+  })
+
+  it('a verified card whose checkpoint count the plugin didn’t give reads as unknown, never "0 checkpoints"', () => {
+    const outcome = judgeHistoryReply(reply({}, { state: 'artifact', records: [] }), ASKED_AT)
+    expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: null })
+    const text = historyNote(outcome)?.text ?? ''
+    expect(text).toBe(
+      'Their history is verified: the checkpoints of their log, each signed with their signing key and each extending the one before.'
+    )
+    expect(text).not.toMatch(/\b0 checkpoints/)
   })
 
   it('a refusal signed with their announced key over our request is their signed refusal, in plain words', () => {
