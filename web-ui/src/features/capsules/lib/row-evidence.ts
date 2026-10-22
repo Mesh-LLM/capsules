@@ -9,10 +9,16 @@
 //      the pane's own outcome (their signed refusal or "no record", or the
 //      door's refusal of a pushed record that named another server or model)
 //      and an ask's verified refusal or "no record".
-//   2. A record counts only when it is VERIFIED: its contents produce its id
-//      and its signature holds under the key this node has for them
-//      (`isVerifiedRecord`). An unverified record never sets Confirmed or
-//      Disagree, whatever its id or digests say.
+//   2. A record sets a verdict only when it is VERIFIED: its contents produce
+//      its id and its signature holds under the key this node has for them
+//      (`isVerifiedRecord`). The one exception: a record whose contents
+//      demonstrably don't produce the id it claims (a completed check,
+//      idMatch === false) is Disagree -- the other side handed over an
+//      altered record, the "both present, disagreeing" case of the ratified
+//      bilateral-retention-decay-property (agent-action-capsule @7f8a78d8);
+//      a pushed one from a node that didn't serve the exchange excepted. A
+//      bad signature over a matching id, or an id check that couldn't run,
+//      is no verdict (`recordVerdict`).
 //   3. Among verified records (and the door's refusal), any Disagree wins,
 //      and that record is the one shown; otherwise any Confirmed wins.
 //      Disagree beats Confirmed whatever the source, so a confirming record
@@ -73,6 +79,9 @@ function instant(date: string | null): number | null {
   return date && RFC3339_WITH_ZONE.test(date) ? Date.parse(date) : null
 }
 
+/** A record of theirs whose contents don't produce the id it claims. */
+const ALTERED = 'their record doesn’t match its own id: it was changed after it was sealed'
+
 const NO_VERDICT_WHY: Record<Exclude<RecordVerdict, { kind: 'closed' } | { kind: 'contradicted' }>['why'], string> = {
   not_verified: 'it didn’t check out',
   other_provider: 'it isn’t from the node that served you',
@@ -98,7 +107,8 @@ function attemptText(outcome: AskOutcome, verdict: RecordVerdict | null): string
         const why = verdict?.kind === 'no_verdict' ? NO_VERDICT_WHY[verdict.why] : NO_VERDICT_WHY.other_exchange
         return `their record checks out but doesn’t confirm this exchange: ${why}`
       }
-      return verdict.kind === 'closed' ? 'their record matches yours' : 'their record disagrees with yours'
+      if (verdict.kind === 'closed') return 'their record matches yours'
+      return verdict.why === 'altered' ? ALTERED : 'their record disagrees with yours'
     }
   }
 }
@@ -114,16 +124,16 @@ export function judgeRow(
   // 1. Candidates.
   const records: RecordCandidate[] = []
   if (fetched?.status === 'found') {
-    records.push({ source: 'fetched', evidence: fetched, verdict: recordVerdict(fetched, ours), outcome: null })
+    records.push({ source: 'fetched', evidence: fetched, verdict: recordVerdict(fetched, ours, 'fetched'), outcome: null })
   }
   const pushed = pushedHalfRecompute(row)
-  if (pushed) records.push({ source: 'pushed', evidence: pushed, verdict: recordVerdict(pushed, ours), outcome: null })
+  if (pushed) records.push({ source: 'pushed', evidence: pushed, verdict: recordVerdict(pushed, ours, 'pushed'), outcome: null })
   const askedRecord = ask?.latest.kind === 'record' ? ask.latest : (ask?.record ?? null)
   if (askedRecord?.kind === 'record') {
     records.push({
       source: 'asked',
       evidence: askedRecord.evidence,
-      verdict: recordVerdict(askedRecord.evidence, ours),
+      verdict: recordVerdict(askedRecord.evidence, ours, 'asked'),
       outcome: askedRecord
     })
   }
@@ -179,9 +189,14 @@ export function judgeRow(
     // "Asked again" after an earlier answer that verified; else "Asked".
     const earlier = [ask.claim, ask.record].some((o) => o !== null && o !== latest)
     const asked = earlier ? 'Asked again' : 'Asked'
-    const latestVerdict = latest.kind === 'record' ? recordVerdict(latest.evidence, ours) : null
+    const latestVerdict = latest.kind === 'record' ? recordVerdict(latest.evidence, ours, 'asked') : null
     if (shownAsk) {
-      askNote = askReplyNote(shownAsk)
+      // An altered record is shown as Disagree: its note says so, never "not
+      // verified" beside that badge.
+      askNote =
+        shownAsk.kind === 'record' && shownAsk.evidence.idMatch === false
+          ? { verified: true, text: `${ALTERED.charAt(0).toUpperCase()}${ALTERED.slice(1)}.` }
+          : askReplyNote(shownAsk)
       if (latest !== shownAsk) {
         const text = attemptText(latest, latestVerdict)
         if (text) retryNote = `${asked} ${formatExchangeTimestamp(latest.at)}: ${text}.`

@@ -40,6 +40,7 @@ type Check = { idMatch: boolean; signatureOk: boolean }
 const VERIFIED: Check = { idMatch: true, signatureOk: true }
 const ID_MISMATCH_SIGNED: Check = { idMatch: false, signatureOk: true }
 const ID_MISMATCH_UNSIGNED: Check = { idMatch: false, signatureOk: false }
+const BAD_SIGNATURE: Check = { idMatch: true, signatureOk: false }
 
 function record(kind: Body, check: Check = VERIFIED): PeerRecomputeState {
   return { status: 'found', ...check, peerRecord: body(kind), fetch: () => {} }
@@ -87,26 +88,41 @@ type Case = {
 }
 
 const CASES: Case[] = [
-  // Rule 2: only a verified record gives a verdict.
+  // Rule 2: only a verified record gives a verdict -- except an altered one
+  // (contents don't produce its id), which is Disagree per the ratified
+  // bilateral-retention-decay-property.
   { name: 'a verified confirming fetch is Confirmed', fetched: record('agrees'), state: 'closed', source: 'fetched' },
   { name: 'a verified disagreeing fetch is Disagree', fetched: record('disagrees'), state: 'contradicted', source: 'fetched' },
   {
-    name: 'a signed record whose id doesn’t match its contents is not verified: no verdict, even if its answer differs',
-    fetched: record('disagrees', ID_MISMATCH_SIGNED),
-    state: 'open_not_held',
+    name: 'a fetched record whose contents don’t produce its id is Disagree, even with a valid signature',
+    fetched: record('agrees', ID_MISMATCH_SIGNED),
+    state: 'contradicted',
     source: 'fetched'
   },
   {
-    name: 'an unsigned pushed record with a mismatched id is not verified: no verdict',
-    row: paneRow({ pushed: record('disagrees', ID_MISMATCH_UNSIGNED) }),
+    name: 'an unsigned pushed record from the provider with a mismatched id is Disagree',
+    row: paneRow({ pushed: record('agrees', ID_MISMATCH_UNSIGNED) }),
+    state: 'contradicted',
+    source: 'pushed'
+  },
+  {
+    name: 'a pushed record with a mismatched id from a node that didn’t serve us is no verdict (anyone can push)',
+    row: paneRow({ pushed: record('other_provider', ID_MISMATCH_UNSIGNED) }),
     state: 'open_not_held',
     source: 'pushed'
   },
   {
-    name: 'an unverified asked record never sets Disagree',
-    ask: asks(asked(record('disagrees', ID_MISMATCH_UNSIGNED))),
+    name: 'an asked record whose contents don’t produce its id is Disagree, and its note says so',
+    ask: asks(asked(record('agrees', ID_MISMATCH_UNSIGNED))),
+    state: 'contradicted',
+    source: 'asked',
+    askNote: { verified: true, text: /^Their record doesn’t match its own id: it was changed after it was sealed\.$/ }
+  },
+  {
+    name: 'a bad signature over a matching id is no verdict, even if its answer differs',
+    ask: asks(asked(record('disagrees', BAD_SIGNATURE))),
     state: 'open_asked',
-    askNote: { verified: false, text: /^Their record didn’t check out \(its id doesn’t match its contents; it is not signed/ }
+    askNote: { verified: false, text: /^Their record didn’t check out \(it is not signed with the key this node has for them\)\.$/ }
   },
   // Rule 3: Disagree beats Confirmed whatever the source.
   {
@@ -170,10 +186,16 @@ const CASES: Case[] = [
     retry: /^Asked again .*: their reply carried 2 records that could be theirs; none is shown as theirs\.$/
   },
   {
-    name: 'a retry returning an unverified record never replaces the refusal; the line says it didn’t check out',
-    ask: asks(refused(), asked(record('agrees', ID_MISMATCH_UNSIGNED), T2)),
+    name: 'a retry returning a bad-signature record never replaces the refusal; the line says it didn’t check out',
+    ask: asks(refused(), asked(record('agrees', BAD_SIGNATURE), T2)),
     state: 'open_refused',
-    retry: /^Asked again .*: their record didn’t check out \(its id doesn’t match its contents; .*\)\.$/
+    retry: /^Asked again .*: their record didn’t check out \(it is not signed with the key this node has for them\)\.$/
+  },
+  {
+    name: 'a retry returning an altered record is Disagree: a verdict beats the earlier refusal',
+    ask: asks(refused(), asked(record('agrees', ID_MISMATCH_UNSIGNED), T2)),
+    state: 'contradicted',
+    source: 'asked'
   },
   {
     name: 'a retry returning a verified record from another provider: refusal stands, line says why',

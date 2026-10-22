@@ -90,15 +90,24 @@ describe('deriveRightCellState — finding 1 (2026-09-23 assessment): CLOSED req
     expect(state.kind).toBe('closed')
   })
 
-  it('a real fetch whose id does NOT match its contents is not verified: never CLOSED, never CONTRADICTED', () => {
+  it('a real fetch that does NOT match -> CONTRADICTED, never CLOSED', () => {
     const row = paneCRow()
-    expect(deriveRightCellState(row, fetched({ idMatch: false })).kind).toBe('open_not_held')
+    expect(deriveRightCellState(row, fetched({ idMatch: false })).kind).toBe('contradicted')
   })
 
   it('a verified fetch from the provider whose answer differs from ours -> CONTRADICTED', () => {
-    expect(deriveRightCellState(paneCRow(), fetched({ peerRecord: disagreeingPeerRecord() }), localRecordWithDigests()).kind).toBe(
-      'contradicted'
+    expect(
+      deriveRightCellState(paneCRow(), fetched({ peerRecord: disagreeingPeerRecord() }), localRecordWithDigests()).kind
+    ).toBe('contradicted')
+  })
+
+  it('a bad signature over a matching id is no verdict -- never CONTRADICTED, never CLOSED', () => {
+    const state = deriveRightCellState(
+      paneCRow(),
+      fetched({ signatureOk: false, peerRecord: disagreeingPeerRecord() }),
+      localRecordWithDigests()
     )
+    expect(state.kind).toBe('open_not_held')
   })
 
   it('BOUNCE REPRO (finding 1): idMatch true but signatureOk false is NOT CLOSED -- an id match proves nothing without a verified signature over the fetched bytes', () => {
@@ -219,9 +228,9 @@ describe('deriveRightCellState — the ONE gate: pushed and fetched halves take 
     expect(deriveRightCellState(pushedRow(unrecomputed)).kind).toBe('open_not_held')
   })
 
-  it('a pushed body whose id does not match its contents is not verified -> never CONTRADICTED', () => {
+  it('a pushed body that does not recompute to its capsule_id -> CONTRADICTED', () => {
     expect(deriveRightCellState(pushedRow({ ...fixtureTheirsCell('agrees'), id_match: false })).kind).toBe(
-      'open_not_held'
+      'contradicted'
     )
   })
 
@@ -238,10 +247,10 @@ describe('deriveRightCellState — the ONE gate: pushed and fetched halves take 
     expect(deriveRightCellState(pushedRow({ ...theirs, record, id_match: false })).kind).toBe('open_not_held')
   })
 
-  it('a FETCHED record whose id does not match its contents is not verified either: no verdict', () => {
+  it('a FETCHED half keeps its id-recompute contradiction (it came from the peer we asked)', () => {
     const peerRecord = fixtureHalfBody({ capsuleId: 'a'.repeat(64), servedBy: 'd'.repeat(64) })
     const state = deriveRightCellState(pushedRow(fixtureTheirsCell('agrees')), fetched({ idMatch: false, peerRecord }))
-    expect(state.kind).toBe('open_not_held')
+    expect(state.kind).toBe('contradicted')
   })
 
   describe('attack D: a swapped model never reads CLOSED', () => {
@@ -346,9 +355,7 @@ describe('deriveRightCellState — the ONE gate: pushed and fetched halves take 
 
   it('a live fetch this browser ran wins over the pushed evidence on the same row', () => {
     const row = pushedRow(fixtureTheirsCell('agrees'))
-    expect(
-      deriveRightCellState(row, fetched({ peerRecord: disagreeingPeerRecord() }), localRecordWithDigests()).kind
-    ).toBe('contradicted')
+    expect(deriveRightCellState(row, fetched({ idMatch: false }), localRecordWithDigests()).kind).toBe('contradicted')
   })
 })
 
@@ -374,7 +381,7 @@ describe('deriveRightCellState — bilateral-retention-decay-property (agent-act
     expect(state.kind).toBe('open_not_held')
   })
 
-  it('MUTANT: only a VERIFIED record that disagrees is CONTRADICTED — every "half unavailable" shape (not_fetched, fetching, not_found, error, a fetch whose id check could not run) and an id that does not match its contents must go red if it starts reading as CONTRADICTED', () => {
+  it('MUTANT: only an ACTUAL fetched-and-compared idMatch===false is CONTRADICTED — every other "half unavailable" shape (not_fetched, fetching, not_found, error, or a fetch whose own id-recompute could not run) must go red if it starts reading as CONTRADICTED', () => {
     const row = paneCRow()
     const unavailableShapes: PeerRecomputeState[] = [
       fetched({ status: 'not_fetched', idMatch: null, signatureOk: null, peerRecord: null }),
@@ -386,11 +393,12 @@ describe('deriveRightCellState — bilateral-retention-decay-property (agent-act
     for (const recompute of unavailableShapes) {
       expect(deriveRightCellState(row, recompute).kind).not.toBe('contradicted')
     }
-    // An id that does not match its contents is a record that isn't
-    // verified, not two signed records disagreeing.
-    expect(deriveRightCellState(row, fetched({ status: 'found', idMatch: false })).kind).not.toBe('contradicted')
-    // The shape that IS a real disagreement: a verified provider record
-    // whose digests differ from ours.
+    // The one and only shape that IS a real disagreement: a completed
+    // fetch whose recomputed id demonstrably does not match the peer's
+    // own claimed id -- the "both-present-disagreeing" case the property
+    // says MUST stay a contradiction, never downgraded to missing-half.
+    expect(deriveRightCellState(row, fetched({ status: 'found', idMatch: false })).kind).toBe('contradicted')
+    // And a verified provider record whose digests differ from ours.
     expect(
       deriveRightCellState(row, fetched({ peerRecord: disagreeingPeerRecord() }), localRecordWithDigests()).kind
     ).toBe('contradicted')
@@ -449,9 +457,7 @@ describe('deriveRightCellState — all eight states reachable', () => {
         localRecordWithDigests()
       ).kind
     )
-    reached.add(
-      deriveRightCellState(paneCRow(), fetched({ peerRecord: disagreeingPeerRecord() }), localRecordWithDigests()).kind
-    )
+    reached.add(deriveRightCellState(paneCRow(), fetched({ idMatch: false })).kind)
     reached.add(
       deriveRightCellState(
         paneCRow({ theirs: { state: 'absent', capsule_id: null, evidence_outcome: 'signed_refusal' } })
@@ -547,10 +553,9 @@ describe('rightCellDetail — Item 4: the fuller story behind each state, moved 
     expect(text).toContain('same request, answer and model weights')
   })
 
-  it('CONTRADICTED names every cause the gate contradicts on, and never an id mismatch (that is "not verified")', () => {
+  it('CONTRADICTED names every cause the gate contradicts on', () => {
     const text = rightCellDetail(stateOf('contradicted'))
-    expect(text).not.toMatch(/its own id/)
-    for (const cause of ['the request', 'the answer', 'the model', 'who served it']) {
+    for (const cause of ['the request', 'the answer', 'the model', 'who served it', 'doesn’t match its own id']) {
       expect(text).toContain(cause)
     }
   })

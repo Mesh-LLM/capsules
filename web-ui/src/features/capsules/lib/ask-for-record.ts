@@ -413,7 +413,9 @@ export type RowAsk = {
 
 export function settleRowAsk(previous: RowAsk | null | undefined, outcome: AskOutcome): RowAsk {
   const claim = outcome.kind === 'refused' || outcome.kind === 'no_record' ? outcome : (previous?.claim ?? null)
-  const record =
-    outcome.kind === 'record' && isVerifiedRecord(outcome.evidence) ? outcome : (previous?.record ?? null)
+  // A record that can give a verdict: verified, or one whose contents
+  // demonstrably don't produce its id (Disagree, `recordVerdict`).
+  const keeps = outcome.kind === 'record' && (isVerifiedRecord(outcome.evidence) || outcome.evidence.idMatch === false)
+  const record = keeps ? outcome : (previous?.record ?? null)
   return { latest: outcome, claim, record }
 }

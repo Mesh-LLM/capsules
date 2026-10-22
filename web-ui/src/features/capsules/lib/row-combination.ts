@@ -40,7 +40,7 @@ export function rowCombinationText(input: RowCombinationInput): string {
     case 'contradicted':
       return input.refusedAtTheDoor
         ? 'Their signed record says another server or another model handled your request, so your node refused it. Use Compare to see the difference.'
-        : `Your record checks out, and their signed record disagrees with it. Use Compare to see where.${witnessed}`
+        : `Your record checks out, and their signed record disagrees with it, or doesn’t match its own id. Use Compare to see where.${witnessed}`
     case 'open_not_held':
       return 'Your record is sealed and checks out; their record hasn’t arrived. It comes on its own only if their node sends records (off by default), so ask for it on this row.'
     case 'open_not_given':

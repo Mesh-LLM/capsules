@@ -69,14 +69,18 @@ export function paneOutcomeState(row: PaneCRow): RightCellState | null {
  *     record (`pushedHalfRecompute`: the held body, the door's signature
  *     verdict, and the `capsule_id` check done before the pane query
  *     resolved).
- * Only a VERIFIED record gives a verdict: its body produces its `capsule_id`
- * and its signature holds under the key this node has for the peer. CLOSED
- * also needs both `effect` digests equal to ours (§6.2/L-G) and the provider
- * check (`providerMatches`, provisional). CONTRADICTED: a verified provider
- * record whose digests differ from ours, or that names other model weights
- * than it served us under (`modelSwapped`). Anything else -- not checked yet,
- * unsigned, an id that doesn't match, a missing digest, a different or
- * unnamed provider -- stays OPEN (`open_not_held`): never a verdict we did
+ * A record whose body demonstrably does not produce its `capsule_id` is
+ * CONTRADICTED (the ratified bilateral-retention-decay-property: both
+ * present, disagreeing). Otherwise only a VERIFIED record gives a verdict:
+ * its body produces its `capsule_id` and its signature holds under the key
+ * this node has for the peer. CLOSED also needs both `effect` digests equal
+ * to ours (§6.2/L-G) and the provider check (`providerMatches`,
+ * provisional). CONTRADICTED: a verified provider record whose digests differ
+ * from ours, or that names other model weights than it served us under
+ * (`modelSwapped`). A PUSHED record from a node that did not serve the
+ * exchange is never CONTRADICTED (any peer can push). Anything else -- not
+ * checked yet, unsigned, a missing digest, a different or unnamed provider
+ * -- stays OPEN (`open_not_held`): never a verdict we did
  * not check. How this combines with asks and the pane's own claims is
  * `row-evidence.ts`.
  *
@@ -235,36 +239,55 @@ export function isVerifiedRecord(evidence: PeerRecomputeState): boolean {
  *  neither our request and answer nor different ones. */
 export type RecordVerdict =
   | { kind: 'closed' }
-  | { kind: 'contradicted' }
+  /** `altered`: its contents don't produce the id it claims. */
+  | { kind: 'contradicted'; why: 'altered' | 'differs' }
   | { kind: 'no_verdict'; why: 'not_verified' | 'other_provider' | 'other_exchange' }
 
-/** THE gate. Only a verified record (`isVerifiedRecord`) gives a verdict.
- *  CLOSED iff it came from the provider (`providerMatches`) and both digests
- *  equal ours; CONTRADICTED iff it came from the provider and its digests
- *  differ from ours, or it names other model weights (`modelSwapped`). A
- *  record whose id doesn't match its contents is never CONTRADICTED: unsigned
- *  or not, it is not a signed record that disagrees with ours. */
+/** Where a record of theirs came from. Any peer can push one, so a pushed
+ *  record from a node that didn't serve the exchange says nothing about it;
+ *  a fetched or asked one came from the node this browser asked. */
+export type RecordSource = 'fetched' | 'pushed' | 'asked'
+
+/** THE gate.
+ *  - A completed check showing the record's contents don't produce the id it
+ *    claims is CONTRADICTED (`altered`): the other side handed over an
+ *    altered record, the "both present, disagreeing" case of the ratified
+ *    bilateral-retention-decay-property (agent-action-capsule @7f8a78d8).
+ *    A pushed record from a node that didn't serve the exchange is the one
+ *    exception: anyone can push, so it says nothing.
+ *  - Otherwise only a verified record (`isVerifiedRecord`: id matches, and
+ *    the signature holds under the key this node has for them) gives a
+ *    verdict. CLOSED iff it came from the provider (`providerMatches`) and
+ *    both digests equal ours; CONTRADICTED (`differs`) iff it came from the
+ *    provider and its digests differ from ours, or it names other model
+ *    weights (`modelSwapped`).
+ *  - An id check that didn't run, or a bad signature over a matching id, is
+ *    no verdict. */
 export function recordVerdict(
   evidence: PeerRecomputeState,
-  localRecord: CapsuleRecord | null | undefined
+  localRecord: CapsuleRecord | null | undefined,
+  source: RecordSource
 ): RecordVerdict {
+  if (evidence.idMatch === null) return { kind: 'no_verdict', why: 'not_verified' }
+  const fromProvider = providerMatches(localRecord, evidence.peerRecord)
+  if (source === 'pushed' && !fromProvider) return { kind: 'no_verdict', why: 'other_provider' }
+  if (evidence.idMatch === false) return { kind: 'contradicted', why: 'altered' }
   if (!isVerifiedRecord(evidence)) return { kind: 'no_verdict', why: 'not_verified' }
-  // Any peer can push or answer with a record. One from a node that did not
-  // serve this exchange says nothing about it.
-  if (!providerMatches(localRecord, evidence.peerRecord)) return { kind: 'no_verdict', why: 'other_provider' }
-  if (digestsDisagree(localRecord, evidence.peerRecord)) return { kind: 'contradicted' }
+  if (!fromProvider) return { kind: 'no_verdict', why: 'other_provider' }
+  if (digestsDisagree(localRecord, evidence.peerRecord)) return { kind: 'contradicted', why: 'differs' }
   // Matching digests prove the two sides saw the same bytes, not which model
   // made them: a provider record naming other weights is never CLOSED.
-  if (modelSwapped(localRecord, evidence.peerRecord)) return { kind: 'contradicted' }
+  if (modelSwapped(localRecord, evidence.peerRecord)) return { kind: 'contradicted', why: 'differs' }
   if (digestsCiteOurHalf(localRecord, evidence.peerRecord)) return { kind: 'closed' }
   return { kind: 'no_verdict', why: 'other_exchange' }
 }
 
 function counterpartyHalfState(
   evidence: PeerRecomputeState,
-  localRecord: CapsuleRecord | null | undefined
+  localRecord: CapsuleRecord | null | undefined,
+  source: RecordSource
 ): RightCellStateKind {
-  const verdict = recordVerdict(evidence, localRecord)
+  const verdict = recordVerdict(evidence, localRecord, source)
   return verdict.kind === 'no_verdict' ? 'open_not_held' : verdict.kind
 }
 
@@ -286,7 +309,7 @@ export function stateFromFetchedHalf(
   evidence: PeerRecomputeState,
   localRecord: CapsuleRecord | null | undefined
 ): RightCellState {
-  return { kind: counterpartyHalfState(evidence, localRecord), date: null }
+  return { kind: counterpartyHalfState(evidence, localRecord, 'fetched'), date: null }
 }
 
 export function deriveRightCellState(
@@ -319,7 +342,7 @@ export function deriveRightCellState(
   const evidence = fetchedHalf ?? pushedHalfRecompute(row)
   if (evidence) {
     const ours = localRecord ?? (row.mine.record as CapsuleRecord | undefined) ?? null
-    return { kind: counterpartyHalfState(evidence, ours), date: null }
+    return { kind: counterpartyHalfState(evidence, ours, fetchedHalf ? 'fetched' : 'pushed'), date: null }
   }
 
   // No confirmed fetch yet. A peer id is "known but not fetched" (fetchable)

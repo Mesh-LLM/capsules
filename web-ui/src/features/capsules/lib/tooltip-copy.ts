@@ -134,7 +134,7 @@ export const ROW_STATE_TOOLTIPS = {
   closed:
     'They sent their own signed record of this exchange, from the node that served you, and it checks out on this machine. It names the same request, answer and model weights as yours.',
   contradicted:
-    'You both have signed records of this exchange and they disagree: the request, the answer, the model or who served it differs. Use Compare to see where.',
+    'You both have signed records of this exchange and they disagree: the request, the answer, the model or who served it differs, or their record doesn’t match its own id. Use Compare to see where.',
   open_refused:
     'They declined to share their record and signed the refusal. The refusal is the evidence; nothing of theirs is compared.',
   open_absent:
@@ -186,7 +186,7 @@ export const ENTRY_CHIP_RESULT_TOOLTIPS = {
   },
   theirs: {
     '✓': 'Confirmed: their own signed record, from the node that served you, names the same request, answer and model weights as yours.',
-    '✗': 'Their signed record disagrees with yours. The state on the right says more.',
+    '✗': 'Their signed record disagrees with yours, or doesn’t match its own id. The state on the right says more.',
     '–': 'No confirmed record from them yet; the state on the right says why.'
   }
 } as const
@@ -253,7 +253,7 @@ export const INTEGRITY_TILE_TOOLTIPS = {
     'How many of your checkpoints a witness you don’t run is holding. Off by your choice until you turn one on.',
   confirmedByOtherSide: 'Exchanges the other side confirmed with their own signed record, checked on this machine.',
   contradicted:
-    'Exchanges where your record and their signed record disagree: a different request, answer, model or server.'
+    'Exchanges where your record and theirs disagree: a different request, answer, model or server, or their record not matching its own id.'
 } as const
 
 /** The Exchanges header's one setup button: it opens Integrity and does

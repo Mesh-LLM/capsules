@@ -24,7 +24,7 @@ describe('rowCombinationText -- what the badge and the chips say together', () =
 
   it('disagreement: refused at the door names another server or model (A6); otherwise the record disagrees (A4/A5)', () => {
     expect(rowCombinationText(input({ state: 'contradicted', refusedAtTheDoor: true }))).toMatch(/another server or another model/)
-    expect(rowCombinationText(input({ state: 'contradicted' }))).toMatch(/their signed record disagrees with it\. Use Compare/)
+    expect(rowCombinationText(input({ state: 'contradicted' }))).toMatch(/disagrees with it, or doesn’t match its own id/)
   })
 
   it('not arrived: never "normally arrives" (record push is off by default); points to the ask the row offers', () => {
