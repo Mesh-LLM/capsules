@@ -24,7 +24,7 @@ or for the rest of its Standard History (`share_standard_history`). The
 referee (`adjudicate_differing_twins`) is off by default too.
 
 `share_history_segments` also accepts `prospective`, its default before
-0.1.6. It is deprecated: it always served exactly whom `counterparties`
+0.1.5. It is deprecated: it always served exactly whom `counterparties`
 serves, so it is now read as `counterparties`, and a log line says so. Set
 `counterparties` instead.
 
@@ -216,7 +216,7 @@ nodes sending the same request in the same second get the same bytes back;
 two refusals differ only in the digest of the request each refuses (which
 covers every member each carries), the time, and the signature over them.
 
-With it on (`on`), every node that asks is answered, as before 0.1.6. It
+With it on (`on`), every node that asks is answered, as before 0.1.5. It
 never releases a record: record bodies stay under `share_history_segments`.
 
 **A counterparty is the node a signed request proves it is**, as above.

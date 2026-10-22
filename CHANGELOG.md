@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.1.5
+
+**Milestone M1: who asks for evidence is proven, and a node gets back the record of the exchange it
+asked for** (PRD-SERVICE-EVIDENCE §6, R-7 to R-14). **Upgrade both nodes.** Evidence answers are now
+the interop profile's signed envelope, which a node on 0.1.4 cannot read, and anchor pins taken from
+0.1.4 no longer reproduce. A node on 0.1.4 also sends unsigned requests, which this version refuses
+for records and Standard History under the default settings.
 
 ### Changed
 
@@ -21,6 +27,22 @@
   at once from anyone else (unsigned, or signed by a key no host binds). Each group has its own
   pool, so a full stranger pool declines only strangers, with the same signed `policy_declined`
   as before.
+
+- **A record of an exchange this node served for a peer now names the peer that asked, so that peer
+  gets its record back. Operators on `share_history_segments = peers`: your records now show which
+  node asked.** mesh-llm reports the node that asked for a host-served exchange
+  (`requested_by_node_id`, from the mesh connection, never from the request), but the plugin
+  sealed `requesting_party: "unknown"`, so under the default `counterparties` no node could get the
+  record of an exchange it asked for.
+  - **Now, under the default settings,** the node that asked is that record's counterparty: it gets
+    the record (by evidence request or ledger fetch), and it counts as a counterparty for Standard
+    History (checkpoints, `history_card/1`, `served_summary/1`).
+  - **Behaviour change under `peers`,** which already serves records to any peer: those records now
+    also say which node asked. Nothing named the asker before, so this changes what a node on
+    `peers` shares without any setting changing.
+  - A node that signs for itself while stating another node's id is still refused `not_authorized`
+    before anything is looked up. A record of an exchange this node asked for, one that reached its
+    local API, or one from a host that does not report the field still names `"unknown"`.
 
 - **An evidence answer is now the interop profile's signed envelope. Upgrade both nodes.** The
   protocol crate is `evidence-request` `=0.2.0` (what `capsule-emit-evidence-request` became when it
@@ -91,7 +113,7 @@
     and `share_standard_history = on` for Standard History. Under them, a valid signature under a
     key no host announced is answered as an unsigned request, and nothing more. Any other failed
     check is still refused.
-  - **A node on 0.1.5 or older sends unsigned requests,** so after you upgrade, its requests for
+  - **A node on 0.1.4 or older sends unsigned requests,** so after you upgrade, its requests for
     your records or Standard History are refused until it upgrades too.
   - **A node signs only once its host has taken its key.** On a host without `plugin_keys.v1` its
     requests go out unsigned, so an upgraded node with the default settings no longer answers it
@@ -112,7 +134,7 @@
   fetch, and the node answering checks it before it looks the record up. Unless records go to
   any peer (`peers`), a record goes only to the node the signature proves, never to the id the
   fetch states. Under the default
-  `share_history_segments` an unsigned fetch, from a node on 0.1.5 or older, is now refused
+  `share_history_segments` an unsigned fetch, from a node on 0.1.4 or older, is now refused
   `not_authorized`; under `peers` it is answered as before. With sharing `off`, a fetch is refused
   before the lookup, so the refusal no longer shows whether the record exists.
 - **A referee checks the signature on an `adjudicate` request** before it reads anything. A
@@ -130,7 +152,7 @@
   `history_card/1` and `served_summary/1` now go only to a counterparty (a node one of its records
   names as the other side of an exchange). Every other node gets a signed `policy_declined` that
   carries nothing about the asker: it is signed over the request's digest, the reason and the
-  time, so the same request gets the same refusal whoever sends it. Before 0.1.6 any node could
+  time, so the same request gets the same refusal whoever sends it. Before 0.1.5 any node could
   read them. **After upgrading, a node you have never exchanged with can no longer read your
   checkpoints, history card or served summary** until you set the new `share_standard_history`
   switch to `on` (console: Sharing policy › Standard history; or

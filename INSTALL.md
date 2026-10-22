@@ -7,6 +7,24 @@ each exchange, and whether this node's log still verifies. It installs and
 runs on an unmodified mesh-llm release (0.77 or newer). No other runtime is
 needed.
 
+## What's new in 0.1.5
+
+**Upgrade both nodes:** a node on 0.1.4 cannot read this version's evidence answers, and this
+version refuses its unsigned requests for records and Standard History.
+
+- **Who asks for evidence is proven, not stated.** Each request is signed with the key mesh-llm
+  announces for the node, and a node that claims to be another is refused before anything is looked
+  up.
+- **A node gets back the record of the exchange it asked for,** and counts as that record's
+  counterparty. On `share_history_segments = peers`, records now also show which node asked.
+- **Evidence answers are the interop profile's signed envelope** (`evidence-request` 0.2.0), the
+  same envelope the Go, Python and evidencebook implementations sign.
+- **Standard History goes only to counterparties by default** (`share_standard_history`).
+- **Exchange corroboration,** off by default (`share_exchange_corroboration`): another node can ask
+  whether this node holds a half of one earlier exchange.
+
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGELOG.md).
+
 ## What's new in 0.1.4
 
 - **Paid exchanges on the Evidence page:** what each one charged and who paid, from the records
@@ -116,7 +134,7 @@ glibc 2.35 or newer (x86_64 or arm64).
 and set `VERSION` to the release (without the leading `v`):
 
 ```bash
-VERSION=0.1.4
+VERSION=0.1.5
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  TARGET=aarch64-apple-darwin ;;
   Linux-x86_64)  TARGET=x86_64-unknown-linux-gnu ;;
