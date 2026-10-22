@@ -25,6 +25,7 @@ import { buildChecksRows } from '@/features/capsules/lib/security-checks-view'
 import { theirContentText, yourContentFixedText } from '@/features/capsules/lib/exchange-content-state'
 import { isServedForPay, type ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
 import {
+  NOT_ON_MESH,
   askTarget,
   otherSideNodeId,
   rowAskControls,
@@ -67,10 +68,13 @@ import { useClipboardCopy } from '@/lib/useClipboardCopy'
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import { RowVerdictLine } from '@/features/capsules/components/RowVerdictLine'
 import { rowCombinationText } from '@/features/capsules/lib/row-combination'
+import { NO_PEER_NAMES, peerName as namePeer, resolveRowPeer } from '@/features/capsules/lib/peer-names'
+import { rowSteps, rowVerdictText, type RowStep } from '@/features/capsules/lib/row-verdict'
 import {
-  CLOSED_FROM_FETCH_NOT_SAVED,
+  CONFIRMED_NOT_KEPT,
   LOCAL_ONLY_TOOLTIP,
   OWN_RECORD_FAILS_WARNING,
+  SAVED_BECAUSE_YOU_ASKED,
   SERVED_FOR_PAY_NO_PAYER_TOOLTIP
 } from '@/features/capsules/lib/tooltip-copy'
 
@@ -142,6 +146,36 @@ function AskButton({ control, onAsk, census }: { control: RowAskControl; onAsk: 
       <span className="inline-flex">{button}</span>
     </HoverChip>
   )
+}
+
+/** `Sealed → In a checkpoint → Confirmed by them`: the row's progress in
+ *  three plain steps, a step not reached greyed. The per-check chips live in
+ *  "How we checked". */
+function RowSteps({ steps }: { steps: readonly RowStep[] }) {
+  return (
+    <ol aria-label="steps" className="flex flex-wrap items-center gap-1.5 text-xs" data-row-steps="true">
+      {steps.map((step, index) => (
+        <li
+          className={cn('inline-flex items-center gap-1.5', step.reached ? 'text-foreground' : 'text-fg-faint')}
+          data-reached={step.reached ? 'true' : 'false'}
+          data-step={step.key}
+          key={step.key}
+        >
+          {index > 0 ? (
+            <span aria-hidden="true" className="text-fg-faint">
+              →
+            </span>
+          ) : null}
+          <span>{step.label}</span>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+/** A whole sentence: a note that ends without a stop gets one. */
+function sentence(text: string): string {
+  return /[.!?]$/.test(text) ? text : `${text}.`
 }
 
 /** A short/copyable identifier (design §3A) -- `role="link"`, not `button`, for the same reason
@@ -221,7 +255,17 @@ export type ExchangeStreamRowProps = {
   historyOutcome?: HistoryOutcome | null
   /** Sends the history ask to the other side's node. Absent as above. */
   onAskForHistory?: (row: ExchangeLedgerRow, peerId: string) => void
+  /** How the page names a peer (`peer-names.ts` `usePeerNames`): hostname,
+   *  then short id. Defaults to the short id alone. */
+  peerName?: (id: string) => string
+  /** No witness is set on this node: no "witnessed" chip in the checks. */
+  witnessOff?: boolean
+  /** The node Pane B joins to this row's `key:` counterparty
+   *  (`identity.node_id`), when it knows one (`resolveRowPeer`). */
+  counterpartyNodeId?: string | null
 }
+
+const shortIdOnly = (id: string) => namePeer(id, NO_PEER_NAMES)
 
 export function ExchangeStreamRow({
   row,
@@ -239,7 +283,10 @@ export function ExchangeStreamRow({
   askOutcome = null,
   onAskForRecord,
   historyOutcome = null,
-  onAskForHistory
+  onAskForHistory,
+  peerName = shortIdOnly,
+  witnessOff = false,
+  counterpartyNodeId = null
 }: ExchangeStreamRowProps) {
   // Lifted here (not `SecurityChecksView`, which only mounts once `▸
   // checks` is expanded) so a fetch this hook's `.fetch()` triggers can
@@ -282,6 +329,41 @@ export function ExchangeStreamRow({
   const gatedText =
     row.roleTag !== 'SERVED' ? OTHER_SIDE_NOT_KNOWN_TEXT : servedForPay ? PAYER_NOT_RECORDED_TEXT : NO_OTHER_SIDE_TEXT
   const cellText = gatedByCounterparty ? gatedText : rightCellText(state)
+  // The face says the verdict in plain words, naming the other node; the
+  // longer sentences (the state's own, and what an ask returned and how it
+  // was checked) move behind its (i).
+  // One node, named once: the event line and the verdict say the same.
+  const otherSide = resolveRowPeer({
+    askPeer,
+    counterparty: row.counterparty,
+    receivedFrom: row.raw.theirs.received_from ?? null,
+    keyNodeId: counterpartyNodeId
+  })
+  const otherSideName = otherSide ? peerName(otherSide) : null
+  // An ask that couldn't reach the node (it left the mesh) is said on the
+  // face, not only behind the (i).
+  const latestAsk = askOutcome?.latest ?? null
+  const notOnMesh = latestAsk?.kind === 'no_reply' && latestAsk.plain === true && latestAsk.detail === NOT_ON_MESH
+  const faceText = gatedByCounterparty
+    ? gatedText
+    : rowVerdictText(state, otherSideName, notOnMesh)
+  // A confirmation from the record the node holds because this node asked
+  // for it (the pane's `via: "ask"`; a pushed one is `"push"`) says so.
+  // One the ask brought but the plugin couldn't save says that instead.
+  const savedByAsk = judged.confirmedUnsaved
+    ? CONFIRMED_NOT_KEPT
+    : state.kind === 'closed' && row.raw.theirs.via === 'ask'
+      ? SAVED_BECAUSE_YOU_ASKED
+      : null
+  // Nothing the face already says is repeated behind the (i).
+  // Their signed refusal, when an ask brought it, says the decline with its
+  // time and reason; the state's own "They declined…" would say it twice.
+  const refusalFromAsk = state.kind === 'open_refused' && askNote !== null
+  const verdictDetail = [refusalFromAsk ? null : cellText, savedByAsk, askNote ? askNote.text : null, retryNote]
+    .filter((text): text is string => text !== null)
+    .map(sentence)
+    .filter((text) => text !== sentence(faceText))
+    .join(' ')
   // The row's two asks, always on the row face: record push is off by
   // default, so asking is how their record (or their history) gets here. Each
   // is live as soon as our record names the other side's node, and otherwise
@@ -310,9 +392,6 @@ export function ExchangeStreamRow({
     checkpointCovered,
     ownerLinked
   })
-  // Confirmed from a record this page fetched, not one the node holds: say
-  // it isn't saved, so a reload reopening the row is never a surprise.
-  const closedFromFetch = state.kind === 'closed' && (judged.source === 'asked' || judged.source === 'fetched')
   // Your own copy failed "words match" or "signed". Whatever
   // the badge says (Confirmed included), the row says so.
   const ownRecordFails = entryRowChipMark(checksRows, 'content') === '✗' || entryRowChipMark(checksRows, 'sig') === '✗'
@@ -333,7 +412,12 @@ export function ExchangeStreamRow({
       registered: entryRowChipMark(checksRows, 'registered')
     },
     refusedAtTheDoor: row.raw.theirs.evidence_outcome === 'claims_refused',
-    askPeer: askPeer ? shortId(askPeer) : null
+    askPeer: askPeer ? otherSideName : null
+  })
+  const steps = rowSteps({
+    sealed: row.raw.mine.state !== 'absent',
+    inCheckpoint: ['✓', '◐'].includes(entryRowChipMark(checksRows, 'inclusion', checkpointCovered)),
+    confirmed: state.kind === 'closed'
   })
   // UX §3 "Left: the event in words" -- role, peer, model, tokens, duration,
   // all read from this row's own record (the fetched `localRecord`, else the
@@ -431,8 +515,10 @@ export function ExchangeStreamRow({
                reader gets "You asked key:… · model · 46 → 2 tokens". */}
             <p className="text-xs text-foreground" data-event-line="true">
               <span className="font-medium">{roleText(row.roleTag)}</span>{' '}
-              {row.counterparty ? (
-                <span className="font-mono">{row.counterparty}</span>
+              {otherSide ? (
+                <span className="font-mono" title={otherSide}>
+                  {otherSideName}
+                </span>
               ) : (
                 <span className="text-fg-dim">other side not recorded</span>
               )}
@@ -489,28 +575,19 @@ export function ExchangeStreamRow({
                 />
               </span>
             </div>
-            <p className="text-xs text-foreground" data-right-cell-text="true">
-              {cellText}
+            <p className="inline-flex flex-wrap items-center gap-1 text-xs text-foreground" data-right-cell-text="true">
+              <span data-row-verdict-text="true">{faceText}</span>
+              {verdictDetail ? (
+                <span
+                  className="inline-flex"
+                  data-ask-reply-verified={askNote ? (askNote.verified ? 'true' : 'false') : undefined}
+                  data-ask-retry={retryNote ? 'true' : undefined}
+                  data-verdict-detail="true"
+                >
+                  <InfoHover census="row:verdict_detail" describes="this verdict" label={verdictDetail} side="left" />
+                </span>
+              ) : null}
             </p>
-            {askNote ? (
-              <p
-                className={cn('text-xs', askNote.verified ? 'text-foreground' : 'text-fg-dim')}
-                data-ask-reply-verified={askNote.verified ? 'true' : 'false'}
-                role="note"
-              >
-                {askNote.text}
-              </p>
-            ) : null}
-            {retryNote ? (
-              <p className="text-xs text-fg-dim" data-ask-retry="true" role="note">
-                {retryNote}
-              </p>
-            ) : null}
-            {closedFromFetch ? (
-              <p className="text-xs text-fg-dim" data-closed-from-fetch="true" role="note">
-                {CLOSED_FROM_FETCH_NOT_SAVED}
-              </p>
-            ) : null}
             {ownRecordFails ? (
               <p className="text-xs text-bad" data-own-record-fails="true" role="note">
                 {OWN_RECORD_FAILS_WARNING}
@@ -523,6 +600,18 @@ export function ExchangeStreamRow({
                 role="note"
               >
                 {historyLine.text}
+                {historyLine.checkedLine ? (
+                  <span className="text-fg-faint" data-history-checked="true">
+                    {' '}
+                    · {historyLine.checkedLine}
+                  </span>
+                ) : null}
+                {historyLine.detail ? (
+                  <>
+                    {' '}
+                    <InfoHover census="row:history_detail" describes="their history" label={historyLine.detail} side="left" />
+                  </>
+                ) : null}
               </p>
             ) : null}
             <div className="flex flex-wrap items-center gap-1.5" data-row-asks="true">
@@ -556,11 +645,7 @@ export function ExchangeStreamRow({
             </div>
           </div>
         </div>
-        <ExchangeRowChips
-          checkpointCovered={checkpointCovered}
-          checks={checksRows}
-          onChipActivate={handleChipActivate}
-        />
+        <RowSteps steps={steps} />
         {row.raw.split ? <StageStrip split={row.raw.split} /> : null}
         {/* Payments sit beside the inference state, never inside it: CLOSED
            is about the two records of the exchange; settlement is this
@@ -616,6 +701,15 @@ export function ExchangeStreamRow({
               <p className="text-xs text-fg-dim">{theirContentText(row.contentToggleState.their)}</p>
             </div>
           </div>
+        ) : null}
+        {checksExpanded ? (
+          // The per-check chips: each a link to its check below.
+          <ExchangeRowChips
+            checkpointCovered={checkpointCovered}
+            checks={checksRows}
+            onChipActivate={handleChipActivate}
+            witnessOff={witnessOff}
+          />
         ) : null}
         {checksExpanded ? (
           // UX §3: the engineer's facts lead the expansion -- the CLOSED

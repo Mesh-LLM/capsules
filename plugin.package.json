@@ -19,7 +19,7 @@
         "apply_mode": "static_on_load",
         "restart_scope": "none",
         "visibility": "user",
-        "description": "Push this node's own sealed record of a completed exchange to the counterparty (counterparty), or don't (off, the default). With checkpointing on, the push also carries a signed checkpoint of this node's log and the record's inclusion proof -- the checkpoint reveals the log's total size (records across all peers) and its time, never any other record's content. Symmetric: a node with this off also does not receive the other side's push -- fetch-on-request still works either way.",
+        "description": "Push this node's own sealed record of a completed exchange to the counterparty (counterparty), or don't (off, the default). With checkpointing on, the push also carries a signed checkpoint of this node's log and the record's inclusion proof -- the checkpoint reveals the log's total size (records across all peers) and its time, never any other record's content. Symmetric: a node with this off also does not receive the other side's push. It governs pushes only: a record you ask the other side for is checked and held either way.",
         "presentation": {
           "label": "Record at completion",
           "category_id": "share",

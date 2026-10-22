@@ -51,7 +51,7 @@ import type { Peer } from '@/features/app-tabs/types'
 // the Columns dropdown -- never "Period"/"Window" (bookkeeping vocabulary).
 const COLUMN_LABELS: Record<PeerTableColumnKey, string> = {
   exchanges: 'Exchanges',
-  confirmed: 'They confirmed',
+  confirmed: 'Saved as confirmed',
   match: 'Same request & answer',
   adjudication: 'Disputes judged',
   witness: 'Their records witnessed',
@@ -79,10 +79,12 @@ function alarmValue(view: PeerTableRowView): AlarmFilterValue {
   return view.alarm.present ? 'has_alarm' : 'clean'
 }
 
-function matchesSearch(view: PeerTableRowView, query: string): boolean {
+function matchesSearch(view: PeerTableRowView, query: string, name: string): boolean {
   if (!query) return true
-  return view.displayId.toLowerCase().includes(query)
+  return view.displayId.toLowerCase().includes(query) || name.toLowerCase().includes(query)
 }
+
+const asGiven = (id: string) => id
 
 function GroupHeaderRow({
   label,
@@ -118,6 +120,9 @@ export type LedgerPeersTableProps = {
   /** Nodes that ran part of a request this node sent to a split's
    *  coordinator: a third group, never merged with the other two. */
   throughSplit?: readonly SplitPeer[]
+  /** How the page names a peer (`peer-names.ts` `usePeerNames`). Defaults to
+   *  the id as given. */
+  peerName?: (id: string) => string
 }
 
 export function LedgerPeersTable({
@@ -128,7 +133,8 @@ export function LedgerPeersTable({
   meshStatus,
   exchangeSourcesFor,
   recordsById,
-  throughSplit = []
+  throughSplit = [],
+  peerName = asGiven
 }: LedgerPeersTableProps) {
   const [search, setSearch] = useState('')
   const [alarmFilter, setAlarmFilter] = useState<Set<string>>(new Set(ALL_ALARM_VALUES))
@@ -138,21 +144,24 @@ export function LedgerPeersTable({
   const allRows = useMemo(() => [...dealtWith, ...advertisedUnused], [dealtWith, advertisedUnused])
 
   function passesFilters(view: PeerTableRowView): boolean {
-    return alarmFilter.has(alarmValue(view)) && matchesSearch(view, trimmedSearch)
+    return alarmFilter.has(alarmValue(view)) && matchesSearch(view, trimmedSearch, peerName(view.displayId))
   }
 
   const visibleDealtWith = useMemo(
     () => dealtWith.filter(passesFilters),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `passesFilters` closes over the same two state values already listed
-    [dealtWith, alarmFilter, trimmedSearch]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `passesFilters` closes over the state values and the namer already listed
+    [dealtWith, alarmFilter, trimmedSearch, peerName]
   )
   const visibleAdvertised = useMemo(
     () => advertisedUnused.filter(passesFilters),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `passesFilters` closes over the same two state values already listed
-    [advertisedUnused, alarmFilter, trimmedSearch]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `passesFilters` closes over the state values and the namer already listed
+    [advertisedUnused, alarmFilter, trimmedSearch, peerName]
   )
   const visibleRows = useMemo(() => [...visibleDealtWith, ...visibleAdvertised], [visibleDealtWith, visibleAdvertised])
-  const visibleThroughSplit = throughSplit.filter((peer) => peer.nodeId.toLowerCase().includes(trimmedSearch))
+  const visibleThroughSplit = throughSplit.filter(
+    (peer) =>
+      peer.nodeId.toLowerCase().includes(trimmedSearch) || peerName(peer.nodeId).toLowerCase().includes(trimmedSearch)
+  )
 
   const alarmOptions: FilterValueOption[] = ALL_ALARM_VALUES.map((value) => ({
     value,
@@ -331,6 +340,7 @@ export function LedgerPeersTable({
                 exchangeSources={exchangeSourcesFor(view.displayId)}
                 key={view.key}
                 meshStatus={meshStatus.statusFor(view.displayId)}
+                name={peerName(view.displayId)}
                 recordsById={recordsById}
                 view={view}
                 visibleColumns={visibleColumns}
@@ -356,6 +366,7 @@ export function LedgerPeersTable({
               <PeerTableRow
                 key={view.key}
                 meshStatus={meshStatus.statusFor(view.displayId)}
+                name={peerName(view.displayId)}
                 view={view}
                 visibleColumns={visibleColumns}
               />
@@ -373,7 +384,7 @@ export function LedgerPeersTable({
               <TableRow className="border-border-soft" key={peer.nodeId}>
                 <TableCell className="font-mono text-xs text-foreground" colSpan={columnCount}>
                   <span className="inline-flex items-center gap-2">
-                    {peer.nodeId}
+                    <span title={peer.nodeId}>{peerName(peer.nodeId)}</span>
                     <span className="text-fg-dim">
                       the coordinator says it ran part of {peer.splits} request{peer.splits === 1 ? '' : 's'} you sent it
                     </span>

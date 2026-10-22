@@ -84,8 +84,9 @@ ledger directory (padding left out of every count), `src/ledger_fetch_bridge.rs`
 ## Console routes the page still reads
 
 Two reads are the console's own data, not the plugin's:
-`GET /api/status` (the owner link, and the peer list for the Peers tab's
-"advertised" column) and `GET /api/models`. The page reads them with a
+`GET /api/status` (the owner link, the peer list for the Peers tab's
+"advertised" column, and each peer's hostname, which the page shows before
+its short id: `lib/peer-names.ts`) and `GET /api/models`. The page reads them with a
 same-origin `fetch`, because the page is served from the console's origin.
 They are public console routes, but a plugin page has no contract for them.
 The console could withdraw or reshape them without notice, and they are

@@ -8,7 +8,7 @@ describe('dealingsLines -- the drill says what the Peers row says', () => {
   it('your dealings: counts with their denominators, disputes said as none when none were judged', () => {
     const [clean, alarmed] = HARNESS_PANE_B_PAYLOAD.rows
     expect(dealingsLines(clean)).toEqual([
-      '24 exchanges with you · they confirmed 16 of 24',
+      '24 exchanges with you · 16 of 24 saved as confirmed',
       'Same request & answer: 16 · 0 differ',
       'Disputes judged: 8 of 24 · 8 corroborated'
     ])
@@ -34,7 +34,7 @@ describe('dealingsLines -- the drill says what the Peers row says', () => {
       ]
     }
     expect(dealingsLines(row).slice(0, 2)).toEqual([
-      '3 exchanges with you · they confirmed 0 of 3',
+      '3 exchanges with you · 0 of 3 saved as confirmed',
       'Same request & answer: 0 · 1 differ'
     ])
   })

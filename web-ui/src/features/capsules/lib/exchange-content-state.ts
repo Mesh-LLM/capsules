@@ -100,7 +100,7 @@ export function theirContentText(state: TheirContentState): string {
       // With push the default, "not asked" is no longer why the comparison
       // didn't happen -- nothing arrived or we didn't fetch. "Not compared"
       // is true under both; the row state (OPEN · not held) already says why.
-      return 'Not compared. They would be expected to hold none.'
+      return 'Not compared: they aren’t expected to keep the text of what was said.'
     case 'unanswered':
       return `Asked ${dateOrFallback(state.date)}. No reply yet.`
     case 'signed_refusal':

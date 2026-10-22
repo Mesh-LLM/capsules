@@ -11,7 +11,7 @@ const CSV_COLUMNS = [
   'Peer',
   'Group',
   'Exchanges',
-  'They confirmed',
+  'Saved as confirmed',
   'Same request & answer',
   'Disputes judged',
   'Their records witnessed',

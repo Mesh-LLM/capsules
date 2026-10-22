@@ -59,7 +59,11 @@ proof is hashes only. With both records exchanged, each side holds the other's
 signed statement about the same exchange.
 
 **Symmetric by default:** a node with this switch `off` neither sends its
-record nor accepts the other side's.
+record nor accepts the other side's push.
+
+**Pushes only:** a record this node asks the other side for ("Ask them for
+their record" on the Evidence page) is checked the same way and held either
+way, because its operator asked for it. Its provenance says `via: "ask"`.
 
 **In this build:** the plugin sends its record when an exchange ends and
 mesh-llm has told it who the other side is. A pushed record is received and

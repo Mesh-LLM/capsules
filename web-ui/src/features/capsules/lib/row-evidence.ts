@@ -42,7 +42,13 @@
 // row is talking about.
 import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
 import type { CapsuleRecord } from '@/features/capsules/api/types'
-import { askReplyNote, recordProblems, type AskOutcome, type RowAsk } from '@/features/capsules/lib/ask-for-record'
+import {
+  askReplyNote,
+  recordProblems,
+  recordRefusalWords,
+  type AskOutcome,
+  type RowAsk
+} from '@/features/capsules/lib/ask-for-record'
 import {
   deriveRightCellState,
   fullTimeInstant,
@@ -68,6 +74,9 @@ export type RowJudgement = {
   askNote: { verified: boolean; text: string } | null
   /** The latest ask, when the row shows something else verified. */
   retryNote: string | null
+  /** Confirmed from a record an ask brought that the plugin couldn't save
+   *  on this node: a reload won't keep the confirmation. */
+  confirmedUnsaved: boolean
 }
 
 type RecordCandidate = {
@@ -95,11 +104,14 @@ function attemptText(outcome: AskOutcome, verdict: RecordVerdict | null): string
     case 'asking':
       return null
     case 'no_reply':
-      return `no verified reply (${outcome.detail})`
+      // A tool failure is already a whole plain sentence: said as a clause.
+      return outcome.plain
+        ? `${outcome.detail.charAt(0).toLowerCase()}${outcome.detail.slice(1).replace(/\.$/, '')}`
+        : `no verified reply (${outcome.detail})`
     case 'ambiguous':
       return `their reply carried ${outcome.count} records that could be theirs; none is shown as theirs`
     case 'refused':
-      return 'they declined, and signed the refusal'
+      return `they declined (${recordRefusalWords(outcome.reason)}), and signed the refusal`
     case 'no_record':
       return 'they say they have no record of this, signed'
     case 'record': {
@@ -222,6 +234,8 @@ export function judgeRow(
     evidence: evidenceRecord?.evidence ?? null,
     source: evidenceRecord?.source ?? null,
     askNote,
-    retryNote
+    retryNote,
+    confirmedUnsaved:
+      state.kind === 'closed' && shown?.source === 'asked' && shown.outcome?.kind === 'record' && shown.outcome.saved === false
   }
 }

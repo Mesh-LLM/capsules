@@ -173,11 +173,25 @@ pub fn torn_lines_skipped() -> u64 {
 /// `{"status": "received"}`, the same with the verified `inclusion` facts for
 /// a bundle, or a signed refusal. Never panics on any body; an `Err` is a
 /// local write that failed, and the caller must not acknowledge the push.
+#[cfg(test)]
 pub fn receive(
     node: &Receiver<'_>,
     body: &[u8],
     sender: Option<&str>,
     now: &str,
+) -> std::io::Result<Value> {
+    receive_via(node, body, sender, now, "push")
+}
+
+/// `receive` for a record by how it reached this node: `via` is `"push"`
+/// for a pushed record, `"ask"` for a record this node asked the sender
+/// for, written to its provenance. The checks are the same either way.
+pub fn receive_via(
+    node: &Receiver<'_>,
+    body: &[u8],
+    sender: Option<&str>,
+    now: &str,
+    via: &str,
 ) -> std::io::Result<Value> {
     // One push at a time: the held-checkpoint judgement (step 8) reads what
     // is stored and then stores more, and two pushes interleaving there could
@@ -341,7 +355,7 @@ pub fn receive(
             &json!({
                 "capsule_id": capsule_id,
                 "received_from": sender,
-                "via": "push",
+                "via": via,
                 "received_at": now,
                 "signature_ok": true,
             }),
@@ -360,7 +374,7 @@ pub fn receive(
     let mut held = json!({
         "half_capsule_id": capsule_id,
         "received_from": sender,
-        "via": "push",
+        "via": via,
         "received_at": now,
     });
     for (key, value) in inclusion {

@@ -186,7 +186,7 @@ export type PaneBAskedCell = PaneState & {
  *  (`capsule_panes_native.rs::confirmed_siblings_for`). Carries both bodies
  *  plus the door's recorded `signature_ok`, the inputs
  *  `exchange-row-state.ts::deriveRightCellState` judges -- so Pane B's
- *  "confirmed by the other side" / MATCH derive from the SAME gate Pane C uses,
+ *  "saved as confirmed" / MATCH derive from the SAME gate Pane C uses,
  *  never a second browser-peer-fetch predicate. Empty on a peer with no
  *  correlated pushed half; the gate reads that as "not confirmed", honest. */
 export type PaneBConfirmedSibling = {
@@ -491,6 +491,9 @@ export type PaneCRow = {
     /** The TDX quote in their held record, as this node checked it. */
     tee?: TeeFact
     received_from?: string
+    /** How the held record reached this node: `"push"` (their node sent it)
+     *  or `"ask"` (this node asked them for it and kept the verified reply,
+     *  in the same store). */
     via?: string
     received_at?: string
     /** The held foreign body itself -- the provider-signed bytes the door

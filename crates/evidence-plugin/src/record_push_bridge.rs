@@ -420,11 +420,24 @@ async fn receive_pushed_record(
     sender_peer_id: &str,
     body: &[u8],
 ) -> anyhow::Result<serde_json::Value> {
+    receive_record_via(capsules, sender_peer_id, body, "push").await
+}
+
+/// [`receive_pushed_record`] for a record that came by `via`.
+async fn receive_record_via(
+    capsules: &Arc<CapsuleState>,
+    sender_peer_id: &str,
+    body: &[u8],
+    via: &'static str,
+) -> anyhow::Result<serde_json::Value> {
     let capsules = capsules.clone();
     let sender_peer_id = sender_peer_id.to_string();
     let body = body.to_vec();
     let peer_keys = crate::peer_keys::registry();
-    let record_at_completion_off = crate::share_policy::record_at_completion_is_off();
+    // `share_record_at_completion` governs records pushed at completion; a
+    // record this node asked for is held because its operator asked.
+    let record_at_completion_off =
+        via != "ask" && crate::share_policy::record_at_completion_is_off();
     tokio::task::spawn_blocking(move || {
         let receiver = crate::record_push_receive::Receiver {
             ledger_dir: capsules.ledger_dir(),
@@ -433,11 +446,12 @@ async fn receive_pushed_record(
             record_at_completion_off,
             rejected_log_limit: crate::record_push_receive::MAX_REJECTED_LOG_BYTES,
         };
-        crate::record_push_receive::receive(
+        crate::record_push_receive::receive_via(
             &receiver,
             &body,
             Some(&sender_peer_id),
             &crate::producer::timestamp::utc_now_iso8601(),
+            via,
         )
     })
     .await
@@ -492,7 +506,7 @@ async fn seal_citing_records_for_push(
         .map_err(|e| anyhow::anyhow!("an unparseable body was received: {e}"))?;
     let half = pushed_half(&body);
     let half_bytes = serde_json::to_vec(half)?;
-    seal_citing_record_for_push(capsules, sender_peer_id, &half_bytes).await?;
+    seal_citing_record(capsules, sender_peer_id, &half_bytes, "push").await?;
     if let Some(inclusion) = received_inclusion(reply)? {
         let half_id = half
             .get("capsule_id")
@@ -515,10 +529,11 @@ async fn seal_citing_records_for_push(
 /// ledger mutex across two `sync_all()`s, which must not stall a tokio
 /// worker thread. A duplicate push (already-cited half, `Ok(None)`) is
 /// SUCCESS -- the half is received/held; there is just nothing new to cite.
-async fn seal_citing_record_for_push(
+async fn seal_citing_record(
     capsules: &Arc<CapsuleState>,
     sender_peer_id: &str,
     capsule_bytes: &[u8],
+    via: &'static str,
 ) -> anyhow::Result<()> {
     let foreign: serde_json::Value = serde_json::from_slice(capsule_bytes)
         // A received body that does not parse? The receiver refuses
@@ -539,7 +554,7 @@ async fn seal_citing_record_for_push(
         let prov = ReceivedHalfProvenance {
             foreign_capsule_id: &foreign_capsule_id,
             received_from: &received_from,
-            via: "push",
+            via,
             received_at: &received_at,
             signature_ok: true,
             // digest_match is the pane's authoritative structural grade
@@ -570,6 +585,25 @@ async fn seal_citing_record_for_push(
         }
     }
     Ok(())
+}
+
+/// Hold a record this node asked `peer_id` for (`mesh_evidence_request`)
+/// the way a pushed one is held: the same receiver checks it under the
+/// peer's announced key and stores it, then this node seals its citing
+/// record, both marked `via: "ask"`. So an asked record that matches ours
+/// counts as saved, like a pushed one. `Ok(false)` when the receiver refused
+/// it (its signed refusal is not kept: nothing was sent to the peer).
+pub(crate) async fn hold_asked_record(
+    capsules: &Arc<CapsuleState>,
+    peer_id: &str,
+    record_bytes: &[u8],
+) -> anyhow::Result<bool> {
+    let reply = receive_record_via(capsules, peer_id, record_bytes, "ask").await?;
+    if !accepted(&reply) {
+        return Ok(false);
+    }
+    seal_citing_record(capsules, peer_id, record_bytes, "ask").await?;
+    Ok(true)
 }
 
 /// The verified inclusion facts for a bundle push, lifted from the
@@ -936,6 +970,149 @@ mod tests {
         let mut not_an_object = reply;
         not_an_object["inclusion"] = serde_json::json!("verified");
         assert!(received_inclusion(&not_an_object).is_err());
+    }
+
+    /// A record this node asked a peer for is held like a pushed one: stored
+    /// with `via: "ask"` provenance and cited on this node's own chain, so the
+    /// panes count it as saved. A record from a peer whose key this node does
+    /// not know is not held.
+    #[tokio::test]
+    async fn an_asked_record_is_held_and_cited_like_a_pushed_one() {
+        let theirs_dir = tempfile::tempdir().unwrap();
+        let mine_dir = tempfile::tempdir().unwrap();
+        let theirs = CapsuleState::open(theirs_dir.path(), "their-node").unwrap();
+        let mine = Arc::new(CapsuleState::open(mine_dir.path(), "my-node").unwrap());
+        let exchange = crate::capsule_emit::ExchangeRecord {
+            model: "m",
+            client_nonce: Some("asked-nonce"),
+            request_bytes: br#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#,
+            response_bytes:
+                br#"{"id":"x","choices":[{"message":{"role":"assistant","content":"y"}}]}"#,
+            latency_ms: 1.0,
+            exchange_id: Some("e-ask"),
+            requesting_party: Some("my-node"),
+            host_provenance: None,
+        };
+        let record = theirs.emit_for_exchange(&exchange).unwrap().capsule;
+        let record_bytes = serde_json::to_vec(&record).unwrap();
+        let id = record["capsule_id"].as_str().unwrap();
+
+        // Unknown peer: refused, nothing held.
+        assert!(!hold_asked_record(&mine, "peer-ask-unknown", &record_bytes)
+            .await
+            .unwrap());
+
+        let peer = "peer-ask-known";
+        crate::peer_keys::announced::announce_for_test(peer, record["key_id"].as_str().unwrap());
+        assert!(hold_asked_record(&mine, peer, &record_bytes).await.unwrap());
+        // Asking again holds nothing new and is still a success.
+        assert!(hold_asked_record(&mine, peer, &record_bytes).await.unwrap());
+
+        let lines = |name: &str| -> Vec<serde_json::Value> {
+            std::fs::read_to_string(mine.ledger_dir().join(name))
+                .unwrap_or_default()
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect()
+        };
+        let provenance = lines(crate::record_push_receive::RECEIVED_PROVENANCE_FILENAME);
+        assert_eq!(provenance.len(), 1, "held once: {provenance:?}");
+        assert_eq!(provenance[0]["capsule_id"], id);
+        assert_eq!(provenance[0]["received_from"], peer);
+        assert_eq!(provenance[0]["via"], "ask");
+        let citing: Vec<_> = lines("capsules.jsonl")
+            .into_iter()
+            .filter_map(|r| {
+                r.pointer("/model_attestation/compute_attestation/received_half")
+                    .cloned()
+            })
+            .collect();
+        assert_eq!(citing.len(), 1, "cited once: {citing:?}");
+        assert_eq!(citing[0]["cited_capsule_id"], id);
+        assert_eq!(citing[0]["via"], "ask");
+    }
+
+    /// After an ask, the held record is read back from disk like any other:
+    /// the Peers pane (what the page loads on a reload) gives the row a
+    /// confirmed sibling `via: "ask"` whose digests match ours, which is what
+    /// "Saved as confirmed" counts. With `share_record_at_completion` off (the
+    /// default), the same record PUSHED is still declined.
+    #[tokio::test]
+    async fn an_asked_record_survives_a_reload_as_saved_confirmed() {
+        use crate::capsule_emit::{HostProvenance, ObservedHostExchange};
+        use crate::lifecycle_channel::DispatchPath;
+        let my_id = "a".repeat(64);
+        let their_id = "b".repeat(64);
+        let (request_digest, response_digest) = ("c".repeat(64), "d".repeat(64));
+        let observed = |dispatch_path, host_provenance| ObservedHostExchange {
+            model: "m",
+            exchange_id: Some("e-reload"),
+            request_digest: Some(&request_digest),
+            response_digest: Some(&response_digest),
+            tool_calls_digest: None,
+            reasoning_digest: None,
+            usage: None,
+            host_provenance,
+            dispatch_path,
+            nonce: Some("reload-nonce"),
+            peer_capsule_id: None,
+            peer_capsule_id_provenance: None,
+            twin_bracket_id: None,
+            response_text_digest: None,
+        };
+        let mine_dir = tempfile::tempdir().unwrap();
+        let theirs_dir = tempfile::tempdir().unwrap();
+        let mine = Arc::new(CapsuleState::open(mine_dir.path(), "my-node").unwrap());
+        let theirs = CapsuleState::open(theirs_dir.path(), "their-node").unwrap();
+        mine.emit_for_observed_host_exchange(&observed(
+            DispatchPath::RemoteMesh,
+            HostProvenance {
+                served_by_node_id: Some(their_id.clone()),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+        let record = theirs
+            .emit_for_observed_host_exchange(&observed(
+                DispatchPath::TypedFrontend,
+                HostProvenance {
+                    requested_by_node_id: Some(my_id.clone()),
+                    ..Default::default()
+                },
+            ))
+            .unwrap()
+            .capsule;
+        let record_bytes = serde_json::to_vec(&record).unwrap();
+        crate::peer_keys::announced::announce_for_test(
+            &their_id,
+            record["key_id"].as_str().unwrap(),
+        );
+
+        // Pushed with the switch at its default (off): declined, nothing held.
+        assert!(crate::share_policy::record_at_completion_is_off());
+        let pushed = receive_pushed_record(&mine, &their_id, &record_bytes)
+            .await
+            .unwrap();
+        assert!(!accepted(&pushed), "a push is declined: {pushed}");
+
+        assert!(hold_asked_record(&mine, &their_id, &record_bytes)
+            .await
+            .unwrap());
+
+        // A reload reads the panes from disk.
+        let pane =
+            crate::evidence_panes::build_pane_json("pane-b", mine.ledger_dir(), None).unwrap();
+        let row = pane["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["identity"]["node_id"] == serde_json::json!(their_id))
+            .unwrap_or_else(|| panic!("a row for the peer: {pane}"));
+        let siblings = row["confirmed_siblings"].as_array().unwrap();
+        assert_eq!(siblings.len(), 1, "{row}");
+        assert_eq!(siblings[0]["theirs"]["via"], "ask");
+        assert_eq!(siblings[0]["theirs"]["signature_ok"], true);
+        assert_eq!(siblings[0]["digest_match"]["state"], "verified");
     }
 
     /// The whole sender flow over a REAL sealed half: seal through

@@ -7,8 +7,8 @@
 import type { PaneBRow } from '@/features/capsules/api/sidecarTypes'
 import { adjudicationSummary, confirmedByOtherSide, matchTally } from '@/features/capsules/lib/peer-row-view'
 
-/** §7.5 "your dealings with them": exchanges, how many they confirmed with
- *  their own record, how many records differ, and disputes judged. Counts
+/** §7.5 "your dealings with them": exchanges, how many are saved as confirmed
+ *  (their own record held here), how many records differ, and disputes judged. Counts
  *  with their denominators; never a single number standing for the peer. */
 export function dealingsLines(row: PaneBRow): string[] {
   const confirmed = confirmedByOtherSide(row)
@@ -16,7 +16,7 @@ export function dealingsLines(row: PaneBRow): string[] {
   const disputes = adjudicationSummary(row)
   const exchanges = row.exchange_count ?? 0
   return [
-    `${exchanges} ${exchanges === 1 ? 'exchange' : 'exchanges'} with you · they confirmed ${confirmed.confirmed} of ${confirmed.total}`,
+    `${exchanges} ${exchanges === 1 ? 'exchange' : 'exchanges'} with you · ${confirmed.confirmed} of ${confirmed.total} saved as confirmed`,
     `Same request & answer: ${tally.clean} · ${tally.mismatch} differ`,
     disputes.notChecked
       ? 'Disputes judged: none'

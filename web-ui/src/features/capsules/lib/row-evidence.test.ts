@@ -216,8 +216,24 @@ const CASES: Case[] = [
     ask: asks(refused(), failed()),
     state: 'open_refused',
     date: T1,
-    askNote: { verified: true, text: /^Their reply is verified/ },
+    // The decline gives its reason in plain words, never the token.
+    askNote: {
+      verified: true,
+      text: /^Signed refusal, .+: their sharing settings don’t let them send it to this node\. Their reply is verified/
+    },
     retry: /^Asked again .*: no verified reply \(HTTP 502\)\.$/
+  },
+  {
+    name: 'a retry the tool couldn’t send says so in plain words, never the tool’s error',
+    ask: asks(refused(), { kind: 'no_reply', at: T2, detail: 'That node isn’t on the mesh now, so it can’t be asked.', plain: true }),
+    state: 'open_refused',
+    retry: /^Asked again .*: that node isn’t on the mesh now, so it can’t be asked\.$/
+  },
+  {
+    name: 'a refused retry names its reason in the line',
+    ask: asks(noRecord(), { kind: 'refused', at: '2026-09-28T23:59:00Z', reason: 'retention_expired' }),
+    state: 'open_refused',
+    askNote: { verified: true, text: /: they no longer keep it\. / }
   },
   {
     name: 'an ambiguous retry never replaces their verified "no record"',
@@ -254,7 +270,7 @@ const CASES: Case[] = [
     ask: asks(refused('2026-09-28T22:00:05Z'), noRecord('2026-09-28T21:00:05Z')),
     state: 'open_refused',
     date: '2026-09-28T22:00:05Z',
-    askNote: { verified: true, text: /^Their reply is verified/ },
+    askNote: { verified: true, text: /^Signed refusal, .+: .+\. Their reply is verified/ },
     retry: /^Asked again .*: they say they have no record of this, signed\.$/
   },
   {

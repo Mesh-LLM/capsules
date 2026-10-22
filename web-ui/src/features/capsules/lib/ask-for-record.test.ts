@@ -10,8 +10,12 @@ import {
 import type { EvidenceVerification } from '@/features/capsules/api/evidenceRequestClient'
 import type { PeerRecomputeState } from '@/features/capsules/lib/recompute-identity'
 import {
+  ASK_DID_NOT_GO_THROUGH,
+  NOT_ON_MESH,
+  askFailureSentence,
   askReplyNote,
   askTarget,
+  recordRefusalWords,
   otherSideNodeId,
   rowAskControls,
   type RowAskInput,
@@ -25,6 +29,7 @@ import {
   type AskJudges
 } from './ask-for-record'
 import { judgeRow } from './row-evidence'
+import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 
 const ASKED_AT = '2026-09-28T21:00:00Z'
 
@@ -78,14 +83,15 @@ function signedRefusal(reason: string, { secret = PEER_SECRET, requestDigest = S
 function answer(
   body: Record<string, unknown>,
   announcedKeyId: string | null = ANNOUNCED,
-  verification?: EvidenceVerification
+  verification?: EvidenceVerification,
+  held: string[] = []
 ) {
   const found: EvidenceVerification =
     verification ??
     (typeof body.reason === 'string'
       ? { state: 'refusal', reason: body.reason }
       : { state: 'artifact', records: artifactLeafIndices(body) })
-  return { kind: 'answer' as const, answer: body, verification: found, requestDigest: SENT, announcedKeyId }
+  return { kind: 'answer' as const, answer: body, verification: found, requestDigest: SENT, announcedKeyId, held }
 }
 
 /** An artifact answer carrying `records` (the interop profile's reply the
@@ -349,6 +355,37 @@ describe('judgeAskReply', () => {
   it('keeps the row asked, no reply yet, when the other side could not be reached', async () => {
     const outcome = await judgeAskReply({ kind: 'no_answer', message: 'peer unreachable' }, null, ASKED_AT)
     expect(stateAfterAsk(waitingRow(), outcome, null)).toEqual({ kind: 'open_asked', date: ASKED_AT })
+  })
+
+  it('says a tool error in plain words, never the raw message', async () => {
+    expect(askFailureSentence('could not reach peer: connection lost')).toBe(NOT_ON_MESH)
+    expect(askFailureSentence('peer is not routable on this mesh')).toBe(NOT_ON_MESH)
+    expect(askFailureSentence('{"code":-32603,"message":"peer returned malformed response"}')).toBe(ASK_DID_NOT_GO_THROUGH)
+    const outcome = await judgeAskReply({ kind: 'no_answer', message: 'could not reach peer: gone' }, null, ASKED_AT)
+    expect(outcome).toEqual({ kind: 'no_reply', at: ASKED_AT, detail: NOT_ON_MESH, plain: true })
+    expect(askReplyNote(outcome)).toEqual({ verified: false, text: 'That node isn’t on the mesh now, so it can’t be asked.' })
+  })
+
+  it('gives a declined record ask its reason in plain words, and never echoes an unknown token', async () => {
+    const refusal = await judgeAskReply(answer(signedRefusal('not_authorized')), null, ASKED_AT)
+    // "Signed refusal, {time}: {reason}." -- the decline said once, with its time.
+    expect(askReplyNote(refusal)?.text).toBe(
+      `Signed refusal, ${formatExchangeTimestamp(refusal.at)}: their sharing settings don’t let them send it to this node. Their reply is verified: signed with the key this node has for them, for this request.`
+    )
+    expect(askReplyNote(refusal)?.text.match(/declined/g)).toBeNull()
+    for (const reason of ['policy_declined', 'deadline_unmet', 'request_malformed', 'retention_expired', 'derivation_unsupported']) {
+      expect(recordRefusalWords(reason)).not.toContain('_')
+    }
+    expect(recordRefusalWords('made_up_token')).toBe('for a reason this page can’t name')
+  })
+
+  it('marks a record saved only when the tool held its id', async () => {
+    const theirs = { ...fixtureHalfBody({ capsuleId: 'theirs-1' }), signature: 'aa', key_id: 'bb' }
+    const judge = (held: string[]) =>
+      judgeAskReply(answer(artifact([theirs]), ANNOUNCED, undefined, held), FIXTURE_REQUEST_DIGEST, ASKED_AT, trustingJudges)
+    expect(await judge(['theirs-1'])).toMatchObject({ kind: 'record', saved: true })
+    expect(await judge([])).toMatchObject({ kind: 'record', saved: false })
+    expect(await judge(['someone-else'])).toMatchObject({ kind: 'record', saved: false })
   })
 
   it('says a verified reply is verified', async () => {

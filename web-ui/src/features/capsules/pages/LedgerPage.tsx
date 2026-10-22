@@ -7,7 +7,7 @@
 // Security boundary: NO user-visible strings may name internal tooling,
 // internal item IDs, or any branded service name. Comments are exempt.
 import { Fragment, type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeftRight, FolderOpen, Search as SearchIcon, ShieldCheck, Trash2, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -23,12 +23,20 @@ import { fetchCapsuleLedger } from '@/features/capsules/api/client'
 import { announcedKeyFor, askForHistory, askForRecord } from '@/features/capsules/api/evidenceRequestClient'
 import {
   judgeAskReply,
+  otherSideNodeId,
   settleRowAsk,
   type AskOutcome,
   type AskTarget,
   type RowAsk
 } from '@/features/capsules/lib/ask-for-record'
 import { judgeHistoryReply, type HistoryOutcome } from '@/features/capsules/lib/ask-for-history'
+import {
+  loadVerifiedHistories,
+  newestRowPerPeer,
+  rememberVerifiedHistory,
+  type VerifiedHistory
+} from '@/features/capsules/lib/history-memory'
+import { usePeerNames } from '@/features/capsules/lib/peer-names'
 import type { CapsuleRecord } from '@/features/capsules/api/types'
 import {
   PaneFetchError,
@@ -145,7 +153,7 @@ import {
   CLOSE_CARD_COUNTS_TOOLTIP,
   CLOSE_CARD_TOOLTIP,
   SAMPLE_DATA_UNAVAILABLE,
-  THEIR_RECORD_ARRIVES_IF_PUSHED,
+  EXCHANGES_INTRO,
   SETTLEMENT_REFUSED_NOTE
 } from '@/features/capsules/lib/tooltip-copy'
 import type { PaymentsPresence } from '@/features/capsules/api/sidecarTypes'
@@ -235,6 +243,7 @@ function PeersSection({ recordsById }: { recordsById: Map<string, CapsuleRecord>
     retry: false
   })
   const meshStatus = usePeerMeshStatusIndex(PEER_TAB_HARNESS_MESH_PEERS, PEER_TAB_HARNESS_MESH_MODELS)
+  const peerName = usePeerNames()
   const effectiveRecordsById = harnessMode ? PEER_TAB_HARNESS_LEDGER_RECORDS : recordsById
 
   const resolveTimestamp = (capsuleId: string): string | null => effectiveRecordsById.get(capsuleId)?.timestamp ?? null
@@ -328,6 +337,7 @@ function PeersSection({ recordsById }: { recordsById: Map<string, CapsuleRecord>
         dealtWithRawRows={sortedDealtWithRawRows}
         exchangeSourcesFor={(peerId) => sourcesByPeerId.get(peerId) ?? []}
         meshStatus={meshStatus}
+        peerName={peerName}
         recordsById={effectiveRecordsById}
         throughSplit={peersThroughSplit((paneCQuery.data?.rows ?? []).flatMap((row) => (row.split ? [row.split] : [])))}
       />
@@ -389,6 +399,27 @@ function rowMatchesStateFilter(row: ExchangeLedgerRow, selected: ReadonlySet<str
   return row.twinBracketId !== null && selected.has('twins')
 }
 
+/** The node on the other side of a row, as our record of it names it. */
+function rowPeerId(row: ExchangeLedgerRow, recordsById: Map<string, CapsuleRecord>): string | null {
+  const ours =
+    (row.raw.mine.capsule_id ? recordsById.get(row.raw.mine.capsule_id) : undefined) ??
+    (row.raw.mine.record as CapsuleRecord | undefined) ??
+    null
+  return otherSideNodeId(ours)
+}
+
+/** The verified history this browser remembers for the row's other node,
+ *  on that node's newest row only (`newestRowPerPeer`). */
+function rememberedHistory(
+  remembered: ReadonlyMap<string, VerifiedHistory>,
+  newestByPeer: ReadonlyMap<string, string>,
+  row: ExchangeLedgerRow,
+  recordsById: Map<string, CapsuleRecord>
+): VerifiedHistory | undefined {
+  const peerId = rowPeerId(row, recordsById)
+  return peerId && newestByPeer.get(peerId) === row.exchangeKey ? remembered.get(peerId) : undefined
+}
+
 function ExchangesSection({
   recordsById,
   nodePubKeyPem,
@@ -429,6 +460,10 @@ function ExchangesSection({
   // same gating as IntegritySection.
   const ownerStatusQuery = useStatusQuery({ enabled: !harnessMode })
   const nodeOwnerLinked = ownerStatusQuery.data ? ownerLinked(ownerStatusQuery.data.owner ?? null) : null
+  const peerName = usePeerNames()
+  // With no witness set, a row shows no "witnessed" chip: it could only say
+  // "not witnessed", every time.
+  const witnessOff = paneAQuery.data ? checkpointRegistration(paneAQuery.data.card ?? null).witnessState === 'off' : false
   // Look finding 2: per-record checkpoint coverage from the SAME card figure
   // the Integrity chain strip shades, so a row's checks panel can never say
   // "no checkpoint covers this record" while Integrity says all are covered.
@@ -465,6 +500,17 @@ function ExchangesSection({
     () => buildExchangeCounterpartyIndex(paneBQuery.data?.rows ?? []),
     [paneBQuery.data]
   )
+  // A peer Pane B keys by signing key (`key:…`) -> the node id its identity
+  // names, so a row can name that node rather than the key.
+  const keyNodeIds = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const peer of paneBQuery.data?.rows ?? []) {
+      const id = peerDisplayId(peer)
+      const nodeId = peer.identity?.node_id
+      if (id?.toLowerCase().startsWith('key:') && nodeId) map.set(id, nodeId)
+    }
+    return map
+  }, [paneBQuery.data])
   const allRows = useMemo(
     () => buildExchangeLedgerRows(query.data?.rows ?? [], counterpartyIndex, recordsById),
     [query.data, counterpartyIndex, recordsById]
@@ -481,6 +527,7 @@ function ExchangesSection({
   // Per row, the latest reply and the latest verified one (`settleRowAsk`):
   // a failed retry never erases what an earlier reply proved.
   const [askOutcomes, setAskOutcomes] = useState<ReadonlyMap<string, RowAsk>>(() => new Map())
+  const queryClient = useQueryClient()
   const handleAskForRecord = useCallback((row: ExchangeLedgerRow, target: AskTarget) => {
     const askedAt = new Date().toISOString()
     const record = row.raw.mine.record as { effect?: { request_digest?: unknown } } | undefined
@@ -495,19 +542,43 @@ function ExchangesSection({
     settle({ kind: 'asking', at: askedAt })
     void askForRecord(target.peerId, target)
       .then((reply) => judgeAskReply(reply, requestDigest, askedAt))
-      .then(settle)
-  }, [recordsById])
+      .then((outcome) => {
+        settle(outcome)
+        // The plugin keeps a verified record it was asked for, in the same
+        // store as a pushed one: read the panes again, so the row and every
+        // "saved as confirmed" count come from the node's own data, and a
+        // reload shows the same.
+        if (outcome.kind === 'record') void queryClient.invalidateQueries({ queryKey: ['ledger'] })
+      })
+  }, [recordsById, queryClient])
 
   // "Ask for their history": one evidence request for the other side's
   // history card (`history_card/1`), judged in `ask-for-history.ts`. Kept per
   // row, beside that row's record ask.
   const [historyOutcomes, setHistoryOutcomes] = useState<ReadonlyMap<string, HistoryOutcome>>(() => new Map())
+  // The last verified history per peer, kept in this browser
+  // (`history-memory.ts`): a row with no ask of its own this visit shows it.
+  const [verifiedHistories, setVerifiedHistories] = useState<ReadonlyMap<string, VerifiedHistory>>(() =>
+    loadVerifiedHistories()
+  )
+  // Across every row, not just this page's: "newest" never depends on paging.
+  const newestRowByPeer = useMemo(
+    () =>
+      newestRowPerPeer(
+        allRows.map((row) => ({ key: row.exchangeKey, peerId: rowPeerId(row, recordsById), timestamp: row.timestamp }))
+      ),
+    [allRows, recordsById]
+  )
   const handleAskForHistory = useCallback((row: ExchangeLedgerRow, peerId: string) => {
     const askedAt = new Date().toISOString()
     const settle = (outcome: HistoryOutcome) =>
       setHistoryOutcomes((previous) => new Map(previous).set(row.exchangeKey, outcome))
     settle({ kind: 'asking', at: askedAt })
-    void askForHistory(peerId).then((reply) => settle(judgeHistoryReply(reply, askedAt)))
+    void askForHistory(peerId).then((reply) => {
+      const outcome = judgeHistoryReply(reply, askedAt)
+      settle(outcome)
+      setVerifiedHistories((previous) => rememberVerifiedHistory(previous, peerId, outcome))
+    })
   }, [])
 
   // windowed paging (v3 §2a) state. `pageIndex`
@@ -790,7 +861,7 @@ function ExchangesSection({
     <div className="flex flex-col gap-2">
       {/* L3.1 — Exchanges section headline */}
       <p className="text-sm text-fg-dim">
-        Each exchange is a pair of sealed records: yours and theirs. {THEIR_RECORD_ARRIVES_IF_PUSHED}
+        {EXCHANGES_INTRO}
       </p>
       <p className="text-xs text-fg-dim" data-testid="served-asked-line">
         {servedAskedLine(allRows)}
@@ -826,7 +897,7 @@ function ExchangesSection({
       ) : null}
       {twinsUnmarkedLine ? (
         <p className="type-caption text-fg-faint" data-testid="twins-unmarked">
-          Side-by-side check: {twinsUnmarkedLine}
+          Side-by-side check — {twinsUnmarkedLine}
         </p>
       ) : null}
 
@@ -1032,9 +1103,16 @@ function ExchangesSection({
                         nodePubKeyPem={nodePubKeyPem}
                         askOutcome={askOutcomes.get(row.exchangeKey) ?? null}
                         onAskForRecord={harnessMode || sampleData ? undefined : handleAskForRecord}
-                        historyOutcome={historyOutcomes.get(row.exchangeKey) ?? null}
+                        historyOutcome={
+                          historyOutcomes.get(row.exchangeKey) ??
+                          rememberedHistory(verifiedHistories, newestRowByPeer, row, recordsById) ??
+                          null
+                        }
                         onAskForHistory={harnessMode || sampleData ? undefined : handleAskForHistory}
                         ownerLinked={nodeOwnerLinked}
+                        peerName={peerName}
+                        witnessOff={witnessOff}
+                        counterpartyNodeId={row.counterparty ? (keyNodeIds.get(row.counterparty) ?? null) : null}
                         onToggleChecks={handleToggleChecks}
                         onToggleContent={handleToggleContent}
                         rail={railSegments[pageStart + index]}

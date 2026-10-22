@@ -243,7 +243,8 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                      inclusion proof -- the checkpoint reveals the log's total size (records \
                      across all peers) and its time, never any other record's content. \
                      Symmetric: a node with this off also does not receive the other side's \
-                     push -- fetch-on-request still works either way.",
+                     push. It governs pushes only: a record you ask the other side for is \
+                     checked and held either way.",
                 )
                 .label("Record at completion")
                 .category(CATEGORY_ID, CATEGORY_LABEL, CATEGORY_SUMMARY, 0),

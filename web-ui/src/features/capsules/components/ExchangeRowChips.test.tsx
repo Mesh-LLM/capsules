@@ -15,10 +15,10 @@ function checks(state: Record<string, string>): ChecksRow[] {
   })) as ChecksRow[]
 }
 
-function renderChips(rows: ChecksRow[]) {
+function renderChips(rows: ChecksRow[], witnessOff = false) {
   render(
     <TooltipProvider>
-      <ExchangeRowChips checks={rows} onChipActivate={vi.fn()} />
+      <ExchangeRowChips checks={rows} onChipActivate={vi.fn()} witnessOff={witnessOff} />
     </TooltipProvider>
   )
 }
@@ -47,5 +47,12 @@ describe('ExchangeRowChips -- one tooltip per result, not one per chip', () => {
   it('never claims the checkpoint coverage or a witness receipt is checked on this page', () => {
     expect(ENTRY_CHIP_RESULT_TOOLTIPS.inclusion['✓']).toContain('doesn’t check that coverage itself')
     expect(ENTRY_CHIP_RESULT_TOOLTIPS.registered['✓']).toContain('isn’t checked on this page')
+  })
+
+  it('with the witness off, no "witnessed" chip: it could only ever read –', () => {
+    renderChips(checks({ content_binding: 'PASS' }), true)
+    expect(screen.queryByLabelText('witnessed: jump to that check')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('words match: jump to that check')).toBeInTheDocument()
+    expect(screen.getByLabelText('their record: jump to that check')).toBeInTheDocument()
   })
 })

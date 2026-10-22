@@ -87,7 +87,7 @@ export function plainTokenSplit(sp: ServingProvenance): string | null {
  *  carries neither count (never a placeholder). */
 export function tokenFlowText(promptTokens: number | null, completionTokens: number | null): string | null {
   if (promptTokens == null && completionTokens == null) return null
-  return `${promptTokens ?? '?'} → ${completionTokens ?? '?'} tokens`
+  return `${promptTokens ?? '?'} → ${completionTokens ?? '?'} ${completionTokens === 1 ? 'token' : 'tokens'}`
 }
 
 /** "1.4 s" / "320 ms" from the record's `latency_ms`; `null` when absent or

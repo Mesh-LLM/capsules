@@ -31,16 +31,21 @@ import {
   type RightCellStateKind
 } from '@/features/capsules/lib/exchange-row-state'
 import { recomputeIdMatch, type PeerRecomputeState } from '@/features/capsules/lib/recompute-identity'
+import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import { SAMPLE_DATA_UNAVAILABLE } from '@/features/capsules/lib/tooltip-copy'
 
 /** What asking produced for one row. `at` is when this node asked or when the
  *  other side signed its reply. */
 export type AskOutcome =
   | { kind: 'asking'; at: string }
-  | { kind: 'no_reply'; at: string; detail: string }
+  /** `plain`: the ask never got a reply to check (the tool failed), and
+   *  `detail` is a whole plain sentence saying so, shown as is. */
+  | { kind: 'no_reply'; at: string; detail: string; plain?: boolean }
   | { kind: 'refused'; at: string; reason: string }
   | { kind: 'no_record'; at: string }
-  | { kind: 'record'; at: string; evidence: PeerRecomputeState }
+  /** `saved`: whether the plugin kept this record on the node (its id is in
+   *  the tool's `held`). Absent where nothing said either way. */
+  | { kind: 'record'; at: string; evidence: PeerRecomputeState; saved?: boolean }
   /** Their verified reply carried more than one record that could be their
    *  half of this exchange, and nothing picks one: none is shown as theirs. */
   | { kind: 'ambiguous'; at: string; count: number }
@@ -305,7 +310,7 @@ export async function judgeAskReply(
   askedAt: string,
   judges: AskJudges = REAL_JUDGES
 ): Promise<AskOutcome> {
-  if (reply.kind === 'no_answer') return { kind: 'no_reply', at: askedAt, detail: reply.message }
+  if (reply.kind === 'no_answer') return { kind: 'no_reply', at: askedAt, detail: askFailureSentence(reply.message), plain: true }
   const answer = obj(reply.answer)
   const verification = reply.verification
   switch (verification.state) {
@@ -335,9 +340,11 @@ export async function judgeAskReply(
       if (candidates.length > 1) return { kind: 'ambiguous', at: askedAt, count: candidates.length }
       const receipt = candidates[0]
       const idMatch = await judges.recomputeIdMatch(receipt, str(receipt.capsule_id))
+      const receiptId = str(receipt.capsule_id)
       return {
         kind: 'record',
         at: askedAt,
+        saved: receiptId !== null && reply.held.includes(receiptId),
         evidence: {
           status: 'found',
           idMatch,
@@ -366,6 +373,36 @@ export function theirHalfCandidates(
 
 export const NO_KEY_DETAIL = 'this node has no key for them, so their reply can’t be checked'
 
+/** The ask's tool failed because the node isn't reachable: it left the mesh
+ *  (`mesh_evidence_bridge.rs`: "could not reach peer", or the host's "not
+ *  routable"). */
+export const NOT_ON_MESH = 'That node isn’t on the mesh now, so it can’t be asked.'
+/** Any other failure of the ask itself. The tool's message is never shown:
+ *  it can be raw JSON or an internal error. */
+export const ASK_DID_NOT_GO_THROUGH = 'The ask didn’t go through, so there is no reply to check yet.'
+
+/** A tool error, in one plain sentence (`no_answer`). */
+export function askFailureSentence(message: string): string {
+  return /could not reach peer|not routable/i.test(message) ? NOT_ON_MESH : ASK_DID_NOT_GO_THROUGH
+}
+
+/** The -00 refusal reasons a record ask can get back
+ *  (`evidence_answer.rs`), in plain words. `no_such_subject` and
+ *  `coverage_unsatisfiable` are not declines (`judgeAskReply`). A token this
+ *  page has no words for is never echoed: the peer controls it. */
+const RECORD_REFUSAL_WORDS: Record<string, string> = {
+  not_authorized: 'their sharing settings don’t let them send it to this node',
+  policy_declined: 'their node’s limits on what it sends ruled it out',
+  deadline_unmet: 'they couldn’t answer in time',
+  request_malformed: 'they couldn’t read the request',
+  retention_expired: 'they no longer keep it',
+  derivation_unsupported: 'their node can’t produce that answer'
+}
+
+export function recordRefusalWords(reason: string): string {
+  return RECORD_REFUSAL_WORDS[reason] ?? 'for a reason this page can’t name'
+}
+
 /** Why a record of theirs is not verified, in a few words. */
 export function recordProblems(evidence: PeerRecomputeState): string {
   const { idMatch, signatureOk } = evidence
@@ -377,6 +414,8 @@ export function recordProblems(evidence: PeerRecomputeState): string {
     .join('; ')
 }
 
+const SIGNED_FOR_THIS_REQUEST = 'Their reply is verified: signed with the key this node has for them, for this request'
+
 /** The line a row shows once its ask is answered: whether the reply was
  *  verified, and if not, why. `null` while the ask is in flight. */
 export function askReplyNote(outcome: AskOutcome): { verified: boolean; text: string } | null {
@@ -384,10 +423,14 @@ export function askReplyNote(outcome: AskOutcome): { verified: boolean; text: st
     case 'asking':
       return null
     case 'no_reply':
-      return { verified: false, text: `Their reply is not verified: ${outcome.detail}` }
+      return { verified: false, text: outcome.plain ? outcome.detail : `Their reply is not verified: ${outcome.detail}` }
     case 'refused':
+      return {
+        verified: true,
+        text: `Signed refusal, ${formatExchangeTimestamp(outcome.at)}: ${recordRefusalWords(outcome.reason)}. ${SIGNED_FOR_THIS_REQUEST}.`
+      }
     case 'no_record':
-      return { verified: true, text: 'Their reply is verified: signed with the key this node has for them, for this request' }
+      return { verified: true, text: SIGNED_FOR_THIS_REQUEST }
     case 'record': {
       // The plugin proved the record is in their log; the record itself is
       // verified only if its id recomputes AND it is signed with their

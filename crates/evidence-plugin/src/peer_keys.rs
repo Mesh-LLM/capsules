@@ -97,6 +97,16 @@ pub mod announced {
             .clone()
     }
 
+    /// Record `key` as announced for `peer`, as a host answer would: for
+    /// tests that need a peer whose key this node knows.
+    #[cfg(test)]
+    pub fn announce_for_test(peer: &str, key: &str) {
+        keys()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(peer.to_string(), key.to_string());
+    }
+
     fn is_key(key: &str) -> bool {
         key.len() == 64 && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
     }

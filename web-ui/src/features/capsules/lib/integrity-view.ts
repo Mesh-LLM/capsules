@@ -227,7 +227,7 @@ export function buildSetupSteps(
       // A half that arrived by push and closed through the gate corroborates
       // just as an asked-for half does -- the step is done either way.
       done: closedByOtherSideCount > 0 || askedPeerAt !== null,
-      // Finding 7: the count is the "Confirmed by the other side" tile's to
+      // Finding 7: the count is the "Saved as confirmed" tile's to
       // say; the step says only that it's done.
       status:
         closedByOtherSideCount > 0 ? 'received' : askedPeerAt !== null ? `asked ${askedPeerAt}` : 'none received yet',

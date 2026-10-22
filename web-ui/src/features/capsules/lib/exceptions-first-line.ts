@@ -84,7 +84,7 @@ export function exceptionsFirstLine(tally: ExceptionsFirstTally, rangeLabel: str
   return `${needingAttention} ${needNoun} your attention — ${total} ${noun}${rangeSuffix}. ${breakdown}.`
 }
 
-/** UX §3 "One headline": `5 exchanges, 26 Sep · 3 confirmed by the other side
+/** UX §3 "One headline": `5 exchanges, 26 Sep · 3 saved as confirmed
  *  · 0 disagreements`. Registration is an Integrity fact and is not repeated
  *  here. `disagreements` is the CONTRADICTED count, the same gate the rows use. */
 export function exchangesHeadline(

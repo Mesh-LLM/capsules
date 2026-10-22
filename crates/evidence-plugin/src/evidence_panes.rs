@@ -1416,7 +1416,7 @@ fn dealt_with_row(
     // CLOSED, but the presence of a held half is a structural fact stated here.
     let held_half_count = confirmed_siblings.len();
     let half_state = if held_half_count > 0 {
-        format!("their half held (received by push) for {held_half_count} of {total}")
+        format!("their half held for {held_half_count} of {total}")
     } else {
         "their half not held".to_string()
     };
@@ -1972,6 +1972,21 @@ fn peer_attribution(
 }
 
 impl PeerAttribution {
+    /// The record names no counterparty node, or the same node as the row
+    /// `row_key`'s identity. Only a node id from this node's own records is
+    /// compared: a peer's claim about itself never splits a row.
+    fn names_no_other_node(&self, record: &Value, row_key: &str) -> bool {
+        let row_node = self
+            .identity_by_row_key
+            .get(row_key)
+            .filter(|identity| !identity.node_id_self_asserted)
+            .and_then(|identity| identity.node_id.as_deref());
+        match (full_counterparty_node_id(record), row_node) {
+            (Some(named), Some(row_node)) => named == row_node,
+            _ => true,
+        }
+    }
+
     /// The peer row a record belongs to: its exchange's pushed-sibling
     /// identity first (the receiver-verified join); else its own counterparty
     /// label, BRIDGED onto a signing-key row if -- and only if -- that row's
@@ -1985,8 +2000,12 @@ impl PeerAttribution {
         {
             return Some(row_key.clone());
         }
-        if let Some(row_key) =
-            exchange_key_for(record).and_then(|key| self.row_key_by_exchange_key.get(&key))
+        // The exchange key is the request digest, which two exchanges with the
+        // same prompt share: a record that names another node than the
+        // sibling's row is not that exchange, and keeps its own label.
+        if let Some(row_key) = exchange_key_for(record)
+            .and_then(|key| self.row_key_by_exchange_key.get(&key))
+            .filter(|row_key| self.names_no_other_node(record, row_key))
         {
             return Some(row_key.clone());
         }
@@ -5224,6 +5243,47 @@ mod tests {
         record["model_attestation"]["compute_attestation"]["x-mesh-poc-v1"] =
             json!({ "serving_provenance": { "exchange_id": "exch-real" } });
         assert_eq!(exchange_key_for(&record).as_deref(), Some("digest:req-1"));
+    }
+
+    /// Two exchanges with the same prompt share a request digest. When the
+    /// other side's record of one (served by node C) is held, our record of
+    /// the other (served by node A) stays attributed to A: the shared digest
+    /// alone never moves it onto C's row.
+    #[test]
+    fn a_shared_request_digest_never_moves_a_row_to_another_peer() {
+        let (node_a, node_c) = ("a".repeat(64), "c".repeat(64));
+        let req = "1".repeat(64);
+        let to_a = mesh_half_served_by(
+            "mine-to-a",
+            "requested",
+            &req,
+            &"2".repeat(64),
+            "e-a",
+            &node_a,
+        );
+        let to_c = mesh_half_served_by(
+            "mine-to-c",
+            "requested",
+            &req,
+            &"3".repeat(64),
+            "e-c",
+            &node_c,
+        );
+        let theirs_c =
+            mesh_half_served_by("theirs-c", "served", &req, &"3".repeat(64), "e-c2", &node_c);
+        let provenance: HashMap<String, ReceivedProvenance> =
+            [provenance_for("theirs-c", &node_c)].into_iter().collect();
+        let pane = build_pane_c_list(&[to_a, to_c, theirs_c], &provenance);
+        let rows = pane["rows"].as_array().unwrap();
+        let counterparty_of = |capsule_id: &str| {
+            rows.iter()
+                .find(|r| r["mine"]["capsule_id"] == json!(capsule_id))
+                .map(|r| r["counterparty"].clone())
+                .unwrap_or_else(|| panic!("a row for {capsule_id}: {pane}"))
+        };
+        let c_row = counterparty_of("mine-to-c");
+        assert!(c_row.is_string(), "{pane}");
+        assert_ne!(counterparty_of("mine-to-a"), c_row, "{pane}");
     }
 
     /// A record with no `request_digest` at all (e.g. a plugin-served stub
