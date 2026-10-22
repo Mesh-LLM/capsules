@@ -88,9 +88,8 @@ host feature; none names this plugin.
 | `gates/` | the plugin's mutant table, which `scripts/mutants.sh` runs |
 
 The records are sealed by the [`capsule-emit`](https://crates.io/crates/capsule-emit)
-crate on top of [`checkpointed-local-log`](https://crates.io/crates/checkpointed-local-log)
-and [`evidencebook`](https://crates.io/crates/evidencebook); those crates are
-developed and tested in their own repositories.
+crate on top of [`checkpointed-local-log`](https://crates.io/crates/checkpointed-local-log);
+those crates are developed and tested in their own repositories.
 
 ## Contributing
 
