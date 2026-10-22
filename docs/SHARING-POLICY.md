@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Sharing policy
 
-Every sharing decision the plugin makes is one of six switches, and every
+Every sharing decision the plugin makes is one of seven switches, and every
 default keys on **relationship** (whether this node has exchanged with the
 other node), never on proximity, latency, or any computed standing. Nothing
 here is a score, and nothing here ranks anyone.
@@ -10,6 +10,7 @@ here is a score, and nothing here ranks anyone.
 share_record_at_completion:  counterparty | off                    # default: off
 share_history_segments:      counterparties | peers | off          # default: counterparties
 share_standard_history:      on | off                              # default: off
+share_exchange_corroboration: on | off                             # default: off
 advertise_evidence_requests: on | off                              # default: off
 share_adjudications:         deliver_to_subjects | off             # default: off
 witness:                     [] | [{endpoint, public_key?}, ...]   # default: [] (off)
@@ -26,7 +27,7 @@ for its Standard History (`share_standard_history`). The referee
 serves, so it is now read as `counterparties`, and a log line says so. Set
 `counterparties` instead.
 
-The plugin declares the six switches in its `config_schema`
+The plugin declares the seven switches in its `config_schema`
 (`crates/evidence-plugin/src/share_policy.rs`), so the console shows them under
 Configuration › Plugins › Sharing policy. mesh-llm keeps what you save there in
 its config file and does not pass it to the plugin, so the plugin reads it
@@ -34,6 +35,7 @@ there (`~/.mesh-llm/config.toml`, or the file `MESH_LLM_CONFIG` names). The
 same settings can be set in the plugin's environment, which wins over the
 console: `CAPSULES_SHARE_RECORD_AT_COMPLETION`,
 `CAPSULES_SHARE_HISTORY_SEGMENTS`, `CAPSULES_SHARE_STANDARD_HISTORY`,
+`CAPSULES_SHARE_EXCHANGE_CORROBORATION`,
 `CAPSULES_ADVERTISE_EVIDENCE_REQUESTS`, `CAPSULES_SHARE_ADJUDICATIONS` and
 `CAPSULES_CHECKPOINT_WITNESS_URLS` (a comma list of witness URLs) with
 `CAPSULES_CHECKPOINT_WITNESS_KEYS` (a JSON object from witness URL to its key
@@ -185,6 +187,27 @@ nothing about who this one has exchanged with:
 - an unsigned request, whatever id it states;
 - a request stating another node's id;
 - a proven node no record names.
+
+## Exchange corroboration (`share_exchange_corroboration`)
+
+Off by default. Another node can ask whether this node holds a half of one
+exchange, naming the exchange by the SHA-256 of its client nonce
+(`exchange_corroboration/1`). The answer carries each matching half's id,
+role and two digests, never the record or who was on the other side, and it
+is the same for every node it is given to.
+
+- **Off:** only a node that every matching half names as the other side of
+  its exchange is answered. A node that no record names gets a signed
+  `policy_declined`; a node that other records name, but not these halves,
+  gets `not_authorized`. Sharing Standard History does not change this.
+- **On:** any node that asks is answered.
+
+Either way, a half that never leaves this node is never answered.
+
+A node that checks an earlier exchange between two others (the
+`historical_reference` operation) asks each side for its half. If the node
+has exchanged with neither of them, both sides must have this switch on;
+otherwise both refuse it.
 
 ## Advertising evidence requests (`advertise_evidence_requests`)
 
