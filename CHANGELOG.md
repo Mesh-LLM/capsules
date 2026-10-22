@@ -26,7 +26,7 @@ other no record and no Standard History. `share_history_segments = peers` and
   - T3: after an exchange, the provider's served record named the node that asked, with the same
     id the host announces for that node. Once a checkpoint covered the record, that node asked for
     it and got it, and the answer verifies. A node that signed for itself while stating that
-    node's id got a signed `not_authorized`, and nothing was read from the ledger.
+    node's id got a signed `not_authorized`, and no ledger read was observed.
 - **Not run on a stock mesh-llm release.** No release has `plugin_keys.v1` yet (see above), so a
   stock 0.78.1 host cannot run T3. The run repeats on a mesh-llm 0.79 candidate before this release
   is tagged.
