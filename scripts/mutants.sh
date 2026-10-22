@@ -2,6 +2,7 @@
 # Every plugin mutant in gates/mutants.json must fail its tests, and print
 # what the table says it must: an exact line, or a named test reported FAILED.
 # Each mutant is built first, so a compile error never passes as "caught".
+# cargo gets no stdin: the loop reads the rows from it.
 #
 #   scripts/mutants.sh [feature ...]   (default: every mutant listed)
 set -euo pipefail
@@ -25,8 +26,11 @@ EOF
 )
 
 if [ $# -gt 0 ]; then
+  for feature in "$@"; do
+    cut -d $'\x1f' -f1 <<<"$rows" | grep -qxF -- "$feature" \
+      || { echo "::error::$feature is not in $table"; exit 1; }
+  done
   rows=$(awk -F'\037' 'NR == FNR { want[$0] = 1; next } $1 in want' <(printf '%s\n' "$@") <(printf '%s\n' "$rows"))
-  [ -n "$rows" ] || { echo "::error::no listed mutant matches: $*"; exit 1; }
 fi
 
 status=0
@@ -39,8 +43,8 @@ while IFS=$'\x1f' read -r feature test filter kind text; do
     target=(--bin capsules)
     threads=()
   fi
-  cargo test --locked "${target[@]}" --features "$feature" --no-run -q
-  if out=$(cargo test --locked "${target[@]}" --features "$feature" -- "$filter" ${threads[@]+"${threads[@]}"} 2>&1); then
+  cargo test --locked "${target[@]}" --features "$feature" --no-run -q </dev/null
+  if out=$(cargo test --locked "${target[@]}" --features "$feature" -- "$filter" ${threads[@]+"${threads[@]}"} </dev/null 2>&1); then
     echo "::error::the tests passed a build with $feature"
     status=1
     continue
