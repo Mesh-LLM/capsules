@@ -201,6 +201,10 @@
   for that checkpoint. It now counts only verdicts the checkpoint covers that name a record it
   covers, as the Python reference does. Its note also now reads as the reference's does, so the
   two answer the same bytes.
+- **A paid exchange whose deposit covers the bill now gets the payer's delivered settlement leg,**
+  citing the deposit invoice (action-state-group/evidencebook#83). The deposit is cited only when
+  the bill the host accounted is within it, so a final invoice whose event was lost is never
+  replaced by the deposit; that exchange gets no delivered leg.
 
 ## 0.1.4
 
