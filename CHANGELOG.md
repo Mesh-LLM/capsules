@@ -133,6 +133,16 @@
   read as a second, different weights claim. Weights fields are now held to weights fields and
   model ids to model ids. A half whose two weights fields disagree, or that names another model id
   than the one asked for, is still refused, and the Evidence page applies the same rule.
+- **Two providers that gave the same answer to one request are no longer crossed.** Their halves
+  were paired by answer alone, so when one provider's half arrived first it could close the record
+  of the other, and both exchanges showed as open. A half now first closes the record of its own
+  serving node, and the result is the same whatever order the halves arrive in.
+- **A ledger fetch reads at most 1 MiB each way.** The node answering read a whole request into
+  memory before checking it, and the node asking read a whole answer. An oversized request is now
+  dropped unanswered, and an oversized answer is an error.
+- **A start that stopped while moving the ledger to a new history finishes the same move next
+  time.** It used to pick the next archive slot and seal `history_started` with the wrong archive
+  path and a prior record count of zero.
 
 ## 0.1.4
 
