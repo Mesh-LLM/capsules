@@ -78,11 +78,8 @@ const REQUIRED = {
   ],
   exchanges: [
     ...ALL_KINDS.map((kind) => `row_state:${kind}`),
-    'entry_chip:content',
-    'entry_chip:sig',
-    'entry_chip:inclusion',
-    'entry_chip:registered',
-    'entry_chip:theirs',
+    // The verdict's (i): the longer sentences moved off the face.
+    'row:verdict_detail',
     'twin:no_verdict',
     'split:stage_cell',
     'split:handoffs',
@@ -99,6 +96,12 @@ const REQUIRED = {
   // checked in the browser); every other chip it shows must carry one too.
   // UX §3: the CLOSED per-property cells lead the expansion of a CLOSED row.
   checks: [
+    // The per-check chips sit at the top of "How we checked".
+    'entry_chip:content',
+    'entry_chip:sig',
+    'entry_chip:inclusion',
+    'entry_chip:registered',
+    'entry_chip:theirs',
     'closed_cell:their_id',
     'closed_cell:signature',
     'closed_cell:request',
@@ -269,7 +272,7 @@ describe('tooltip census -- every chip type the Evidence tab ships has a plain o
     expect(document.body.textContent).not.toContain('⚠')
   })
 
-  it('Exchanges: every row state, the CLOSED cells, the chip strip and the TWIN badge', async () => {
+  it('Exchanges: every row state, the verdict detail and the TWIN badge', async () => {
     const user = userEvent.setup()
     render(<LedgerPageContent />, { wrapper })
     await user.click(await screen.findByRole('tab', { name: /exchanges/i }))
@@ -326,7 +329,7 @@ describe('tooltip census -- the copy itself', () => {
       ...Object.values(COPY.CLOSED_CELL_TOOLTIPS),
       ...Object.values(COPY.ENTRY_CHIP_RESULT_TOOLTIPS).flatMap((byMark) => Object.values(byMark)),
       COPY.OWN_RECORD_FAILS_WARNING,
-      COPY.CLOSED_FROM_FETCH_NOT_SAVED,
+      COPY.SAVED_BECAUSE_YOU_ASKED,
       ...Object.values(COPY.TWIN_TOOLTIPS),
       ...Object.values(COPY.TWIN_VERDICT_TOOLTIPS),
       COPY.SETUP_STEPS_TOOLTIP,
@@ -353,6 +356,13 @@ describe('tooltip census -- the copy itself', () => {
     }
     expect(face.flatMap((text) => checkWords(text, 'face'))).toEqual([])
     expect(dig.flatMap((text) => checkWords(text, 'dig'))).toEqual([])
+  })
+
+  it('the Exchanges opening line (page text, ruled verbatim) carries no banned word', () => {
+    // "leaves" there is the verb ("each exchange leaves two records"), not
+    // the log's leaves, so only the banned-word check applies.
+    expect(COPY.EXCHANGES_INTRO.endsWith('.')).toBe(true)
+    expect(checkWords(COPY.EXCHANGES_INTRO, 'dig')).toEqual([])
   })
 
   it('the row faces, actions and badges carry no banned or engineer’s word', () => {

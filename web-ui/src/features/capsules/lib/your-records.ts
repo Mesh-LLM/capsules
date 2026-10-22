@@ -38,15 +38,16 @@ function witnessPhrase(state: WitnessState): string {
       return 'held by a witness you don’t run up to an earlier checkpoint'
     case 'pending':
       return 'no checkpoint held by a witness yet (witness on)'
+    // Off is the default; the hero states the fact and doesn't comment on
+    // the choice (the Integrity tile and Your records still say it).
     case 'off':
-      return `no outside witness (${WITNESS_OFF})`
     case 'unknown':
       return 'no outside witness'
   }
 }
 
-/** "8 records · 3 confirmed by the other side · 0 disagreements · checkable
- *  only by you (no witness)". The same counts the Integrity tiles show, from
+/** "8 records · 3 saved as confirmed · 0 disagreements · no outside
+ *  witness". The same counts the Integrity tiles show, from
  *  the same predicate, so the two can't disagree. */
 export function heroStatusLine(counts: HeroCounts): string {
   return [

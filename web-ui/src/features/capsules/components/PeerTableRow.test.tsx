@@ -123,7 +123,7 @@ describe('PeerTableRow — dealt-with peers', () => {
     await user.click(screen.getByText(CLEAN_ROW.peer_id ?? ''))
 
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByText('24 exchanges with you · they confirmed 16 of 24')).toBeInTheDocument()
+    expect(within(dialog).getByText('24 exchanges with you · 16 of 24 saved as confirmed')).toBeInTheDocument()
     expect(within(dialog).getByText(ROUTING_NOT_ON_THIS_PAGE.text)).toBeInTheDocument()
     expect(within(dialog).queryByRole('button', { name: /stop routing/i })).not.toBeInTheDocument()
   })

@@ -286,7 +286,7 @@ export type SettlementCloseCounts = {
 }
 
 /** The Close card's counts over the pane's rows: CLOSED through the predicate
- *  passed in (Integrity passes the one its "Confirmed by the other side" tile
+ *  passed in (Integrity passes the one its "Saved as confirmed" tile
  *  uses), paid and settled from each row's payer-book state, read through the
  *  row's own face so the card and the rows can never disagree. A row whose
  *  terms were accepted with no invoice is not paid. A book the host

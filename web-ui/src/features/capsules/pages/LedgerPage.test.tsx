@@ -77,6 +77,11 @@ vi.mock('@/features/capsules/api/evidenceRequestClient', () => ({
     announcedKeyId: 'e'.repeat(64)
   })
 }))
+// The real judge, spied on so one test can hand the page a verified record.
+vi.mock('@/features/capsules/lib/ask-for-record', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/features/capsules/lib/ask-for-record')>()
+  return { ...actual, judgeAskReply: vi.fn(actual.judgeAskReply) }
+})
 vi.mock('@/features/capsules/api/client', () => ({
   fetchCapsuleLedger: vi.fn().mockResolvedValue({ records: [], nodePubKeyPem: null })
 }))
@@ -939,7 +944,7 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
-    expect(await screen.findByText('Their record hasn’t arrived yet.')).toBeInTheDocument()
+    expect(await screen.findByText('Waiting for their record')).toBeInTheDocument()
     const askButton = await screen.findByRole('button', { name: 'Ask them for their record' })
 
     await user.click(askButton)
@@ -950,7 +955,10 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
       'c'.repeat(64),
       expect.objectContaining({ nonce: 'nonce-known', digests: null })
     )
-    expect(await screen.findByText(/^Asked .*No verified reply yet\.$/)).toBeInTheDocument()
+    // The verdict waits; its (i) says when it asked and, in plain words, that
+    // the ask didn't go through -- never the tool's own message.
+    expect(await screen.findByText(/^Asked .*No verified reply yet\. The ask didn’t go through, so there is no reply to check yet\.$/)).toBeInTheDocument()
+    expect(screen.queryByText(/no reply\)/)).not.toBeInTheDocument()
 
     // Their history: asked of the same node, its verified outcome on the row.
     const { askForHistory } = await import('@/features/capsules/api/evidenceRequestClient')
@@ -2003,3 +2011,133 @@ describe('LedgerPageContent — a peer known only from your records', () => {
     expect(await screen.findByText('Known from your records · no signed record from them yet')).toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// The plain-verdict pass: names before hex, asks that persist, the intro line
+// ---------------------------------------------------------------------------
+
+describe('LedgerPageContent — the plain-verdict pass on Exchanges', () => {
+  const PEER = 'c'.repeat(64)
+
+  async function oneAskableRow() {
+    const { fetchPaneA, fetchPaneB, fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
+    vi.mocked(fetchPaneA).mockResolvedValue({ rows: [], operator: null, witness_checkpoint_supplied: false, card: null })
+    vi.mocked(fetchPaneB).mockResolvedValue({ rows: [], peer_count: 0 })
+    vi.mocked(fetchPaneCList).mockResolvedValue({
+      rows: [
+        {
+          exchange_key: 'exch-askable',
+          role_tag: 'ASKED',
+          header_state: 'issue',
+          properties: null,
+          has_issue: true,
+          counterparty: `node:${'c'.repeat(16)}`,
+          mine: { state: 'present', capsule_id: 'mine-askable' },
+          theirs: { state: 'absent', capsule_id: null },
+          unilateral: true,
+          timestamp: '2026-09-08T08:03:00Z'
+        }
+      ],
+      row_count: 1,
+      default_sort: '',
+      filters: [],
+      next_after_seq: null,
+      archived_segments: []
+    })
+    const { fetchCapsuleLedger } = await import('@/features/capsules/api/client')
+    vi.mocked(fetchCapsuleLedger).mockResolvedValue({
+      records: [
+        {
+          capsule_id: 'mine-askable',
+          effect: { request_digest: 'a'.repeat(64), response_digest: 'b'.repeat(64) },
+          model_attestation: {
+            compute_attestation: {
+              'x-mesh-poc-v1': {
+                role: 'requested',
+                client_nonce: 'nonce-askable',
+                serving_provenance: { served_by_node_id: PEER }
+              }
+            }
+          }
+        }
+      ],
+      nodePubKeyPem: null
+    } as never)
+    return { fetchPaneCList }
+  }
+
+  async function openExchanges() {
+    const user = userEvent.setup()
+    const view = render(<LedgerPageContent />, { wrapper: makeWrapper() })
+    await user.click(screen.getByRole('tab', { name: /exchanges/i }))
+    await screen.findByRole('button', { name: 'Ask for their history' })
+    return { user, ...view }
+  }
+
+  afterEach(async () => {
+    const { useStatusQuery } = await import('@/features/network/api/use-status-query')
+    vi.mocked(useStatusQuery).mockReturnValue({ data: undefined } as never)
+    vi.clearAllMocks()
+    cleanup()
+  })
+
+  it('opens with one line saying what a row is and what Confirmed means', async () => {
+    await oneAskableRow()
+    await openExchanges()
+    expect(
+      screen.getByText('Each exchange leaves two signed records, one per side. Confirmed means both say the same thing.')
+    ).toBeInTheDocument()
+  })
+
+  it('names the other node by its hostname, then its short id', async () => {
+    const { useStatusQuery } = await import('@/features/network/api/use-status-query')
+    vi.mocked(useStatusQuery).mockReturnValue({
+      data: { ...BOUND_OWNER_STATUS_PAYLOAD, peers: [{ id: 'cccccccccc', hostname: 'Ethans-Mac-Mini.local' }] }
+    } as never)
+    await oneAskableRow()
+    await openExchanges()
+    // The event line names the other node, the full label kept as its title.
+    const named = screen.getByText('Ethans-Mac-Mini (cccccccccc)')
+    expect(named).toHaveAttribute('title', `node:${'c'.repeat(16)}`)
+  })
+
+  it('a verified history result is remembered per peer, and shown after a reload with when it was checked', async () => {
+    await oneAskableRow()
+    const first = await openExchanges()
+    await first.user.click(screen.getByRole('button', { name: 'Ask for their history' }))
+    expect(await screen.findByText(/^Their history is verified: 2 checkpoints/)).toBeInTheDocument()
+    first.unmount()
+
+    // A fresh page, no ask sent: the remembered result shows, with its time.
+    await oneAskableRow()
+    await openExchanges()
+    expect(await screen.findByText(/^Their history is verified: 2 checkpoints/)).toBeInTheDocument()
+    expect(document.querySelector('[data-history-checked]')?.textContent).toMatch(/checked /)
+    const { askForHistory } = await import('@/features/capsules/api/evidenceRequestClient')
+    expect(askForHistory).toHaveBeenCalledTimes(1)
+  })
+
+  it('after an ask brings back a record, the page reads its panes again so the row comes from the node', async () => {
+    const { fetchPaneCList } = await oneAskableRow()
+    const { judgeAskReply } = await import('@/features/capsules/lib/ask-for-record')
+    vi.mocked(judgeAskReply).mockResolvedValueOnce({
+      kind: 'record',
+      at: '2026-09-28T23:00:00Z',
+      evidence: { status: 'found', idMatch: true, signatureOk: true, peerRecord: {}, fetch: () => {} }
+    })
+    const { user } = await openExchanges()
+    const before = vi.mocked(fetchPaneCList).mock.calls.length
+    await user.click(screen.getByRole('button', { name: 'Ask them for their record' }))
+    await vi.waitFor(() => expect(vi.mocked(fetchPaneCList).mock.calls.length).toBeGreaterThan(before))
+  })
+
+  it('an ask that gets no record back does not read the panes again', async () => {
+    const { fetchPaneCList } = await oneAskableRow()
+    const { user } = await openExchanges()
+    const before = vi.mocked(fetchPaneCList).mock.calls.length
+    await user.click(screen.getByRole('button', { name: 'Ask them for their record' }))
+    expect(await screen.findByText(/The ask didn’t go through/)).toBeInTheDocument()
+    expect(vi.mocked(fetchPaneCList).mock.calls.length).toBe(before)
+  })
+})
+

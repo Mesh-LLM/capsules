@@ -42,7 +42,13 @@
 // row is talking about.
 import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
 import type { CapsuleRecord } from '@/features/capsules/api/types'
-import { askReplyNote, recordProblems, type AskOutcome, type RowAsk } from '@/features/capsules/lib/ask-for-record'
+import {
+  askReplyNote,
+  recordProblems,
+  recordRefusalWords,
+  type AskOutcome,
+  type RowAsk
+} from '@/features/capsules/lib/ask-for-record'
 import {
   deriveRightCellState,
   fullTimeInstant,
@@ -95,11 +101,14 @@ function attemptText(outcome: AskOutcome, verdict: RecordVerdict | null): string
     case 'asking':
       return null
     case 'no_reply':
-      return `no verified reply (${outcome.detail})`
+      // A tool failure is already a whole plain sentence: said as a clause.
+      return outcome.plain
+        ? `${outcome.detail.charAt(0).toLowerCase()}${outcome.detail.slice(1).replace(/\.$/, '')}`
+        : `no verified reply (${outcome.detail})`
     case 'ambiguous':
       return `their reply carried ${outcome.count} records that could be theirs; none is shown as theirs`
     case 'refused':
-      return 'they declined, and signed the refusal'
+      return `they declined (${recordRefusalWords(outcome.reason)}), and signed the refusal`
     case 'no_record':
       return 'they say they have no record of this, signed'
     case 'record': {

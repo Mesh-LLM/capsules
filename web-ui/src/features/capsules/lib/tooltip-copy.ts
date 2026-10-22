@@ -204,10 +204,31 @@ export const LOCAL_ONLY_TOOLTIP =
 export const SERVED_FOR_PAY_NO_PAYER_TOOLTIP =
   'Open, and it may stay open: another node paid for this exchange, but this node didn’t record which one, so it can’t ask for their record. It closes only if the payer sends theirs.'
 
-/** A row confirmed from a record this page asked for and fetched: honest
- *  that nothing was saved on the node (console copy). */
-export const CLOSED_FROM_FETCH_NOT_SAVED =
-  'Confirmed on this page from the record you asked for; not saved on this node yet.'
+/** The Exchanges tab's opening line: what a row is, and what Confirmed
+ *  means (Steven's acceptance for the plain-verdict pass; copy reviewed). */
+export const EXCHANGES_INTRO =
+  'Each exchange leaves two signed records, one per side. Confirmed means both say the same thing.'
+
+/** Each row's plain verdict, on its face; the longer sentences behind its
+ *  (i). A Disagree row keeps its own wording (`rightCellText`). */
+export const ROW_VERDICT = {
+  confirmed: (peer: string) => `✓ You and ${peer} recorded the same exchange`,
+  waiting: 'Waiting for their record',
+  declined: 'They declined'
+} as const
+/** Who the confirmed verdict names when no record names the other node. */
+export const ROW_VERDICT_UNNAMED_PEER = 'the other side'
+
+/** A confirmed row whose held record of theirs came by ask (`theirs.via ===
+ *  "ask"`), said behind the verdict's (i) (Sherlock2's acceptance). */
+export const SAVED_BECAUSE_YOU_ASKED = 'Saved on this node because you asked them for it.'
+
+/** The three steps under each row, in order. */
+export const ROW_STEP_LABELS = {
+  sealed: 'Sealed',
+  checkpoint: 'In a checkpoint',
+  confirmed: 'Confirmed by them'
+} as const
 
 /** A confirmed exchange whose own record fails its checks: said on the row,
  *  so a Confirmed badge never sits beside a failed check unexplained. */
@@ -417,7 +438,7 @@ export const CLOSE_CARD_TOOLTIP =
   'A period both sides have closed: one side seals a Close with its counts for the period, and the other side acknowledges it. None yet on this node.'
 
 export const CLOSE_CARD_COUNTS_TOOLTIP =
-  'Counts over the exchanges shown here, none of them in an agreed period: how many the other side confirmed, and how many were paid and settled by your wallet.'
+  'Counts over the exchanges shown here, none of them in an agreed period: how many are saved as confirmed, and how many were paid and settled by your wallet.'
 
 /** Where a check result in the checks panel came from, in words. */
 export const CHECK_SOURCE_WORDS = { here: 'checked here', node: 'node says' } as const

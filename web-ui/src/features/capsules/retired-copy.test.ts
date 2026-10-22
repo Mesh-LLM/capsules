@@ -117,7 +117,13 @@ const RETIRED_PHRASES = [
   'NOT recompute',
   'Not adjudicated',
   'Your side is sealed',
-  'recomputed here'
+  'recomputed here',
+  // Plain-verdict pass: an asked record is saved on the node (`via: "ask"`),
+  // and the confirmed counts are named once, "saved as confirmed".
+  'not saved on this node',
+  'They confirmed',
+  'they confirmed',
+  'Each exchange is a pair of sealed records'
 ] as const
 
 const HERE = dirname(fileURLToPath(import.meta.url))

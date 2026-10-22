@@ -59,6 +59,18 @@ describe('LedgerPeersTable — two row groups, never merged', () => {
     expect(within(advertisedGroup as HTMLElement).getByText('11223344')).toBeInTheDocument()
   })
 
+  it('names each peer through the page’s namer, and search finds a peer by that name', async () => {
+    const user = userEvent.setup()
+    const props = buildFixtureProps()
+    const peerName = (id: string) => (id === CLEAN_ROW.peer_id ? 'Ethans-Mac-Mini (e7c7916261)' : id)
+    render(<LedgerPeersTable {...props} peerName={peerName} />)
+    const named = screen.getByText('Ethans-Mac-Mini (e7c7916261)')
+    expect(named).toHaveAttribute('title', CLEAN_ROW.peer_id)
+    await user.type(screen.getByRole('textbox'), 'mac-mini')
+    expect(screen.getByText('Ethans-Mac-Mini (e7c7916261)')).toBeInTheDocument()
+    expect(screen.queryByText(ALARMED_ROW.peer_id ?? '')).not.toBeInTheDocument()
+  })
+
   it('a zero-dealings peer in the advertised group shows "no exchanges yet" with "—" accountability columns', () => {
     const props = buildFixtureProps()
     render(<LedgerPeersTable {...props} />)
@@ -139,7 +151,7 @@ describe('LedgerPeersTable — toolbar', () => {
     // label plus the glyph's description -- match on the label substring.
     expect(screen.getByRole('columnheader', { name: /^Same request & answer/ })).toBeInTheDocument()
     // Plain-language names (UX §2).
-    expect(screen.getByRole('columnheader', { name: /^They confirmed/ })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /^Saved as confirmed/ })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /columns/i }))
     await user.click(screen.getByRole('menuitemcheckbox', { name: 'Same request & answer' }))
@@ -163,7 +175,7 @@ describe('LedgerPeersTable — toolbar', () => {
     render(<LedgerPeersTable {...props} />)
 
     // The Confirmed header's (i) carries the UX §8 sentence verbatim.
-    const confirmedGlyph = screen.getByRole('button', { name: 'About They confirmed' })
+    const confirmedGlyph = screen.getByRole('button', { name: 'About Saved as confirmed' })
     const confirmedDesc = document.getElementById(confirmedGlyph.getAttribute('aria-describedby') as string)
     expect(confirmedDesc).toHaveTextContent(PEER_COLUMN_INFO.confirmed)
     expect(PEER_COLUMN_INFO.confirmed).toContain('confirmed by their own signed record, checked on this machine')
@@ -171,7 +183,7 @@ describe('LedgerPeersTable — toolbar', () => {
     // Every visible accountability column header has its own (i) glyph.
     for (const label of [
       'Exchanges',
-      'They confirmed',
+      'Saved as confirmed',
       'Same request & answer',
       'Disputes judged',
       'Their records witnessed'

@@ -33,6 +33,9 @@ export type PeerTableRowProps = {
   /** Columns toggle (the Peers table toolbar) -- Peer/Alarm are
    *  never hideable, only the six accountability columns are. */
   visibleColumns?: ReadonlySet<PeerTableColumnKey>
+  /** How the page names this peer (`peer-names.ts`): hostname, then short
+   *  id. Defaults to the row's own id. */
+  name?: string
 }
 
 const EMPTY_SOURCES: readonly PeerExchangeSource[] = []
@@ -43,8 +46,10 @@ export function PeerTableRow({
   meshStatus,
   exchangeSources = EMPTY_SOURCES,
   recordsById = EMPTY_RECORDS,
-  visibleColumns = ALL_PEER_TABLE_COLUMNS
+  visibleColumns = ALL_PEER_TABLE_COLUMNS,
+  name
 }: PeerTableRowProps) {
+  const shownName = name ?? view.displayId
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const points = useMemo(
     () => (view.row ? buildTimelinePoints(view.row, exchangeSources, recordsById) : []),
@@ -56,7 +61,7 @@ export function PeerTableRow({
   return (
     <>
       <TableRow
-        aria-label={inspectable ? `Open peer inspector for ${view.displayId}` : undefined}
+        aria-label={inspectable ? `Open peer inspector for ${shownName}` : undefined}
         className={
           inspectable
             ? 'cursor-pointer align-top outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent'
@@ -76,7 +81,9 @@ export function PeerTableRow({
       >
         <TableCell>
           <div className="flex flex-col items-start gap-1.5">
-            <span className="truncate font-mono text-sm font-medium text-foreground">{view.displayId}</span>
+            <span className="truncate font-mono text-sm font-medium text-foreground" title={view.displayId}>
+              {shownName}
+            </span>
             {/* D3: the peer's other
                id spaces render as ALIASES on this one row -- signing key ·
                node · endpoint -- never as extra peer rows. */}
@@ -135,6 +142,7 @@ export function PeerTableRow({
       {view.row ? (
         <PeerInspector
           meshStatus={meshStatus}
+          name={name}
           onClose={() => setInspectorOpen(false)}
           open={inspectorOpen}
           points={points}

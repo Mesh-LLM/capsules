@@ -22,7 +22,7 @@ export type InfoHoverProps = {
    *  visually-hidden node the glyph's `aria-describedby` points at. */
   label: string
   /** Names what the (i) explains, for the glyph's own accessible name
-   *  (e.g. "About Confirmed by the other side"). */
+   *  (e.g. "About Saved as confirmed"). */
   describes: string
   /** Optional tooltip side; defaults to the shared primitive's "top". */
   side?: 'top' | 'right' | 'bottom' | 'left'

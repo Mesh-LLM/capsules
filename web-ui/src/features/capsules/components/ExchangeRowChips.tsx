@@ -1,6 +1,8 @@
 // The entry row's chip strip (design
 // §3A) -- `content · sig · inclusion · registered · theirs`, each a link
-// into the `▸ checks` panel's matching property row. `role="link"` (not
+// into the `▸ checks` panel's matching property row. It sits at the top of
+// the "How we checked" panel; the row face shows three plain steps instead
+// (`row-verdict.ts` `rowSteps`). `role="link"` (not
 // `button`) deliberately: every existing row test counts the row's ACTION
 // buttons (`getAllByRole('button')`) as a load-bearing invariant
 // ("no whole-row click target... the two
@@ -35,6 +37,7 @@ const MARK_COLOR: Record<EntryRowChipMark, string> = {
 export function ExchangeRowChips({
   checks,
   checkpointCovered = null,
+  witnessOff = false,
   onChipActivate
 }: {
   /** The row's check results -- the same `buildChecksRows` output the
@@ -42,13 +45,16 @@ export function ExchangeRowChips({
   checks: readonly ChecksRow[]
   /** Whether a checkpoint covers this row's record, by the node's count. */
   checkpointCovered?: boolean | null
+  /** No witness is set on this node (`checkpointRegistration`'s `off`): the
+   *  "witnessed" chip would only ever read `–`, so it isn't shown. */
+  witnessOff?: boolean
   /** The property key (`security-checks-view.ts`'s `ChecksRow.key`) this
    *  chip links to, not the chip's own short label. */
   onChipActivate: (propertyKey: string) => void
 }) {
   return (
     <div aria-label="checks summary" className="flex flex-wrap items-center gap-2.5" role="group">
-      {ENTRY_ROW_CHIP_ORDER.map((chip) => {
+      {ENTRY_ROW_CHIP_ORDER.filter((chip) => !(witnessOff && chip === 'registered')).map((chip) => {
         const mark = entryRowChipMark(checks, chip, checkpointCovered)
         const label = ENTRY_ROW_CHIP_LABEL[chip]
         const propertyKey = entryRowChipPropertyKey(chip)

@@ -1,7 +1,8 @@
 import { ed25519 } from '@noble/curves/ed25519'
 import { describe, expect, it } from 'vitest'
 import type { EvidenceAskReply, EvidenceVerification } from '@/features/capsules/api/evidenceRequestClient'
-import { refusalSigningBody } from '@/features/capsules/lib/ask-for-record'
+import { ASK_DID_NOT_GO_THROUGH, refusalSigningBody } from '@/features/capsules/lib/ask-for-record'
+import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import { historyNote, historyRefusalWords, judgeHistoryReply } from '@/features/capsules/lib/ask-for-history'
 
 const ASKED_AT = '2026-10-22T10:00:00Z'
@@ -26,7 +27,8 @@ describe('judgeHistoryReply', () => {
     expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: 3 })
     expect(historyNote(outcome)).toEqual({
       verified: true,
-      text: 'Their history is verified: 3 checkpoints of their log, each signed with the key this node has for them and each extending the one before.'
+      text: 'Their history is verified: 3 checkpoints of their log, each signed with the key this node has for them and each extending the one before.',
+      checkedLine: `checked ${formatExchangeTimestamp(ASKED_AT)}`
     })
   })
 
@@ -66,11 +68,12 @@ describe('judgeHistoryReply', () => {
   })
 
   it('anything the plugin could not verify, or no answer at all, fails and says why', () => {
-    expect(judgeHistoryReply({ kind: 'no_answer', message: 'HTTP 502' }, ASKED_AT)).toEqual({
-      kind: 'failed',
-      at: ASKED_AT,
-      detail: 'HTTP 502'
-    })
+    // A tool error is never shown raw: one plain sentence instead.
+    const noAnswer = judgeHistoryReply({ kind: 'no_answer', message: '{"error":"HTTP 502"}' }, ASKED_AT)
+    expect(noAnswer).toEqual({ kind: 'failed', at: ASKED_AT, detail: ASK_DID_NOT_GO_THROUGH, plain: true })
+    expect(historyNote(noAnswer)).toEqual({ verified: false, text: ASK_DID_NOT_GO_THROUGH })
+    const gone = judgeHistoryReply({ kind: 'no_answer', message: 'could not reach peer: no route' }, ASKED_AT)
+    expect(historyNote(gone)?.text).toBe('That node isn’t on the mesh now, so it can’t be asked.')
     const unverified = judgeHistoryReply(reply({}, { state: 'not_evidence', why: 'a consistency proof does not hold' }), ASKED_AT)
     expect(historyNote(unverified)).toEqual({
       verified: false,

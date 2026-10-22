@@ -44,6 +44,8 @@ export type PeerInspectorProps = {
   row: PaneBRow | null
   meshStatus: PeerMeshStatus | null
   points: readonly PeerTimelinePoint[]
+  /** How the page names this peer (`peer-names.ts`); defaults to its id. */
+  name?: string
 }
 
 type PeerInspectorTab = 'overview' | 'history' | 'timeline' | 'exchanges'
@@ -118,7 +120,7 @@ function PeerExchangesTab({
   )
 }
 
-export function PeerInspector({ open, onClose, row, points }: PeerInspectorProps) {
+export function PeerInspector({ open, onClose, row, points, name }: PeerInspectorProps) {
   const [selectedPoint, setSelectedPoint] = useState<PeerTimelinePoint | null>(null)
 
   return (
@@ -132,7 +134,7 @@ export function PeerInspector({ open, onClose, row, points }: PeerInspectorProps
         {open && row ? (
           <SharedModalContent className="flex max-h-[min(calc(100dvh-4rem),44rem)] max-w-2xl flex-col overflow-hidden">
             <SharedModalHeader className="relative shrink-0">
-              <SharedModalTitle className="font-mono">{peerDisplayId(row)}</SharedModalTitle>
+              <SharedModalTitle className="font-mono">{name ?? peerDisplayId(row)}</SharedModalTitle>
               <SharedModalDescription>{PEER_INSPECTOR_HEADER}</SharedModalDescription>
               <DialogPrimitive.Close asChild>
                 <Button

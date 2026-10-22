@@ -12,7 +12,7 @@
 //   - anything else (no announced key, a reply that proves nothing, no reply)
 //     is a failed ask, and says why.
 import type { EvidenceAskReply } from '@/features/capsules/api/evidenceRequestClient'
-import { NO_KEY_DETAIL, refusalProblem } from '@/features/capsules/lib/ask-for-record'
+import { NO_KEY_DETAIL, askFailureSentence, refusalProblem } from '@/features/capsules/lib/ask-for-record'
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 
 /** What asking for their history produced. `at` is when this node asked, or
@@ -22,14 +22,16 @@ export type HistoryOutcome =
   /** `checkpoints` is `null` when the plugin's verification didn't say how many. */
   | { kind: 'verified'; at: string; checkpoints: number | null }
   | { kind: 'refused'; at: string; reason: string }
-  | { kind: 'failed'; at: string; detail: string }
+  /** `plain`: the ask itself failed, and `detail` is a whole plain sentence
+   *  saying so (`askFailureSentence`). */
+  | { kind: 'failed'; at: string; detail: string; plain?: boolean }
 
 function obj(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
 }
 
 export function judgeHistoryReply(reply: EvidenceAskReply, askedAt: string): HistoryOutcome {
-  if (reply.kind === 'no_answer') return { kind: 'failed', at: askedAt, detail: reply.message }
+  if (reply.kind === 'no_answer') return { kind: 'failed', at: askedAt, detail: askFailureSentence(reply.message), plain: true }
   const verification = reply.verification
   switch (verification.state) {
     case 'no_announced_key':
@@ -71,8 +73,10 @@ export function historyRefusalWords(reason: string): string {
   return REFUSAL_WORDS[reason] ?? 'for a reason this page can’t name'
 }
 
-/** The line a row shows for its history ask, or `null` while it is in flight. */
-export function historyNote(outcome: HistoryOutcome): { verified: boolean; text: string } | null {
+/** The line a row shows for its history ask, or `null` while it is in flight.
+ *  A verified history says when it was checked (`checkedLine`), since a
+ *  remembered one can be from an earlier visit (`history-memory.ts`). */
+export function historyNote(outcome: HistoryOutcome): { verified: boolean; text: string; checkedLine?: string } | null {
   switch (outcome.kind) {
     case 'asking':
       return null
@@ -82,7 +86,8 @@ export function historyNote(outcome: HistoryOutcome): { verified: boolean; text:
       const listed = n === null ? 'the checkpoints' : `${n} checkpoint${n === 1 ? '' : 's'}`
       return {
         verified: true,
-        text: `Their history is verified: ${listed} of their log, each signed with the key this node has for them and each extending the one before.`
+        text: `Their history is verified: ${listed} of their log, each signed with the key this node has for them and each extending the one before.`,
+        checkedLine: `checked ${formatExchangeTimestamp(outcome.at)}`
       }
     }
     case 'refused':
@@ -91,6 +96,6 @@ export function historyNote(outcome: HistoryOutcome): { verified: boolean; text:
         text: `They declined to show their history (${historyRefusalWords(outcome.reason)}), and signed the refusal. ${formatExchangeTimestamp(outcome.at)}.`
       }
     case 'failed':
-      return { verified: false, text: `Their history is not verified: ${outcome.detail}` }
+      return { verified: false, text: outcome.plain ? outcome.detail : `Their history is not verified: ${outcome.detail}` }
   }
 }
