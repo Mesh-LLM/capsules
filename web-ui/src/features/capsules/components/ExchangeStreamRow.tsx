@@ -25,6 +25,7 @@ import { buildChecksRows } from '@/features/capsules/lib/security-checks-view'
 import { theirContentText, yourContentFixedText } from '@/features/capsules/lib/exchange-content-state'
 import { isServedForPay, type ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
 import {
+  NOT_ON_MESH,
   askTarget,
   otherSideNodeId,
   rowAskControls,
@@ -327,18 +328,21 @@ export function ExchangeStreamRow({
   // longer sentences (the state's own, and what an ask returned and how it
   // was checked) move behind its (i).
   const otherSide = askPeer ?? row.counterparty
-  const faceText = gatedByCounterparty ? gatedText : rowVerdictText(state, otherSide ? peerName(otherSide) : null)
+  // An ask that couldn't reach the node (it left the mesh) is said on the
+  // face, not only behind the (i).
+  const latestAsk = askOutcome?.latest ?? null
+  const notOnMesh = latestAsk?.kind === 'no_reply' && latestAsk.plain === true && latestAsk.detail === NOT_ON_MESH
+  const faceText = gatedByCounterparty
+    ? gatedText
+    : rowVerdictText(state, otherSide ? peerName(otherSide) : null, notOnMesh)
   // A confirmation from the record the node holds because this node asked
   // for it (the pane's `via: "ask"`; a pushed one is `"push"`) says so.
   const savedByAsk = state.kind === 'closed' && row.raw.theirs.via === 'ask' ? SAVED_BECAUSE_YOU_ASKED : null
-  const verdictDetail = [
-    cellText !== faceText ? cellText : null,
-    savedByAsk,
-    askNote ? askNote.text : null,
-    retryNote
-  ]
+  // Nothing the face already says is repeated behind the (i).
+  const verdictDetail = [cellText, savedByAsk, askNote ? askNote.text : null, retryNote]
     .filter((text): text is string => text !== null)
     .map(sentence)
+    .filter((text) => text !== sentence(faceText))
     .join(' ')
   // The row's two asks, always on the row face: record push is off by
   // default, so asking is how their record (or their history) gets here. Each

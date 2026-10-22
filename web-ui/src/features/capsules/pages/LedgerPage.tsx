@@ -32,6 +32,7 @@ import {
 import { judgeHistoryReply, type HistoryOutcome } from '@/features/capsules/lib/ask-for-history'
 import {
   loadVerifiedHistories,
+  newestRowPerPeer,
   rememberVerifiedHistory,
   type VerifiedHistory
 } from '@/features/capsules/lib/history-memory'
@@ -398,18 +399,25 @@ function rowMatchesStateFilter(row: ExchangeLedgerRow, selected: ReadonlySet<str
   return row.twinBracketId !== null && selected.has('twins')
 }
 
-/** The verified history this browser remembers for the row's other node. */
-function rememberedHistory(
-  remembered: ReadonlyMap<string, VerifiedHistory>,
-  row: ExchangeLedgerRow,
-  recordsById: Map<string, CapsuleRecord>
-): VerifiedHistory | undefined {
+/** The node on the other side of a row, as our record of it names it. */
+function rowPeerId(row: ExchangeLedgerRow, recordsById: Map<string, CapsuleRecord>): string | null {
   const ours =
     (row.raw.mine.capsule_id ? recordsById.get(row.raw.mine.capsule_id) : undefined) ??
     (row.raw.mine.record as CapsuleRecord | undefined) ??
     null
-  const peerId = otherSideNodeId(ours)
-  return peerId ? remembered.get(peerId) : undefined
+  return otherSideNodeId(ours)
+}
+
+/** The verified history this browser remembers for the row's other node,
+ *  on that node's newest row only (`newestRowPerPeer`). */
+function rememberedHistory(
+  remembered: ReadonlyMap<string, VerifiedHistory>,
+  newestByPeer: ReadonlyMap<string, string>,
+  row: ExchangeLedgerRow,
+  recordsById: Map<string, CapsuleRecord>
+): VerifiedHistory | undefined {
+  const peerId = rowPeerId(row, recordsById)
+  return peerId && newestByPeer.get(peerId) === row.exchangeKey ? remembered.get(peerId) : undefined
 }
 
 function ExchangesSection({
@@ -541,6 +549,14 @@ function ExchangesSection({
   // (`history-memory.ts`): a row with no ask of its own this visit shows it.
   const [verifiedHistories, setVerifiedHistories] = useState<ReadonlyMap<string, VerifiedHistory>>(() =>
     loadVerifiedHistories()
+  )
+  // Across every row, not just this page's: "newest" never depends on paging.
+  const newestRowByPeer = useMemo(
+    () =>
+      newestRowPerPeer(
+        allRows.map((row) => ({ key: row.exchangeKey, peerId: rowPeerId(row, recordsById), timestamp: row.timestamp }))
+      ),
+    [allRows, recordsById]
   )
   const handleAskForHistory = useCallback((row: ExchangeLedgerRow, peerId: string) => {
     const askedAt = new Date().toISOString()
@@ -1078,7 +1094,7 @@ function ExchangesSection({
                         onAskForRecord={harnessMode || sampleData ? undefined : handleAskForRecord}
                         historyOutcome={
                           historyOutcomes.get(row.exchangeKey) ??
-                          rememberedHistory(verifiedHistories, row, recordsById) ??
+                          rememberedHistory(verifiedHistories, newestRowByPeer, row, recordsById) ??
                           null
                         }
                         onAskForHistory={harnessMode || sampleData ? undefined : handleAskForHistory}

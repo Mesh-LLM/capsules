@@ -22,6 +22,7 @@ import { createStandaloneHost } from '@/plugin-host/standalone-host'
 import { CHAIN_BAR_INFO, INTEGRITY_TILE_INFO } from '@/features/capsules/lib/integrity-view'
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import { HERO_DESCRIPTION, DOCS_URL } from '@/features/capsules/lib/tooltip-copy'
+import { HISTORY_MEMORY_KEY } from '@/features/capsules/lib/history-memory'
 
 // ---------------------------------------------------------------------------
 // Mock all network fetchers — tests must never hit the real network.
@@ -2070,7 +2071,7 @@ describe('LedgerPageContent — the plain-verdict pass on Exchanges', () => {
     const user = userEvent.setup()
     const view = render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
-    await screen.findByRole('button', { name: 'Ask for their history' })
+    await screen.findAllByRole('button', { name: 'Ask for their history' })
     return { user, ...view }
   }
 
@@ -2115,6 +2116,53 @@ describe('LedgerPageContent — the plain-verdict pass on Exchanges', () => {
     expect(document.querySelector('[data-history-checked]')?.textContent).toMatch(/checked /)
     const { askForHistory } = await import('@/features/capsules/api/evidenceRequestClient')
     expect(askForHistory).toHaveBeenCalledTimes(1)
+  })
+
+  it('a remembered history shows once, on that peer’s newest row, never on its older rows', async () => {
+    const { fetchPaneCList } = await oneAskableRow()
+    const row = (key: string, capsuleId: string, timestamp: string) => ({
+      exchange_key: key,
+      role_tag: 'ASKED',
+      header_state: 'issue',
+      properties: null,
+      has_issue: true,
+      mine: { state: 'present', capsule_id: capsuleId },
+      theirs: { state: 'absent', capsule_id: null },
+      unilateral: true,
+      timestamp
+    })
+    vi.mocked(fetchPaneCList).mockResolvedValue({
+      rows: [row('exch-older', 'mine-older', '2026-09-01T08:00:00Z'), row('exch-newer', 'mine-newer', '2026-09-08T08:00:00Z')],
+      row_count: 2,
+      default_sort: '',
+      filters: [],
+      next_after_seq: null,
+      archived_segments: []
+    } as never)
+    const record = (capsuleId: string) => ({
+      capsule_id: capsuleId,
+      effect: { request_digest: 'a'.repeat(64), response_digest: 'b'.repeat(64) },
+      model_attestation: {
+        compute_attestation: {
+          'x-mesh-poc-v1': { role: 'requested', client_nonce: `n-${capsuleId}`, serving_provenance: { served_by_node_id: PEER } }
+        }
+      }
+    })
+    const { fetchCapsuleLedger } = await import('@/features/capsules/api/client')
+    vi.mocked(fetchCapsuleLedger).mockResolvedValue({
+      records: [record('mine-older'), record('mine-newer')],
+      nodePubKeyPem: null
+    } as never)
+    window.localStorage.setItem(
+      HISTORY_MEMORY_KEY,
+      JSON.stringify({ [PEER]: { kind: 'verified', at: '2026-10-22T10:00:00Z', checkpoints: 2 } })
+    )
+    await openExchanges()
+    expect(await screen.findAllByText(/^Their history is verified: 2 checkpoints/)).toHaveLength(1)
+    const newer = screen.getByLabelText('Exchange exch-newer')
+    const older = screen.getByLabelText('Exchange exch-older')
+    expect(within(newer).getByText(/^Their history is verified/)).toBeInTheDocument()
+    expect(within(older).queryByText(/^Their history is verified/)).not.toBeInTheDocument()
   })
 
   it('after an ask brings back a record, the page reads its panes again so the row comes from the node', async () => {

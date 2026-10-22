@@ -43,7 +43,7 @@ export const SAMPLE_DATA_UNAVAILABLE = 'Not available on sample data.'
  *  what can be shown about it. "docs" links what the page can and cannot
  *  show (`DOCS_URL`). */
 export const HERO_DESCRIPTION_BEFORE_LINK =
-  'Every exchange this node handled, sealed as a signed record when it happened. The chips on each row show what was checked here. See the '
+  'Every exchange this node handled, sealed as a signed record when it happened. Each row shows how far its record has got; How we checked lists every check. See the '
 export const HERO_DESCRIPTION_LINK_TEXT = 'docs'
 export const HERO_DESCRIPTION_AFTER_LINK = '.'
 export const HERO_DESCRIPTION = `${HERO_DESCRIPTION_BEFORE_LINK}${HERO_DESCRIPTION_LINK_TEXT}${HERO_DESCRIPTION_AFTER_LINK}`

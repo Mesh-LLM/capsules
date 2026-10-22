@@ -123,7 +123,9 @@ const RETIRED_PHRASES = [
   'not saved on this node',
   'They confirmed',
   'they confirmed',
-  'Each exchange is a pair of sealed records'
+  'Each exchange is a pair of sealed records',
+  // The chips moved into How we checked; rows show three steps.
+  'chips on each row'
 ] as const
 
 const HERE = dirname(fileURLToPath(import.meta.url))

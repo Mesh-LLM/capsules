@@ -51,3 +51,21 @@ export function rememberVerifiedHistory(
   }
   return next
 }
+
+/** Which row shows a peer's remembered history: a history is a fact about
+ *  the peer, not about any one exchange, so it is said once, on that peer's
+ *  newest row. Peer id -> that row's key; a row with no time loses to one
+ *  with a time, and ties keep the first row seen. */
+export function newestRowPerPeer(
+  rows: readonly { key: string; peerId: string | null; timestamp: string | null }[]
+): Map<string, string> {
+  const newest = new Map<string, { key: string; at: number }>()
+  for (const row of rows) {
+    if (!row.peerId) continue
+    const parsed = row.timestamp ? Date.parse(row.timestamp) : Number.NaN
+    const at = Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed
+    const current = newest.get(row.peerId)
+    if (!current || at > current.at) newest.set(row.peerId, { key: row.key, at })
+  }
+  return new Map([...newest].map(([peerId, { key }]) => [peerId, key]))
+}

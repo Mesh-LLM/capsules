@@ -1605,11 +1605,28 @@ describe('ExchangeStreamRow — the record an ask returned feeds the state, the 
       plain: true
     })
     render(<ExchangeStreamRow {...toggleProps()} askOutcome={ask} rail={NO_RAIL} row={makeRow('open_not_held')} />)
-    expect(screen.getByText('Waiting for their record')).toBeInTheDocument()
-    expect(document.querySelector('[data-verdict-detail]')).toHaveTextContent(
+    // On the face, in place of "Waiting for their record".
+    expect(document.querySelector('[data-row-verdict-text]')).toHaveTextContent(
       'That node isn’t on the mesh now, so it can’t be asked.'
     )
-    expect(document.querySelector('[data-verdict-detail]')?.textContent).not.toMatch(/could not reach|routable|\{/)
+    expect(screen.queryByText('Waiting for their record')).not.toBeInTheDocument()
+    // The (i) keeps the dated detail, without repeating the face.
+    const detail = document.querySelector('[data-verdict-detail]')?.textContent ?? ''
+    expect(detail).toMatch(/^Asked .*\. No verified reply yet\./)
+    expect(detail).not.toContain('isn’t on the mesh')
+    expect(detail).not.toMatch(/could not reach|routable|\{/)
+  })
+
+  it('an ask that failed for another reason still waits on the face', () => {
+    const ask = settleRowAsk(null, {
+      kind: 'no_reply',
+      at: '2026-09-28T23:10:00Z',
+      detail: 'The ask didn’t go through, so there is no reply to check yet.',
+      plain: true
+    })
+    render(<ExchangeStreamRow {...toggleProps()} askOutcome={ask} rail={NO_RAIL} row={makeRow('open_not_held')} />)
+    expect(document.querySelector('[data-row-verdict-text]')).toHaveTextContent('Waiting for their record')
+    expect(document.querySelector('[data-verdict-detail]')).toHaveTextContent('The ask didn’t go through')
   })
 })
 

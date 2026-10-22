@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   HISTORY_MEMORY_KEY,
   loadVerifiedHistories,
+  newestRowPerPeer,
   rememberVerifiedHistory
 } from '@/features/capsules/lib/history-memory'
 
@@ -42,5 +43,31 @@ describe('the last verified history per peer, kept in this browser', () => {
     expect(loadVerifiedHistories().size).toBe(0)
     const map = rememberVerifiedHistory(new Map(), 'peer-a', { kind: 'verified', at: 't', checkpoints: 1 })
     expect(map.get('peer-a')?.checkpoints).toBe(1)
+  })
+})
+
+describe('which row shows a peer’s remembered history', () => {
+  it('only that peer’s newest row', () => {
+    const newest = newestRowPerPeer([
+      { key: 'old-a', peerId: 'a', timestamp: '2026-09-01T10:00:00Z' },
+      { key: 'new-a', peerId: 'a', timestamp: '2026-09-03T10:00:00Z' },
+      { key: 'mid-a', peerId: 'a', timestamp: '2026-09-02T10:00:00Z' },
+      { key: 'only-b', peerId: 'b', timestamp: null },
+      { key: 'nobody', peerId: null, timestamp: '2026-09-09T10:00:00Z' }
+    ])
+    expect(newest).toEqual(
+      new Map([
+        ['a', 'new-a'],
+        ['b', 'only-b']
+      ])
+    )
+  })
+
+  it('a row with a time beats one without', () => {
+    const newest = newestRowPerPeer([
+      { key: 'untimed', peerId: 'a', timestamp: null },
+      { key: 'timed', peerId: 'a', timestamp: '2026-09-01T10:00:00Z' }
+    ])
+    expect(newest.get('a')).toBe('timed')
   })
 })

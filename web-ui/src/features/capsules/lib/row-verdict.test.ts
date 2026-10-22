@@ -18,6 +18,15 @@ describe('the row verdict, in plain words', () => {
     }
   })
 
+  it('says on the face that a node which left the mesh can’t be asked, instead of waiting', () => {
+    for (const kind of ['open_not_held', 'open_not_given', 'open_not_asked', 'open_asked'] as const) {
+      expect(rowVerdictText(state(kind), 'x', true)).toBe('That node isn’t on the mesh now, so it can’t be asked.')
+    }
+    // A verdict their record already gave stands.
+    expect(rowVerdictText(state('closed'), 'x', true)).toBe('✓ You and x recorded the same exchange')
+    expect(rowVerdictText(state('open_refused'), 'x', true)).toBe('They declined')
+  })
+
   it('says a decline plainly', () => {
     expect(rowVerdictText(state('open_refused'), 'x')).toBe('They declined')
   })

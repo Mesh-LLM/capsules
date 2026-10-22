@@ -4,13 +4,16 @@
 // Disagree (its own wording) for one that differs or doesn't produce its own
 // id. Everything longer -- how their reply was checked, what an ask returned
 // -- sits behind the verdict's (i), not on the face.
+import { NOT_ON_MESH } from '@/features/capsules/lib/ask-for-record'
 import { rightCellText, type RightCellState } from '@/features/capsules/lib/exchange-row-state'
 import { ROW_STEP_LABELS, ROW_VERDICT, ROW_VERDICT_UNNAMED_PEER } from '@/features/capsules/lib/tooltip-copy'
 
 /** The verdict line. `peer` is how the page names the other node
  *  (`peer-names.ts`), `null` when no record names it. "They have no record"
- *  keeps its own signed statement: it is an answer, not a wait. */
-export function rowVerdictText(state: RightCellState, peer: string | null): string {
+ *  keeps its own signed statement: it is an answer, not a wait.
+ *  `notOnMesh`: the latest ask couldn't reach that node (it left the mesh),
+ *  so a row that would wait says why it can't instead. */
+export function rowVerdictText(state: RightCellState, peer: string | null, notOnMesh = false): string {
   switch (state.kind) {
     case 'closed':
       return ROW_VERDICT.confirmed(peer ?? ROW_VERDICT_UNNAMED_PEER)
@@ -23,7 +26,7 @@ export function rowVerdictText(state: RightCellState, peer: string | null): stri
     case 'open_not_held':
     case 'open_not_given':
     case 'open_not_asked':
-      return ROW_VERDICT.waiting
+      return notOnMesh ? NOT_ON_MESH : ROW_VERDICT.waiting
     default: {
       const exhaustiveCheck: never = state.kind
       return exhaustiveCheck
