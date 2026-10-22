@@ -24,7 +24,12 @@ import { ed25519 } from '@noble/curves/ed25519'
 import type { CapsuleRecord } from '@/features/capsules/api/types'
 import type { AskSubject, EvidenceAskReply } from '@/features/capsules/api/evidenceRequestClient'
 import { verifyCoseSign1 } from '@/features/capsules/lib/cose'
-import { fullTimeInstant, isVerifiedRecord, type RightCellStateKind } from '@/features/capsules/lib/exchange-row-state'
+import {
+  fullTimeInstant,
+  isVerifiedRecord,
+  recordVerdict,
+  type RightCellStateKind
+} from '@/features/capsules/lib/exchange-row-state'
 import { recomputeIdMatch, type PeerRecomputeState } from '@/features/capsules/lib/recompute-identity'
 import { SAMPLE_DATA_UNAVAILABLE } from '@/features/capsules/lib/tooltip-copy'
 
@@ -408,6 +413,7 @@ export function askReplyNote(outcome: AskOutcome): { verified: boolean; text: st
 export type RowAsk = {
   latest: AskOutcome
   claim: Extract<AskOutcome, { kind: 'refused' | 'no_record' }> | null
+  /** The latest record that gives this row a verdict. */
   record: Extract<AskOutcome, { kind: 'record' }> | null
 }
 
@@ -422,14 +428,23 @@ function newerClaim(stored: RowAsk['claim'], incoming: NonNullable<RowAsk['claim
   return incoming.kind !== stored.kind ? incoming : stored
 }
 
-export function settleRowAsk(previous: RowAsk | null | undefined, outcome: AskOutcome): RowAsk {
+/** `localRecord` is our record of the exchange: what decides whether a
+ *  record they sent gives this row a verdict (`recordVerdict`, the same
+ *  judgement `judgeRow` uses). */
+export function settleRowAsk(
+  previous: RowAsk | null | undefined,
+  outcome: AskOutcome,
+  localRecord: CapsuleRecord | null | undefined
+): RowAsk {
   const claim =
     outcome.kind === 'refused' || outcome.kind === 'no_record'
       ? newerClaim(previous?.claim ?? null, outcome)
       : (previous?.claim ?? null)
-  // A record that can give a verdict: verified, or one whose contents
-  // demonstrably don't produce its id (Disagree, `recordVerdict`).
-  const keeps = outcome.kind === 'record' && (isVerifiedRecord(outcome.evidence) || outcome.evidence.idMatch === false)
+  // Only a record that gives this row a verdict (Confirmed or Disagree) is
+  // kept; one that reaches none -- even validly signed, from another provider
+  // or for another exchange -- only updates `latest`.
+  const keeps =
+    outcome.kind === 'record' && recordVerdict(outcome.evidence, localRecord, 'asked').kind !== 'no_verdict'
   const record = keeps ? outcome : (previous?.record ?? null)
   return { latest: outcome, claim, record }
 }

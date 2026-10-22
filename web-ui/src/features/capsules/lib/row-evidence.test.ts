@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
 import { settleRowAsk, type AskOutcome, type RowAsk } from '@/features/capsules/lib/ask-for-record'
-import type { RightCellStateKind } from '@/features/capsules/lib/exchange-row-state'
+import { fullTimeInstant, type RightCellStateKind } from '@/features/capsules/lib/exchange-row-state'
 import { FIXTURE_REQUEST_DIGEST, fixtureHalfBody } from '@/features/capsules/lib/pushed-half-fixtures'
 import type { PeerRecomputeState } from '@/features/capsules/lib/recompute-identity'
 import { judgeRow, type EvidenceSource } from '@/features/capsules/lib/row-evidence'
@@ -71,7 +71,7 @@ const failed = (at = T2): AskOutcome => ({ kind: 'no_reply', at, detail: 'HTTP 5
 
 function asks(...outcomes: AskOutcome[]): RowAsk | null {
   let ask: RowAsk | null = null
-  for (const outcome of outcomes) ask = settleRowAsk(ask, outcome)
+  for (const outcome of outcomes) ask = settleRowAsk(ask, outcome, ours() as never)
   return ask
 }
 
@@ -177,6 +177,38 @@ const CASES: Case[] = [
     state: 'contradicted',
     source: 'asked',
     retry: /^Asked again .*: their record didn’t check out \(it is not signed with the key this node has for them\)\.$/
+  },
+  {
+    name: 'a kept contradiction survives a later validly signed other_provider record',
+    
+    ask: asks(asked(record('disagrees')), asked(record('other_provider'), T2)),
+    state: 'contradicted',
+    source: 'asked',
+    retry: /^Asked again .*: their record checks out but doesn’t confirm this exchange: it isn’t from the node that served you\.$/
+  },
+  {
+    name: 'a kept contradiction survives a later validly signed other_provider record beside a confirming push',
+    row: paneRow({ pushed: record('agrees') }),
+    ask: asks(asked(record('disagrees')), asked(record('other_provider'), T2)),
+    state: 'contradicted',
+    source: 'asked',
+    retry: /^Asked again .*: their record checks out but doesn’t confirm this exchange: it isn’t from the node that served you\.$/
+  },
+  {
+    name: 'a kept contradiction survives a later validly signed other_exchange record',
+    
+    ask: asks(asked(record('disagrees')), asked(record('other_exchange'), T2)),
+    state: 'contradicted',
+    source: 'asked',
+    retry: /^Asked again .*: their record checks out but doesn’t confirm this exchange: it doesn’t name your request and answer\.$/
+  },
+  {
+    name: 'a kept contradiction survives a later validly signed other_exchange record beside a confirming push',
+    row: paneRow({ pushed: record('agrees') }),
+    ask: asks(asked(record('disagrees')), asked(record('other_exchange'), T2)),
+    state: 'contradicted',
+    source: 'asked',
+    retry: /^Asked again .*: their record checks out but doesn’t confirm this exchange: it doesn’t name your request and answer\.$/
   },
   // Rule 4: the newest verified claim.
   {
@@ -310,5 +342,39 @@ describe('settleRowAsk: which verified claim is kept', () => {
     expect(asks(first, refused('5 Sep'))?.claim).toBe(first)
     const different = noRecord('5 Sep')
     expect(asks(first, different)?.claim).toBe(different)
+  })
+})
+
+describe('settleRowAsk: only a record that gives this row a verdict is kept', () => {
+  it('a later validly signed record that reaches no verdict only updates latest', () => {
+    const contradicting = asked(record('disagrees'))
+    for (const kind of ['other_provider', 'other_exchange'] as const) {
+      const later = asked(record(kind), T2)
+      const ask = asks(contradicting, later)
+      expect(ask?.record).toBe(contradicting)
+      expect(ask?.latest).toBe(later)
+    }
+  })
+
+  it('a later record that does give a verdict replaces the kept one', () => {
+    const confirming = asked(record('agrees'), T2)
+    expect(asks(asked(record('disagrees')), confirming)?.record).toBe(confirming)
+  })
+})
+
+describe('fullTimeInstant', () => {
+  it('names an instant only for a full RFC 3339 time with a zone that parses to a real time', () => {
+    expect(fullTimeInstant('2026-09-28T21:00:00Z')).toBe(Date.parse('2026-09-28T21:00:00Z'))
+    expect(fullTimeInstant('2026-09-28T23:00:00+02:00')).toBe(Date.parse('2026-09-28T21:00:00Z'))
+    for (const bad of ['2026-99-28T21:00:00Z', '2026-09-28T21:00:00', '4 Sep', '', null, undefined]) {
+      expect(fullTimeInstant(bad)).toBeNull()
+    }
+  })
+
+  it('a claim whose time names no real instant falls back to the kind rule', () => {
+    const impossible = refused('2026-99-28T21:00:00Z')
+    expect(asks(impossible, refused('2026-09-28T21:00:00Z'))?.claim).toBe(impossible)
+    const different = noRecord('2026-09-28T21:00:00Z')
+    expect(asks(impossible, different)?.claim).toBe(different)
   })
 })

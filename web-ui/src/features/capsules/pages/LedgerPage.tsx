@@ -485,15 +485,18 @@ function ExchangesSection({
     const askedAt = new Date().toISOString()
     const record = row.raw.mine.record as { effect?: { request_digest?: unknown } } | undefined
     const requestDigest = typeof record?.effect?.request_digest === 'string' ? record.effect.request_digest : null
+    // Our record, as the row judges with it: the fetched one, else the
+    // body the pane sent.
+    const ours = (row.raw.mine.capsule_id ? recordsById.get(row.raw.mine.capsule_id) : undefined) ?? (row.raw.mine.record as CapsuleRecord | undefined) ?? null
     const settle = (outcome: AskOutcome) =>
       setAskOutcomes((previous) =>
-        new Map(previous).set(row.exchangeKey, settleRowAsk(previous.get(row.exchangeKey), outcome))
+        new Map(previous).set(row.exchangeKey, settleRowAsk(previous.get(row.exchangeKey), outcome, ours))
       )
     settle({ kind: 'asking', at: askedAt })
     void askForRecord(target.peerId, target)
       .then((reply) => judgeAskReply(reply, requestDigest, askedAt))
       .then(settle)
-  }, [])
+  }, [recordsById])
 
   // "Ask for their history": one evidence request for the other side's
   // history card (`history_card/1`), judged in `ask-for-history.ts`. Kept per

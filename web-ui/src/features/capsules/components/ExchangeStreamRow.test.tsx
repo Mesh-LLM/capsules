@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ExchangeStreamRow } from '@/features/capsules/components/ExchangeStreamRow'
-import { settleRowAsk } from '@/features/capsules/lib/ask-for-record'
+import { settleRowAsk as settleRowAskWith, type AskOutcome, type RowAsk } from '@/features/capsules/lib/ask-for-record'
 import { exchangeRowDomId } from '@/features/capsules/lib/exchange-pages'
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import {
@@ -53,6 +53,10 @@ const LOCAL_RECORD_WITH_DIGESTS: CapsuleRecord = (() => {
   poc.client_nonce = 'nonce-mine-1'
   return body as CapsuleRecord
 })()
+
+/** Settles asks against the record every test row passes as ours. */
+const settleRowAsk = (previous: RowAsk | null, outcome: AskOutcome) =>
+  settleRowAskWith(previous, outcome, LOCAL_RECORD_WITH_DIGESTS)
 
 // finding 1: `ExchangeStreamRow`
 // now derives its own right-cell state from `row.raw` + a live

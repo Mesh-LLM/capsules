@@ -31,7 +31,7 @@ const ASKED_AT = '2026-09-28T21:00:00Z'
 /** The row's state after a run of asks, as the row derives it. */
 function stateAfterAsks(row: PaneCRow, outcomes: AskOutcome[], local: unknown, fetched: PeerRecomputeState | null = null) {
   let ask: RowAsk | null = null
-  for (const outcome of outcomes) ask = settleRowAsk(ask, outcome)
+  for (const outcome of outcomes) ask = settleRowAsk(ask, outcome, local as never)
   return judgeRow(row, local as never, fetched, ask).state
 }
 
