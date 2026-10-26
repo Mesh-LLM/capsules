@@ -17,10 +17,11 @@ witness:                     [] | [{endpoint, public_key?}, ...]   # default: []
 ```
 
 With these defaults a node sends nothing to a peer on its own: it pushes no
-record, delivers no verdict and advertises nothing, and it answers only a
-counterparty that asks: for one of its records (`share_history_segments`) or
-for its Standard History (`share_standard_history`). The referee
-(`adjudicate_differing_twins`) is off by default too.
+record, delivers no verdict and advertises nothing. It answers any node that
+asks for its checkpoint list or `history_card/1` (below), and otherwise only
+a counterparty that asks: for one of its records (`share_history_segments`)
+or for the rest of its Standard History (`share_standard_history`). The
+referee (`adjudicate_differing_twins`) is off by default too.
 
 `share_history_segments` also accepts `prospective`, its default before
 0.1.6. It is deprecated: it always served exactly whom `counterparties`
@@ -161,7 +162,8 @@ pool full.
 
 The checkpoint list, the `history_card/1` derivation and the `served_summary/1`
 derivation carry no record bodies: `share_history_segments` does not govern
-them, and `share_standard_history` does (below). The cases and their
+them. The checkpoint list and `history_card/1` go to anyone, and
+`share_standard_history` governs the rest (below). The cases and their
 expected answers are in the plugin's evidence-request parity run
 (`crates/evidence-plugin/src/evidence_request_parity.rs`).
 
@@ -169,10 +171,22 @@ expected answers are in the plugin's evidence-request parity run
 
 Off by default. Standard History is what an evidence request can get that
 carries no record bodies: the checkpoint list, `history_card/1` and
-`served_summary/1` (and any other derivation). It carries no records, but it
-shows how much and how often this node serves, so with this switch off it goes
-only to a counterparty: a node that some record of this node names as the
-other side of an exchange. Any other node is refused `policy_declined`.
+`served_summary/1` (and any other derivation but `exchange_corroboration/1`,
+below).
+
+**The checkpoint list and `history_card/1` go to anyone who asks**, whatever
+this switch and `share_history_segments` say: an unsigned request, any node's,
+or one signed under a key no host announced (a signature that fails is still
+refused). They carry only this node's signed checkpoints and the consistency
+proofs between them, the same for every node, so a community reporter or
+`doctor --probe` can read and check them without having exchanged with this
+node. They show how much this node has recorded and when it cut each
+checkpoint, and nothing about any one exchange or counterparty.
+
+The rest (`served_summary/1` and any other derivation) shows what this node
+serves, so with this switch off it goes only to a counterparty: a node that
+some record of this node names as the other side of an exchange. Any other
+node is refused `policy_declined`.
 
 The refusal carries nothing about who asked. It is decided before the subject
 is resolved, so it is the same whether or not what was asked for exists, and
