@@ -15,6 +15,11 @@ other no record and no Standard History. `share_history_segments = peers` and
 `share_standard_history = on` keep answering unsigned requests, and the records status
 (`requests_signed`) shows which case a node is in.
 
+**Updating from mesh-llm 0.78.x:** upgrade mesh-llm to the release that pins capsules 0.1.5, then
+run `mesh-llm plugins install-defaults`. It installs from that release's bundled copy and never
+downloads; a node that runs `capsules` from its own `[[plugin]]` `command` or `url` is left as it is
+and installs the package from INSTALL.md.
+
 ### Verified on live hosts, and not
 
 - **T3 and T7 passed on three nodes built from mesh-llm main (95f9b48), not on a stock release.**

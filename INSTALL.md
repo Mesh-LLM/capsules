@@ -17,6 +17,17 @@ default settings this version refuses its unsigned requests for records and Stan
 go out unsigned, and two upgraded nodes with the default settings answer each other no record and
 no Standard History; see the CHANGELOG for the settings that keep answering them.
 
+**Updating from mesh-llm 0.78.x.** The default `capsules` comes from the mesh-llm release's own
+bundled copy. Upgrade mesh-llm to the release that pins capsules 0.1.5, then run:
+
+```bash
+mesh-llm plugins install-defaults
+```
+
+It installs from that release's bundled copy and never downloads. A node that runs `capsules` from
+its own `[[plugin]]` entry (a `command` or `url`) is operator-managed and is left as it is: install
+the 0.1.5 package below instead.
+
 - **Who asks for evidence is proven, not stated.** On a host that announces plugin keys, each
   request is signed with the key mesh-llm announces for the node, and a node that claims to be
   another is refused before anything is looked up.
