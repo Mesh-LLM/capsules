@@ -29,8 +29,9 @@ pub const RECORD_AT_COMPLETION_KEY: &str = "share_record_at_completion";
 pub const HISTORY_SEGMENTS_KEY: &str = "share_history_segments";
 pub const ADJUDICATIONS_KEY: &str = "share_adjudications";
 pub const WITNESS_KEY: &str = "witness";
-/// Standard Service History (checkpoints, `history_card/1`,
-/// `served_summary/1`) to a requester that is not this node's counterparty.
+/// The rest of Standard Service History (`served_summary/1` and other
+/// derivations) to a requester that is not this node's counterparty.
+/// Checkpoints and `history_card/1` are stranger-safe and not gated by it.
 pub const STANDARD_HISTORY_KEY: &str = "share_standard_history";
 /// `exchange_corroboration/1` (one exchange's half digests) to a requester
 /// that no record of this node names as its counterparty.
@@ -115,9 +116,10 @@ pub(crate) fn history_segments_for(raw: Option<&str>) -> &'static str {
 /// This process's own env var for `share_standard_history`.
 pub const ENV_STANDARD_HISTORY: &str = "CAPSULES_SHARE_STANDARD_HISTORY";
 
-/// Whether Standard Service History goes to a requester that is not this
-/// node's counterparty: only when the operator turned it on. Off by default;
-/// a counterparty is answered either way.
+/// Whether the rest of Standard Service History (not checkpoints or
+/// `history_card/1`, which go to anyone) goes to a requester that is not
+/// this node's counterparty: only when the operator turned it on. Off by
+/// default; a counterparty is answered either way.
 pub fn shares_standard_history() -> bool {
     shares_standard_history_for(crate::settings::var(ENV_STANDARD_HISTORY).ok().as_deref())
 }
@@ -242,6 +244,9 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                      push also carries a signed checkpoint of this node's log and the record's \
                      inclusion proof -- the checkpoint reveals the log's total size (records \
                      across all peers) and its time, never any other record's content. \
+                     With checkpointing on, each push cuts a checkpoint, and any node can \
+                     read the checkpoint list, so its times show when this node's exchanges \
+                     ended. \
                      Symmetric: a node with this off also does not receive the other side's \
                      push. It governs pushes only: a record you ask the other side for is \
                      checked and held either way.",
@@ -301,12 +306,12 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                 .default_value(&"off")
                 .description(
                     "Answer a node this node has never exchanged with when it asks for this \
-                     node's checkpoints, history card or served summary (on), or decline (off, \
-                     the default). These carry no records, but they show how much and how \
-                     often this node serves. Off, such a node gets a signed policy_declined \
-                     that says nothing about who asked; a counterparty is answered either way. \
-                     A counterparty is known by the id its request states, which is not yet \
-                     authenticated.",
+                     node's served summary or another derived history (on), or decline (off, \
+                     the default). These carry no records, but they show what this node \
+                     serves. Off, such a node gets a signed policy_declined that says nothing \
+                     about who asked; a counterparty, proven by its signed request, is answered \
+                     either way. Checkpoints and the history card go to anyone who asks, \
+                     whatever this is set to.",
                 )
                 .label("Standard history")
                 .category(CATEGORY_ID, CATEGORY_LABEL, CATEGORY_SUMMARY, 4),

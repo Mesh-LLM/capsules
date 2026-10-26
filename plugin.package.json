@@ -19,7 +19,7 @@
         "apply_mode": "static_on_load",
         "restart_scope": "none",
         "visibility": "user",
-        "description": "Push this node's own sealed record of a completed exchange to the counterparty (counterparty), or don't (off, the default). With checkpointing on, the push also carries a signed checkpoint of this node's log and the record's inclusion proof -- the checkpoint reveals the log's total size (records across all peers) and its time, never any other record's content. Symmetric: a node with this off also does not receive the other side's push. It governs pushes only: a record you ask the other side for is checked and held either way.",
+        "description": "Push this node's own sealed record of a completed exchange to the counterparty (counterparty), or don't (off, the default). With checkpointing on, the push also carries a signed checkpoint of this node's log and the record's inclusion proof -- the checkpoint reveals the log's total size (records across all peers) and its time, never any other record's content. With checkpointing on, each push cuts a checkpoint, and any node can read the checkpoint list, so its times show when this node's exchanges ended. Symmetric: a node with this off also does not receive the other side's push. It governs pushes only: a record you ask the other side for is checked and held either way.",
         "presentation": {
           "label": "Record at completion",
           "category_id": "share",
@@ -136,7 +136,7 @@
         "apply_mode": "static_on_load",
         "restart_scope": "none",
         "visibility": "user",
-        "description": "Answer a node this node has never exchanged with when it asks for this node's checkpoints, history card or served summary (on), or decline (off, the default). These carry no records, but they show how much and how often this node serves. Off, such a node gets a signed policy_declined that says nothing about who asked; a counterparty is answered either way. A counterparty is known by the id its request states, which is not yet authenticated.",
+        "description": "Answer a node this node has never exchanged with when it asks for this node's served summary or another derived history (on), or decline (off, the default). These carry no records, but they show what this node serves. Off, such a node gets a signed policy_declined that says nothing about who asked; a counterparty, proven by its signed request, is answered either way. Checkpoints and the history card go to anyone who asks, whatever this is set to.",
         "presentation": {
           "label": "Standard history",
           "category_id": "share",

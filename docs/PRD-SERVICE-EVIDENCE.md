@@ -152,19 +152,27 @@ separate operator settings. Each is its own switch; none implies another.
 | Setting (working names) | What it governs | Default |
 | --- | --- | --- |
 | `advertise_evidence_requests` | Whether the node advertises that it answers evidence requests at all (mesh capability, A2A Agent Card extension) | **off**: operator opt-in |
-| `share_standard_history` | Standard Service History (checkpoints, `history_card/1`, `served_summary/1`) to a requester with no prior exchange with this node | **off** until the operator enables it |
+| `share_standard_history` | The rest of Standard Service History (`served_summary/1` and other derivations but `exchange_corroboration/1`, which has its own setting) to a requester with no prior exchange with this node; checkpoints and `history_card/1` are stranger-safe (R-8) | **off** until the operator enables it |
 | Protected exchange records (§5.3) | Any subject carrying record bodies | Authenticated **and** authorized requesters only; never on a stated id alone |
 | `public_summary_policy` | A broad, public-safe summary any requester may read | **none**; only under an explicit policy with bounded periods and anti-differencing controls (R-9) |
 
 - **R-7 Opt-in advertisement.** A node that has not enabled
   `advertise_evidence_requests` advertises no evidence capability. It may still
   answer a counterparty that asks, under the other settings.
-- **R-8 Standard History is not public by default.** With
-  `share_standard_history` off, a requester that is not an authenticated
-  counterparty of this node receives a signed `policy_declined` for
-  checkpoints, `history_card/1` and `served_summary/1`, uniformly (the same
-  answer for every such requester, so the refusal itself discloses nothing
-  per asker).
+- **R-8 Two stranger-safe classes; the rest of Standard History is not
+  public by default.** The checkpoint list (`checkpoints` with no
+  derivation) and `history_card/1` go to any requester under every setting,
+  unsigned or signed (a signature that fails is still refused). They carry
+  only this node's signed checkpoints and their consistency proofs, the same
+  artifact for every requester, so a community reporter and `doctor --probe`
+  can read and verify them (#50). With `share_record_at_completion` and the
+  checkpoint cadence on, each push cuts a checkpoint, so a checkpoint's time
+  can be one exchange's end time. With `share_standard_history` off, a
+  requester that is not an authenticated counterparty of this node receives
+  a signed `policy_declined` for `served_summary/1` and every other
+  derivation (`exchange_corroboration/1` has its own setting), uniformly
+  (the same answer for every such requester, so the refusal itself
+  discloses nothing per asker).
 - **R-9 Public summaries need anti-differencing controls.** A broad summary
   is answered only for closed, aligned, non-overlapping periods of a fixed
   minimum length set by the policy; a request for any other interval is
@@ -461,12 +469,13 @@ interoperability (M1–M5).
   is byte-identical to the direct `history_card/1` answer for the same subject
   and anchor, and a requester that knows only -00 can verify it.
 - **T7 — Privacy defaults.** On a node with default settings: no evidence
-  capability is advertised; checkpoints, `history_card/1` and
-  `served_summary/1` to a non-counterparty are refused `policy_declined`,
-  identically for every such asker. With a public summary policy on: a request
-  for a non-aligned or overlapping interval is refused, and the summaries for
-  two adjacent periods cannot be combined to isolate one exchange (fixture: a
-  period with exactly one exchange of a model).
+  capability is advertised; checkpoints and `history_card/1` are answered
+  to a non-counterparty, signed or not; `served_summary/1` to a
+  non-counterparty is refused `policy_declined`, identically for every such
+  asker. With a public summary policy on: a request for a non-aligned or
+  overlapping interval is refused, and the summaries for two adjacent
+  periods cannot be combined to isolate one exchange (fixture: a period with
+  exactly one exchange of a model).
 - **T8 — Invariance.** The same (subject, anchor, derivation) requested by two
   requesters, with different nonces, over two transports, yields
   byte-identical artifacts and two envelopes, each binding its own request

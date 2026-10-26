@@ -797,9 +797,10 @@ fn corpus_cases(ledger: &[Value], cps: &[CorpusCheckpoint]) -> Vec<Value> {
     cases
 }
 
-/// PRD T7's default half: Standard History (checkpoints, `history_card/1`,
-/// `served_summary/1`) goes to a counterparty, and every other requester is
-/// refused `policy_declined` before the subject is looked up.
+/// PRD T7's default half: checkpoints and `history_card/1` are stranger-safe
+/// and go to anyone (R-8); the rest of Standard History (`served_summary/1`,
+/// any other derivation) goes to a counterparty, and every other requester
+/// is refused `policy_declined` before the subject is looked up.
 fn standard_history_cases(latest: &Value, record: &str) -> Vec<Value> {
     let with_asker = |subject: Value, derivation: Option<&str>, asker: Option<&str>| {
         let mut r = json!({"subject": subject, "coverage": latest});
@@ -823,19 +824,19 @@ fn standard_history_cases(latest: &Value, record: &str) -> Vec<Value> {
     vec![
         by(
             "checkpoints_to_a_non_counterparty",
-            "checkpoints are not shared with a node this one never exchanged with",
+            "checkpoints are stranger-safe: a node this one never exchanged with is answered",
             "counterparties",
             with_asker(json!({"checkpoints": null}), None, Some("node-z")),
         ),
         case(
             "checkpoints_to_a_stranger",
-            "an asker naming no id is nobody's counterparty",
+            "checkpoints are stranger-safe: an asker naming no id is answered",
             "counterparties",
             with_asker(json!({"checkpoints": null}), None, None),
         ),
         by(
             "checkpoints_to_a_non_counterparty_under_peers",
-            "share_history_segments governs records, never Standard History",
+            "share_history_segments governs records, never checkpoints",
             "peers",
             with_asker(json!({"checkpoints": null}), None, Some("node-z")),
         ),
@@ -847,7 +848,7 @@ fn standard_history_cases(latest: &Value, record: &str) -> Vec<Value> {
         ),
         by(
             "history_card_to_a_non_counterparty",
-            "history_card/1 is not shared with a node this one never exchanged with",
+            "history_card/1 is stranger-safe: a node this one never exchanged with is answered",
             "counterparties",
             with_asker(full(), Some("history_card/1"), Some("node-z")),
         ),
@@ -879,6 +880,12 @@ fn standard_history_cases(latest: &Value, record: &str) -> Vec<Value> {
             "standard_history_unknown_pin_to_a_non_counterparty",
             "the refusal comes before the anchor is resolved: it says nothing about what this node holds",
             "counterparties",
+            json!({"subject": {"full_history": null}, "coverage": {"expected_pin": "d".repeat(64)}, "derivation": "served_summary/1", "requester_id": "node-z"}),
+        ),
+        by(
+            "checkpoints_unknown_pin_to_a_non_counterparty",
+            "a stranger-safe request is resolved for anyone: checkpoints are public, so the miss is too",
+            "counterparties",
             json!({"subject": {"checkpoints": null}, "coverage": {"expected_pin": "d".repeat(64)}, "requester_id": "node-z"}),
         ),
         by(
@@ -895,7 +902,7 @@ fn standard_history_cases(latest: &Value, record: &str) -> Vec<Value> {
         ),
         case(
             "checkpoints_unsigned_naming_a_counterparty",
-            "an unsigned request is nobody's, whatever id it states",
+            "an unsigned request is nobody's, whatever id it states, and is answered checkpoints all the same",
             "counterparties",
             with_asker(json!({"checkpoints": null}), None, Some("node-a")),
         ),
@@ -1558,15 +1565,15 @@ const EXPECTED: &[(&str, &str)] = &[
     ),
     (
         "checkpoints_to_a_non_counterparty",
-        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"checkpoints"},"reply":{"refused":"policy_declined"}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"checkpoints"},"reply":{"answered":"checkpoints","verification":{"anchor":"checkpoints[1]","checkpoints":2,"records":[],"state":"artifact"}}}"#,
     ),
     (
         "checkpoints_to_a_stranger",
-        r#"{"log":{"subject_kind":"checkpoints"},"reply":{"refused":"policy_declined"}}"#,
+        r#"{"log":{"subject_kind":"checkpoints"},"reply":{"answered":"checkpoints","verification":{"anchor":"checkpoints[1]","checkpoints":2,"records":[],"state":"artifact"}}}"#,
     ),
     (
         "checkpoints_to_a_non_counterparty_under_peers",
-        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"checkpoints"},"reply":{"refused":"policy_declined"}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"checkpoints"},"reply":{"answered":"checkpoints","verification":{"anchor":"checkpoints[1]","checkpoints":2,"records":[],"state":"artifact"}}}"#,
     ),
     (
         "checkpoints_to_a_counterparty",
@@ -1574,7 +1581,7 @@ const EXPECTED: &[(&str, &str)] = &[
     ),
     (
         "history_card_to_a_non_counterparty",
-        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"full_history"},"reply":{"refused":"policy_declined"}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"full_history"},"reply":{"answered":"full_history","verification":{"anchor":"checkpoints[1]","checkpoints":2,"records":[],"state":"artifact"}}}"#,
     ),
     (
         "history_card_to_a_counterparty",
@@ -1594,7 +1601,11 @@ const EXPECTED: &[(&str, &str)] = &[
     ),
     (
         "standard_history_unknown_pin_to_a_non_counterparty",
-        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"checkpoints"},"reply":{"refused":"policy_declined"}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"full_history"},"reply":{"refused":"policy_declined"}}"#,
+    ),
+    (
+        "checkpoints_unknown_pin_to_a_non_counterparty",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","requester_id":"node-z","subject_kind":"checkpoints"},"reply":{"refused":"coverage_unsatisfiable"}}"#,
     ),
     (
         "record_to_its_counterparty_under_prospective",
@@ -1606,7 +1617,7 @@ const EXPECTED: &[(&str, &str)] = &[
     ),
     (
         "checkpoints_unsigned_naming_a_counterparty",
-        r#"{"log":{"requester_id":"node-a","subject_kind":"checkpoints"},"reply":{"refused":"policy_declined"}}"#,
+        r#"{"log":{"requester_id":"node-a","subject_kind":"checkpoints"},"reply":{"answered":"checkpoints","verification":{"anchor":"checkpoints[1]","checkpoints":2,"records":[],"state":"artifact"}}}"#,
     ),
     (
         "not_json",
