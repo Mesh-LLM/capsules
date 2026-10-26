@@ -947,7 +947,7 @@ pub(crate) fn configured_witness_key(
 pub(crate) mod tests {
     use super::*;
     use crate::evidence_request_parity::{
-        announced_keys as announced, asker_key, corpus_checkpoints, corpus_ledger, sealed,
+        announced_keys as announced, asker_key, corpus_checkpoints, corpus_ledger, sealed, served,
         write_jsonl, NODE_KEY_SEED,
     };
 
@@ -2805,6 +2805,90 @@ pub(crate) mod tests {
                 }
             }
         }
+    }
+
+    /// `correlation` is an exact-key lookup answered as `record` and
+    /// `exchange` are (capsules#60, Sherlock2's condition for keeping it): a
+    /// stranger gets nothing under any setting; under `counterparties` a node
+    /// gets it only when every matching record names it; a key's prefix
+    /// matches nothing. In the corpus, records 0 and 4 carry nonce `n-1` and
+    /// name node-a.
+    #[test]
+    fn a_correlation_goes_by_exact_key_only_to_a_node_every_match_names() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let by =
+            |key: &str| json!({"subject": {"correlation": key}, "coverage": {"min_freshness": 1}});
+        let n1 = by("n-1");
+        let stranger = SigningKey::from_bytes(&[0x77; 32]);
+        for segments in ["counterparties", "peers", "off"] {
+            for (who, bytes) in [
+                ("unsigned", serde_json::to_vec(&n1).unwrap()),
+                ("unbound", signed_with(&stranger, &n1)),
+            ] {
+                assert_eq!(
+                    refused(&ask_with(dir.path(), &bytes, segments, true)),
+                    Some(Reason::NotAuthorized),
+                    "{segments} {who}"
+                );
+            }
+        }
+        assert!(matches!(
+            ask_with(
+                dir.path(),
+                &signed_by("node-a", &n1),
+                "counterparties",
+                true
+            ),
+            Outcome::Answered { .. }
+        ));
+        assert_eq!(
+            refused(&ask_with(
+                dir.path(),
+                &signed_by("node-b", &n1),
+                "counterparties",
+                true
+            )),
+            Some(Reason::NotAuthorized),
+            "node-b is a counterparty, but not of these records"
+        );
+        assert_eq!(
+            refused(&ask_with(
+                dir.path(),
+                &signed_by("node-a", &by("n-")),
+                "counterparties",
+                true
+            )),
+            Some(Reason::NoSuchSubject),
+            "a prefix is not a key"
+        );
+
+        // Record 1, which names node-b, now carries n-1 too.
+        let mut mixed = ledger.clone();
+        mixed[1] = served(
+            "node-b",
+            "model-x",
+            "confirmed",
+            "20.000",
+            json!({"nonce": "n-1"}),
+        );
+        let dir = node(&mixed);
+        for asker in ["node-a", "node-b"] {
+            assert_eq!(
+                refused(&ask_with(
+                    dir.path(),
+                    &signed_by(asker, &n1),
+                    "counterparties",
+                    true
+                )),
+                Some(Reason::NotAuthorized),
+                "{asker}: refused whole, never filtered"
+            );
+        }
+        assert!(matches!(
+            ask_with(dir.path(), &signed_by("node-z", &n1), "peers", true),
+            Outcome::Answered { .. }
+        ));
     }
 
     /// Who asked is recorded with the request's digest: the verified key and

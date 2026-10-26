@@ -109,7 +109,9 @@ also means any peer that reads the record learns which node asked.
 are answered in-process by `evidence_answer.rs`, with the protocol from the
 `evidence-request` crate. The same rule applies to every record
 an answer would carry, for every subject that carries record bodies (`record`,
-`correlation`, `exchange`). An answer is served whole or refused
+`correlation`, `exchange`). A `correlation` subject is an exact key (a
+client nonce, an exchange id, or `exchange-digests:<request>:<response>`),
+never a prefix or a pattern. An answer is served whole or refused
 `not_authorized` whole, never filtered per asker, because an artifact is the
 same for every requester.
 

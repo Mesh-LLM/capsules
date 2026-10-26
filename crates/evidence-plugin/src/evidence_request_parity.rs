@@ -106,7 +106,13 @@ pub(crate) fn sealed(mut body: Value) -> Value {
     body
 }
 
-fn served(counterparty: &str, model: &str, status: &str, latency: &str, extra: Value) -> Value {
+pub(crate) fn served(
+    counterparty: &str,
+    model: &str,
+    status: &str,
+    latency: &str,
+    extra: Value,
+) -> Value {
     let mut poc = json!({
         "role": "served",
         "latency_ms": latency,
