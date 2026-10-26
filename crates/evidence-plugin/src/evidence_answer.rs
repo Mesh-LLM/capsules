@@ -1643,6 +1643,49 @@ pub(crate) mod tests {
         assert_eq!(snapshot(), before);
     }
 
+    /// One limit for every caller: past the in-flight cap (one process-wide
+    /// semaphore, `mesh_evidence_bridge::MAX_IN_FLIGHT_ANSWERS`), a
+    /// stranger-safe request is declined alike whoever asks: unsigned, a key
+    /// no host binds, a proven stranger or a counterparty. Each gets the
+    /// refusal of its own bytes, before the ledger is read.
+    #[test]
+    fn past_the_in_flight_cap_every_asker_is_declined_alike() {
+        let dir = node(&corpus_ledger());
+        let key = key();
+        let (announced, replay) = (announced(), ReplayCache::default());
+        let responder = Responder {
+            ledger_dir: dir.path(),
+            signing_key: &key,
+            now: NOW,
+            history_segments: "counterparties",
+            share_standard_history: false,
+            share_exchange_corroboration: false,
+            keys: Keys {
+                announced: &announced,
+                configured: None,
+            },
+            replay: &replay,
+            node_id: Some(RESPONDER),
+        };
+        let stranger = SigningKey::from_bytes(&[0x77; 32]);
+        for request in stranger_safe_requests() {
+            for bytes in [
+                serde_json::to_vec(&request).unwrap(),
+                signed_with(&stranger, &request),
+                signed_by("node-z", &request),
+                signed_by("node-a", &request),
+            ] {
+                let reads = evidence_log::index_reads();
+                assert_eq!(
+                    answer_and_log(&bytes, true, &responder, None).wire_bytes(),
+                    Some(refusal_of(&bytes, Reason::PolicyDeclined)),
+                    "{request}"
+                );
+                assert_eq!(evidence_log::index_reads(), reads, "the ledger was read");
+            }
+        }
+    }
+
     /// A counterparty is a node some record names as the other side, by
     /// its whole id; an empty or absent id is nobody's.
     #[test]
