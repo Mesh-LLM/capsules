@@ -136,7 +136,7 @@
         "apply_mode": "static_on_load",
         "restart_scope": "none",
         "visibility": "user",
-        "description": "Answer a node this node has never exchanged with when it asks for this node's checkpoints, history card or served summary (on), or decline (off, the default). These carry no records, but they show how much and how often this node serves. Off, such a node gets a signed policy_declined that says nothing about who asked; a counterparty is answered either way. A counterparty is known by the id its request states, which is not yet authenticated.",
+        "description": "Answer a node this node has never exchanged with when it asks for this node's served summary or another derived history (on), or decline (off, the default). These carry no records, but they show what this node serves. Off, such a node gets a signed policy_declined that says nothing about who asked; a counterparty, proven by its signed request, is answered either way. Checkpoints and the history card go to anyone who asks, whatever this is set to.",
         "presentation": {
           "label": "Standard history",
           "category_id": "share",

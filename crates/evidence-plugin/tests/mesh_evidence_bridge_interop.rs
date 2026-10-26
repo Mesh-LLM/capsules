@@ -368,9 +368,10 @@ async fn responder_answers_an_evidence_request_in_process() {
 }
 
 /// PRD T7, the default half, on the plugin binary: with the default
-/// settings, two nodes this one never exchanged with ask for its checkpoints
-/// and each gets a signed `policy_declined` (on a fresh node, so it comes
-/// before coverage, which would refuse `coverage_unsatisfiable`). Each
+/// settings, two nodes this one never exchanged with ask for its served
+/// summary and each gets a signed `policy_declined` (on a fresh node, so it
+/// comes before coverage, which would refuse `coverage_unsatisfiable`).
+/// Checkpoints and `history_card/1` are stranger-safe and not refused so. Each
 /// carries exactly the -00 refusal's members, none naming the asker, and the
 /// two agree on all but the request each binds, the time and the signature.
 #[tokio::test]
@@ -381,8 +382,9 @@ async fn standard_history_is_one_signed_refusal_to_every_non_counterparty_by_def
     let mut refusals = Vec::new();
     for asker in ["node-y", "node-z"] {
         let request = serde_json::json!({
-            "subject": {"checkpoints": null},
+            "subject": {"full_history": null},
             "coverage": {"min_freshness": 1},
+            "derivation": "served_summary/1",
             "requester_id": asker,
         })
         .to_string();

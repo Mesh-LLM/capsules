@@ -62,9 +62,17 @@
 //! or with Standard History shared, an unsigned request is answered as
 //! before.
 //!
-//! **Standard History** is every answer that carries no record bodies:
-//! `checkpoints`, `history_card/1`, `served_summary/1`, and any other
-//! derivation. It shows how much and how often this node serves, so with
+//! **Stranger-safe answers** (PRD R-8): `checkpoints` with no derivation and
+//! `history_card/1` go to anyone who asks, whatever the settings: an
+//! unsigned request, any node's, or one signed under a key no host binds. A
+//! signature that fails is still refused. They carry this node's signed
+//! checkpoints and their consistency proofs, the same artifact for every
+//! requester, and no record. A community reporter and `doctor --probe` read
+//! them as a stranger.
+//!
+//! **Standard History** is every other answer that carries no record bodies:
+//! `served_summary/1` and any other derivation but `exchange_corroboration/1`,
+//! which has a setting of its own. It shows what this node serves, so with
 //! `share_standard_history` off (the default) it goes only to a requester
 //! that has proven it is a node some record of this one names as the other
 //! side of an exchange. Every other requester (unsigned, a signature that
@@ -96,7 +104,7 @@ use cll::mmr::leaf_count;
 use ed25519_dalek::SigningKey;
 use evidence_request::digest::request_digest;
 use evidence_request::refusal;
-use evidence_request::registry::Reason;
+use evidence_request::registry::{Reason, DERIVATION_HISTORY_CARD};
 use evidence_request::request::{self, Coverage, Derivation, Request, Subject};
 use evidence_request::resolve::{self, Resolution, ResolvedAnchor};
 use evidence_request::time::parse_utc;
@@ -325,10 +333,25 @@ fn carries_records(req: &Request) -> bool {
     req.derivation.is_none() && !matches!(req.subject, Subject::Checkpoints)
 }
 
+/// Whether `req` asks for a stranger-safe answer (PRD R-8): `checkpoints`
+/// with no derivation, or `history_card/1`, which is resolved only over
+/// `full_history` and `checkpoints` (`evidence_log`). Neither carries a
+/// record, so neither depends on who asks.
+fn stranger_safe(req: &Request) -> bool {
+    match &req.derivation {
+        None => matches!(req.subject, Subject::Checkpoints),
+        Some(Derivation::Token(t)) => t == DERIVATION_HISTORY_CARD,
+        Some(Derivation::Digest(_)) => false,
+    }
+}
+
 /// Whether the answer to `req` depends on who asks: record bodies, unless
 /// the operator serves them to any peer (`peers`); Standard History, unless
-/// the operator shares it.
+/// the operator shares it. A stranger-safe answer never does.
 fn needs_requester(req: &Request, responder: &Responder<'_>) -> bool {
+    if stranger_safe(req) {
+        return false;
+    }
     // `exchange_corroboration/1` has a setting of its own: Standard History
     // being shared never releases it.
     if crate::exchange_corroboration::is_derivation(req.derivation.as_ref()) {
@@ -1429,8 +1452,9 @@ pub(crate) mod tests {
         )
     }
 
-    /// The three Standard History requests, each pinned to the corpus's
-    /// newest checkpoint.
+    /// The three requests that carry no record, each pinned to the corpus's
+    /// newest checkpoint: the two stranger-safe ones, then the served
+    /// summary.
     fn standard_history_requests() -> Vec<Value> {
         let ledger = corpus_ledger();
         let pin = corpus_checkpoints(&ledger, &key())[1].anchor();
@@ -1442,6 +1466,20 @@ pub(crate) mod tests {
         ]
     }
 
+    /// `checkpoints` and `history_card/1` (R-8).
+    fn stranger_safe_requests() -> Vec<Value> {
+        standard_history_requests()[..2].to_vec()
+    }
+
+    /// What a stranger is refused by default though it carries no record:
+    /// the served summary, and a derivation this node does not have.
+    fn withheld_requests() -> Vec<Value> {
+        let served_summary = standard_history_requests()[2].clone();
+        let mut unknown = served_summary.clone();
+        unknown["derivation"] = json!("unregistered_fold/1");
+        vec![served_summary, unknown]
+    }
+
     /// The refusal of exactly these bytes, now: nothing else goes into it.
     fn refusal_of(bytes: &[u8], reason: Reason) -> Vec<u8> {
         let wire = refusal::sign(&request_digest(bytes), reason, NOW, &key())
@@ -1450,9 +1488,10 @@ pub(crate) mod tests {
         serde_json::to_vec(&wire).unwrap()
     }
 
-    /// PRD T7, the default half (R-8): checkpoints, `history_card/1` and
-    /// `served_summary/1` asked by anyone who has not proven it is a
-    /// counterparty are refused `policy_declined`, signed, and the refusal is
+    /// PRD T7, the default half (R-8): `served_summary/1` or any other
+    /// derivation but `history_card/1`, asked by anyone who has not proven
+    /// it is a counterparty, is refused `policy_declined`, signed, and the
+    /// refusal is
     /// the refusal of the request's own bytes, now, and nothing else: an
     /// unsigned asker naming no id, one naming a counterparty's id, two
     /// signed strangers, a stranger signing while naming a counterparty, and
@@ -1463,7 +1502,7 @@ pub(crate) mod tests {
     fn standard_history_to_a_non_counterparty_is_the_refusal_of_its_own_bytes_whoever_asks() {
         let dir = node(&corpus_ledger());
         let empty = node(&[]);
-        for request in standard_history_requests() {
+        for request in withheld_requests() {
             let mut claims_a = request.clone();
             claims_a["requester_id"] = json!("node-a");
             let asks: Vec<Vec<u8>> = vec![
@@ -1492,7 +1531,7 @@ pub(crate) mod tests {
     #[test]
     fn two_askers_refusals_differ_only_by_their_own_request() {
         let dir = node(&corpus_ledger());
-        for request in standard_history_requests() {
+        for request in withheld_requests() {
             let refusal = |node: &str| match ask_by_default(dir.path(), &signed_by(node, &request))
             {
                 Outcome::Refused { wire, .. } => wire,
@@ -1510,6 +1549,7 @@ pub(crate) mod tests {
 
     /// The default half's other side: a node that proves it is one some
     /// record names as the other side of an exchange is answered all three.
+    /// (Unknown derivations are refused it too, by `derivation_unsupported`.)
     #[test]
     fn a_counterparty_is_still_answered_standard_history() {
         let dir = node(&corpus_ledger());
@@ -1527,6 +1567,77 @@ pub(crate) mod tests {
                 "{request}: {verified}"
             );
         }
+    }
+
+    /// R-8's stranger-safe half: `checkpoints` and `history_card/1` go to
+    /// anyone under the default settings, and with record sharing off: an
+    /// unsigned asker, one naming a counterparty's id, a proven node no
+    /// record names, and a key no host binds. Each answer verifies, and
+    /// its artifact is the one a counterparty gets.
+    #[test]
+    fn a_stranger_is_answered_checkpoints_and_the_history_card() {
+        let dir = node(&corpus_ledger());
+        let stranger = SigningKey::from_bytes(&[0x77; 32]);
+        for request in stranger_safe_requests() {
+            let mut claims_a = request.clone();
+            claims_a["requester_id"] = json!("node-a");
+            let artifact_of = |bytes: &[u8], outcome: Outcome| {
+                let Outcome::Answered { wire, .. } = &outcome else {
+                    panic!("{request}: {outcome:?}");
+                };
+                let verified =
+                    verify_response(bytes, wire, &key().verifying_key(), &Default::default());
+                assert_eq!(
+                    verified["state"],
+                    json!("artifact"),
+                    "{request}: {verified}"
+                );
+                wire["artifact"].clone()
+            };
+            let counterparty = signed_by("node-a", &request);
+            let expected = artifact_of(&counterparty, ask_by_default(dir.path(), &counterparty));
+            for bytes in [
+                serde_json::to_vec(&request).unwrap(),
+                serde_json::to_vec(&claims_a).unwrap(),
+                signed_by("node-z", &request),
+                signed_with(&stranger, &request),
+            ] {
+                assert_eq!(
+                    artifact_of(&bytes, ask_by_default(dir.path(), &bytes)),
+                    expected,
+                    "{request}"
+                );
+                assert_eq!(
+                    artifact_of(&bytes, ask_with(dir.path(), &bytes, "off", false)),
+                    expected,
+                    "{request}, record sharing off"
+                );
+            }
+        }
+    }
+
+    /// Answering a stranger writes nothing to the ledger: no record is
+    /// sealed and no checkpoint cut, so asking never grows the log.
+    #[test]
+    fn answering_a_stranger_never_grows_the_ledger() {
+        let dir = node(&corpus_ledger());
+        let snapshot = || {
+            let mut files: Vec<(std::ffi::OsString, Vec<u8>)> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|e| {
+                    let e = e.unwrap();
+                    (e.file_name(), std::fs::read(e.path()).unwrap())
+                })
+                .collect();
+            files.sort();
+            files
+        };
+        let before = snapshot();
+        for request in stranger_safe_requests() {
+            let outcome = ask_by_default(dir.path(), &signed_by("node-z", &request));
+            assert!(matches!(outcome, Outcome::Answered { .. }), "{outcome:?}");
+        }
+        assert_eq!(snapshot(), before);
     }
 
     /// A counterparty is a node some record names as the other side, by
@@ -1742,7 +1853,8 @@ pub(crate) mod tests {
     /// One member changed after signing, and the signature no longer covers
     /// the request: refused as an asker that proved nothing, `not_authorized`
     /// for a record and `policy_declined` once the change makes it Standard
-    /// History.
+    /// History. A signature that fails is refused even for a stranger-safe
+    /// answer, which an unsigned request would get.
     #[test]
     fn a_member_changed_after_signing_is_refused() {
         let ledger = corpus_ledger();
@@ -1760,9 +1872,10 @@ pub(crate) mod tests {
             ),
             (
                 "derivation",
-                json!("history_card/1"),
+                json!("served_summary/1"),
                 Reason::PolicyDeclined,
             ),
+            ("derivation", json!("history_card/1"), Reason::NotAuthorized),
             (
                 "coverage",
                 json!({"min_freshness": 1}),
@@ -1866,6 +1979,9 @@ pub(crate) mod tests {
                 artifact(ask_with(dir.path(), &unsigned, "counterparties", true)),
                 "Standard History shared: the unsigned answer, {request}"
             );
+        }
+        for request in withheld_requests() {
+            let unbound = signed_with(&stranger, &request);
             let reads = evidence_log::index_reads();
             assert_eq!(
                 refused(&ask_by_default(dir.path(), &unbound)),
@@ -2461,6 +2577,7 @@ pub(crate) mod tests {
             json!({"range": [0, 100_000]}),
             json!({"full_history": null}),
             json!({"correlation": "no-such-nonce"}),
+            json!({"exchange": "b".repeat(64)}),
         ];
         for subject in subjects {
             let request = json!({"subject": subject, "coverage": pin});
