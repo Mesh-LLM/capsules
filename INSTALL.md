@@ -308,5 +308,16 @@ cargo build --locked --release --manifest-path crates/evidence-plugin/Cargo.toml
 scripts/package.sh "$VERSION" "$TARGET" crates/evidence-plugin/target/release/capsules dist
 ```
 
+With `make` installed, one command does the same, from any checkout (it needs
+`pnpm`, `cargo`, `jq` and GNU tar, which is `gtar` on macOS):
+
+```bash
+make package    # builds the page and the plugin, writes dist/capsules-<version>-<target>.tar.gz
+make install    # package, then `mesh-llm plugins install --archive ...`
+make install MESH_LLM=~/Github/mesh-llm/target/debug/mesh-llm   # a locally built mesh-llm
+```
+
+`make` alone lists the targets.
+
 A different compiler or build machine can give a different executable and so a
 different digest; `SHA256SUMS` covers the published packages.

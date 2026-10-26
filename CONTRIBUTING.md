@@ -30,6 +30,10 @@ cd web-ui
 pnpm install --frozen-lockfile
 pnpm typecheck && pnpm test && pnpm build   # writes ../bundle/register-mesh-plugin-ui.js
 
+# Package and install the plugin (needs GNU tar; `make` lists the targets)
+make package
+make install MESH_LLM=/path/to/mesh-llm   # default: mesh-llm on PATH
+
 # Repository checks
 scripts/no-keys.sh
 scripts/mutants.sh            # each plugin mutant fails its tests (slow)
