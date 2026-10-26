@@ -29,7 +29,7 @@ check-tar:
 package: web-ui plugin check-tar ## Build both and write dist/capsules-<version>-<target>.tar.gz
 	scripts/package.sh $(VERSION) $(TARGET) $(BINARY) dist
 
-install: package ## Install the package with $(MESH_LLM) (default: mesh-llm)
+install: package ## Install the package with mesh-llm (override with MESH_LLM=)
 	$(MESH_LLM) plugins install --archive $(ARCHIVE) --name capsules --version $(VERSION)
 
 clean: ## Remove dist/, bundle/ and the plugin's cargo target
