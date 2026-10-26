@@ -68,8 +68,9 @@
 //! signature that fails is still refused. They carry this node's signed
 //! checkpoints and their consistency proofs, the same artifact for every
 //! requester, and no record. A community reporter and `doctor --probe` read
-//! them as a stranger. Under `share_record_at_completion`, each push cuts a
-//! checkpoint, so a checkpoint's time can be one exchange's end time.
+//! them as a stranger. Under `share_record_at_completion`, with the checkpoint
+//! cadence on, each push cuts a checkpoint, so a checkpoint's time can be one
+//! exchange's end time.
 //!
 //! **Standard History** is every other answer that carries no record bodies:
 //! `served_summary/1` and any other derivation but `exchange_corroboration/1`,

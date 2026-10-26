@@ -165,9 +165,9 @@ separate operator settings. Each is its own switch; none implies another.
   unsigned or signed (a signature that fails is still refused). They carry
   only this node's signed checkpoints and their consistency proofs, the same
   artifact for every requester, so a community reporter and `doctor --probe`
-  can read and verify them (#50). With `share_record_at_completion` on, each
-  push cuts a checkpoint, so a checkpoint's time can be one exchange's end
-  time. With `share_standard_history` off, a
+  can read and verify them (#50). With `share_record_at_completion` and the
+  checkpoint cadence on, each push cuts a checkpoint, so a checkpoint's time
+  can be one exchange's end time. With `share_standard_history` off, a
   requester that is not an authenticated counterparty of this node receives
   a signed `policy_declined` for `served_summary/1` and every other
   derivation (`exchange_corroboration/1` has its own setting), uniformly
