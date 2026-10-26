@@ -18,8 +18,11 @@
 //! whole request (bounded in bytes and in time) and answer it **in-process**
 //! (`evidence_answer`, over the `evidence-request` crate): an
 //! artifact or a signed refusal. At most [`MAX_IN_FLIGHT_ANSWERS`] requests
-//! are answered at once; one more is declined with a signed
-//! `policy_declined` before the ledger is read. Every answer is logged to
+//! whose signature proves a principal ([`requester_auth::proves_principal`])
+//! and at most [`MAX_IN_FLIGHT_STRANGERS`] others (unsigned, or signed by a
+//! key no host binds) are answered at once, each from its own pool, so
+//! strangers cannot crowd a counterparty out. One more is declined with a
+//! signed `policy_declined` before the ledger is read. Every answer is logged to
 //! the "asked of you" log (`received_log`).
 //!
 //! An `adjudicate` request (a requester asking this node to referee two
@@ -176,10 +179,81 @@ pub async fn handle_open_stream(
     Ok(Some(response))
 }
 
-/// The most evidence requests answered at once; see the module doc.
+/// The most evidence requests from a proven principal answered at once; see
+/// the module doc.
 pub const MAX_IN_FLIGHT_ANSWERS: usize = 8;
 
-static IN_FLIGHT: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+/// The most requests from anyone else answered at once, apart from the pool
+/// above.
+pub const MAX_IN_FLIGHT_STRANGERS: usize = 2;
+
+/// The two in-flight pools. A request draws from its own pool only, so a
+/// full stranger pool never declines a proven principal.
+struct InFlight {
+    proven: tokio::sync::Semaphore,
+    strangers: tokio::sync::Semaphore,
+}
+
+impl InFlight {
+    fn new() -> Self {
+        Self {
+            proven: tokio::sync::Semaphore::new(MAX_IN_FLIGHT_ANSWERS),
+            strangers: tokio::sync::Semaphore::new(MAX_IN_FLIGHT_STRANGERS),
+        }
+    }
+
+    /// A permit from the pool `proven` names, where `proven` is only worked
+    /// out when some pool has room: with both full the request is declined
+    /// without classifying it.
+    fn try_acquire_with(
+        &self,
+        proven: impl FnOnce() -> bool,
+    ) -> Result<tokio::sync::SemaphorePermit<'_>, ()> {
+        if self.proven.available_permits() == 0 && self.strangers.available_permits() == 0 {
+            return Err(());
+        }
+        let pool = if proven() {
+            &self.proven
+        } else {
+            &self.strangers
+        };
+        pool.try_acquire().map_err(|_| ())
+    }
+}
+
+/// Whether the parsed request proves a principal as of `now`, on the channel
+/// its door checks it under ([`requester_auth::proves_principal`]).
+fn proves_principal(
+    parsed: Option<&serde_json::Value>,
+    adjudicate: bool,
+    now: &str,
+    own_node: Option<&str>,
+) -> bool {
+    let (Some(serde_json::Value::Object(map)), Some(now)) =
+        (parsed, evidence_request::time::parse_utc(now))
+    else {
+        return false;
+    };
+    let channel = if adjudicate {
+        crate::requester_auth::Channel::RefereeAdjudicate
+    } else {
+        crate::requester_auth::Channel::EvidenceRequest
+    };
+    let announced = crate::peer_keys::announced::snapshot();
+    let configured = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
+    crate::requester_auth::proves_principal(
+        channel,
+        map,
+        now,
+        crate::requester_auth::Keys {
+            announced: &announced,
+            configured: configured.as_deref(),
+        },
+        own_node,
+    )
+}
+
+static IN_FLIGHT: std::sync::OnceLock<InFlight> = std::sync::OnceLock::new();
 
 async fn bridge_inbound_evidence_stream(
     listener: mesh_llm_plugin::LocalListener,
@@ -224,16 +298,20 @@ async fn answer_in_process(
     request_bytes: Vec<u8>,
     own_node: Option<String>,
 ) -> Option<Vec<u8>> {
-    let permit = IN_FLIGHT
-        .get_or_init(|| tokio::sync::Semaphore::new(MAX_IN_FLIGHT_ANSWERS))
-        .try_acquire();
-    // A verdict this node issues lands on its own counts: the opt-in
-    // stop-routing rule looks again (it does nothing while off).
-    let adjudicate = serde_json::from_slice::<serde_json::Value>(&request_bytes)
-        .is_ok_and(|request| crate::referee::service::is_adjudicate_request(&request));
     let for_rule = capsules.clone();
     let answered = tokio::task::spawn_blocking(move || {
         let now = crate::evidence_answer::now_utc();
+        let parsed = serde_json::from_slice::<serde_json::Value>(&request_bytes).ok();
+        // A verdict this node issues lands on its own counts: the opt-in
+        // stop-routing rule looks again (it does nothing while off).
+        let adjudicate = parsed
+            .as_ref()
+            .is_some_and(crate::referee::service::is_adjudicate_request);
+        // The pool is chosen by what the request proves; classifying costs a
+        // signature check, so it is skipped when both pools are full.
+        let permit = IN_FLIGHT.get_or_init(InFlight::new).try_acquire_with(|| {
+            proves_principal(parsed.as_ref(), adjudicate, &now, own_node.as_deref())
+        });
         // Past the in-flight cap, an adjudicate request is declined like any
         // other (below), before any work on it.
         if permit.is_ok() {
@@ -241,7 +319,7 @@ async fn answer_in_process(
                 referee_answer(&capsules, &request_bytes, &now, own_node.as_deref())
             {
                 drop(permit);
-                return verdict_or_refusal;
+                return (verdict_or_refusal, adjudicate);
             }
         }
         let announced = crate::peer_keys::announced::snapshot();
@@ -274,14 +352,17 @@ async fn answer_in_process(
         if let crate::evidence_answer::Outcome::Unanswerable(why) = &outcome {
             tracing::warn!(%why, "an evidence request was not answered");
         }
-        outcome.wire_bytes()
+        (outcome.wire_bytes(), adjudicate)
     })
     .await;
+    let Ok((answered, adjudicate)) = answered else {
+        return None;
+    };
     if adjudicate {
         drop(for_rule);
         crate::routing_rule::mark_due();
     }
-    answered.ok().flatten()
+    answered
 }
 
 /// Why an evidence request got no answer.
@@ -923,6 +1004,47 @@ mod tests {
             .expect_err("over-cap must be refused");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("side-stream cap"), "{err}");
+    }
+
+    /// A full stranger pool declines strangers only: a proven principal still
+    /// gets a permit, and the reverse holds too.
+    #[test]
+    fn strangers_cannot_exhaust_the_pool_a_proven_principal_draws_from() {
+        let pools = InFlight::new();
+        let held: Vec<_> = (0..MAX_IN_FLIGHT_STRANGERS)
+            .map(|_| pools.try_acquire_with(|| false).expect("a stranger permit"))
+            .collect();
+        assert!(
+            pools.try_acquire_with(|| false).is_err(),
+            "the stranger pool is full"
+        );
+        let proven: Vec<_> = (0..MAX_IN_FLIGHT_ANSWERS)
+            .map(|_| pools.try_acquire_with(|| true).expect("a proven permit"))
+            .collect();
+        assert!(
+            pools.try_acquire_with(|| true).is_err(),
+            "the proven pool is full"
+        );
+        drop(held);
+        assert!(
+            pools.try_acquire_with(|| false).is_ok(),
+            "a released permit is reused"
+        );
+        drop(proven);
+    }
+
+    /// With both pools full the request is declined before it is classified.
+    #[test]
+    fn a_request_is_not_classified_while_both_pools_are_full() {
+        let pools = InFlight::new();
+        let held: Vec<_> = (0..MAX_IN_FLIGHT_STRANGERS)
+            .map(|_| pools.try_acquire_with(|| false).unwrap())
+            .chain((0..MAX_IN_FLIGHT_ANSWERS).map(|_| pools.try_acquire_with(|| true).unwrap()))
+            .collect();
+        assert!(pools
+            .try_acquire_with(|| unreachable!("classified with both pools full"))
+            .is_err());
+        drop(held);
     }
 
     /// The stream's referee door is the one that checks who asks: a signed

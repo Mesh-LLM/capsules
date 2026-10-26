@@ -586,6 +586,45 @@ pub fn principal(
     }
 }
 
+/// Whether `map`, received on `channel`, proves a principal now: [`check`]
+/// without its replay step and without recording anything, and with a
+/// deadline not already past (that is refused before [`check`] runs). The
+/// mesh responder uses it to pick which in-flight pool a request draws from
+/// before it spends a permit, so a request that fails here is a stranger's.
+/// A replayed request passes and is refused later by [`check`], before any
+/// ledger read.
+pub fn proves_principal(
+    channel: Channel,
+    map: &Map<String, Value>,
+    now: UtcTime,
+    keys: Keys<'_>,
+    own_node: Option<&str>,
+) -> bool {
+    let Form::Signed { key_id, sig } = form(map) else {
+        return false;
+    };
+    let Some(deadline) = map
+        .get("deadline")
+        .and_then(Value::as_str)
+        .and_then(evidence_request::time::parse_utc)
+    else {
+        return false;
+    };
+    let stated = map
+        .get("requester_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    deadline >= now
+        && deadline.seconds <= now.seconds.saturating_add(MAX_WINDOW_SECS)
+        && verifies(channel, map, &key_id, &sig)
+        && audience_matches(map.get(AUDIENCE).and_then(Value::as_str), own_node)
+        && matches!(
+            bound_node(&claimants(keys.announced, keys.configured, &key_id), stated),
+            Binding::Node(_)
+        )
+}
+
 /// Whether a signed request's [`AUDIENCE`] is this node, compared as exact
 /// strings. A node that does not know its own id yet matches nothing.
 fn audience_matches(audience: Option<&str>, own_node: Option<&str>) -> bool {
@@ -998,6 +1037,67 @@ mod tests {
             request, given,
             "no nonce or deadline added to an unsigned request"
         );
+    }
+
+    /// Only a request that would be checked to a principal counts as one: a
+    /// bad signature, another audience or channel, a deadline past or too far
+    /// ahead, an unbound key and a false claim are all strangers.
+    #[test]
+    fn only_a_request_that_checks_to_a_principal_proves_one() {
+        let now = evidence_request::time::parse_utc("2026-10-13T00:00:00Z").unwrap();
+        let k = hex::encode(key(1).verifying_key().to_bytes());
+        let announced = BTreeMap::from([("node-a".to_string(), k)]);
+        let keys = Keys {
+            announced: &announced,
+            configured: None,
+        };
+        let proves = |map: &Map<String, Value>, own: Option<&str>| {
+            proves_principal(Channel::EvidenceRequest, map, now, keys, own)
+        };
+        let good = signed(1);
+        assert!(proves(&good, Some("node-r")));
+        assert!(
+            !proves_principal(Channel::RefereeAdjudicate, &good, now, keys, Some("node-r")),
+            "another channel's tag"
+        );
+        assert!(!proves(&good, Some("node-x")), "another audience");
+        assert!(!proves(&good, None), "a node that does not know its id");
+        assert!(!proves(&signed(2), Some("node-r")), "a key no host binds");
+        let mut unsigned = good.clone();
+        unsigned.remove(MEMBER);
+        assert!(!proves(&unsigned, Some("node-r")));
+        let mut tampered = good.clone();
+        tampered.insert("nonce".into(), json!("n-2"));
+        assert!(!proves(&tampered, Some("node-r")), "a bad signature");
+        let with_deadline = |deadline: &str| {
+            let mut m = good.clone();
+            m.remove(MEMBER);
+            m.insert("deadline".into(), json!(deadline));
+            let mut v = Value::Object(m);
+            sign(
+                Channel::EvidenceRequest,
+                &mut v,
+                &key(1),
+                at("2026-10-13T00:00:00Z"),
+                "node-r",
+            );
+            v.as_object().unwrap().clone()
+        };
+        assert!(proves(
+            &with_deadline("2026-10-13T00:05:00Z"),
+            Some("node-r")
+        ));
+        assert!(
+            !proves(&with_deadline("2026-10-13T00:05:01Z"), Some("node-r")),
+            "past the window"
+        );
+        assert!(
+            !proves(&with_deadline("2026-10-12T23:59:59Z"), Some("node-r")),
+            "already past"
+        );
+        let mut claims = good.clone();
+        claims.insert("requester_id".into(), json!("node-z"));
+        assert!(!proves(&claims, Some("node-r")), "a false claim");
     }
 
     /// The asker signs only once its key is announced, and then signs every
