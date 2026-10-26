@@ -28,6 +28,8 @@ and installs the package from INSTALL.md.
   - T7: two nodes that had never exchanged with the provider each asked for its checkpoints,
     `history_card/1` and `served_summary/1`. All six asks got a signed `policy_declined` that
     verifies, the same for both askers except for the request binding, and nothing was advertised.
+    This predates #50: checkpoints and `history_card/1` are now answered to any requester, so T7
+    repeats with the new expectation in the re-run below.
   - T3: after an exchange, the provider's served record named the node that asked, with the same
     id the host announces for that node. Once a checkpoint covered the record, that node asked for
     it and got it, and the answer verifies. A node that signed for itself while stating that
@@ -69,7 +71,7 @@ and installs the package from INSTALL.md.
   record of an exchange it asked for.
   - **Now, under the default settings,** the node that asked is that record's counterparty: it gets
     the record (by evidence request or ledger fetch), and it counts as a counterparty for Standard
-    History (checkpoints, `history_card/1`, `served_summary/1`).
+    History (`served_summary/1`).
   - **Behaviour change under `peers`,** which already serves records to any peer: those records now
     also say which node asked. Nothing named the asker before, so this changes what a node on
     `peers` shares without any setting changing.
@@ -181,14 +183,16 @@ and installs the package from INSTALL.md.
 - **The records status (`evidence_records_status`) says whether this node's requests are
   signed** (`requests_signed`). They are not when its host refused its key or lacks
   `plugin_keys.v1`; its requests then go out unsigned.
-- **Standard History is no longer answered to every node that asks.** A node's checkpoint list,
-  `history_card/1` and `served_summary/1` now go only to a counterparty (a node one of its records
-  names as the other side of an exchange). Every other node gets a signed `policy_declined` that
-  carries nothing about the asker: it is signed over the request's digest, the reason and the
-  time, so the same request gets the same refusal whoever sends it. Before 0.1.5 any node could
-  read them. **After upgrading, a node you have never exchanged with can no longer read your
-  checkpoints, history card or served summary** until you set the new `share_standard_history`
-  switch to `on` (console: Sharing policy › Standard history; or
+- **Standard History is no longer answered to every node that asks; checkpoints and
+  `history_card/1` are.** Checkpoints and `history_card/1` are answered to any requester, signed or
+  not (#50); `share_standard_history` now governs only `served_summary/1` and other derivations.
+  With record push and the checkpoint cadence on, checkpoint times can show when exchanges ended.
+  `served_summary/1` goes only to a counterparty (a node one of its records names as the other side
+  of an exchange); every other node gets a signed `policy_declined` that carries nothing about the
+  asker: it is signed over the request's digest, the reason and the time, so the same request gets
+  the same refusal whoever sends it. Before 0.1.5 any node could read it. **After upgrading, a node
+  you have never exchanged with can no longer read your served summary** until you set the new
+  `share_standard_history` switch to `on` (console: Sharing policy › Standard history; or
   `CAPSULES_SHARE_STANDARD_HISTORY=on`). Your records are unaffected: they stay under
   `share_history_segments`. A counterparty is the node a signed request proves it came from
   (see above).
