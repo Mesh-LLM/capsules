@@ -244,6 +244,8 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                      push also carries a signed checkpoint of this node's log and the record's \
                      inclusion proof -- the checkpoint reveals the log's total size (records \
                      across all peers) and its time, never any other record's content. \
+                     Each push cuts a checkpoint, and any node can read the checkpoint list, \
+                     so its times show when this node's exchanges ended. \
                      Symmetric: a node with this off also does not receive the other side's \
                      push. It governs pushes only: a record you ask the other side for is \
                      checked and held either way.",

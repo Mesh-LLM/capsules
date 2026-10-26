@@ -68,7 +68,8 @@
 //! signature that fails is still refused. They carry this node's signed
 //! checkpoints and their consistency proofs, the same artifact for every
 //! requester, and no record. A community reporter and `doctor --probe` read
-//! them as a stranger.
+//! them as a stranger. Under `share_record_at_completion`, each push cuts a
+//! checkpoint, so a checkpoint's time can be one exchange's end time.
 //!
 //! **Standard History** is every other answer that carries no record bodies:
 //! `served_summary/1` and any other derivation but `exchange_corroboration/1`,
@@ -88,8 +89,9 @@
 //!
 //! A record request from a proven node that no record names is refused
 //! `not_authorized` before the subject is resolved too, so a stranger cannot
-//! read this log's size or cadence from which refusal it gets. A real
-//! counterparty asking for more than its own records still can.
+//! read this log's size or cadence from which refusal it gets (it reads them
+//! from the checkpoint list). A real counterparty asking for more than its
+//! own records still can.
 //!
 //! **The wire.** An artifact answer is the interop profile's flat reply
 //! (agent-action-capsule `spec/interop-profile-v0.md` §6.2,

@@ -62,6 +62,10 @@ signed statement about the same exchange.
 **Symmetric by default:** a node with this switch `off` neither sends its
 record nor accepts the other side's push.
 
+**It shows when exchanges end:** each push cuts a checkpoint (at most one per
+100 ms), and any node can read the checkpoint list (see Standard History), so
+with this on, the checkpoint times show when this node's exchanges ended.
+
 **Pushes only:** a record this node asks the other side for ("Ask them for
 their record" on the Evidence page) is checked the same way and held either
 way, because its operator asked for it. Its provenance says `via: "ask"`.
@@ -181,7 +185,9 @@ refused). They carry only this node's signed checkpoints and the consistency
 proofs between them, the same for every node, so a community reporter or
 `doctor --probe` can read and check them without having exchanged with this
 node. They show how much this node has recorded and when it cut each
-checkpoint, and nothing about any one exchange or counterparty.
+checkpoint, and no record or counterparty. With `share_record_at_completion`
+on, each push cuts a checkpoint (at most one per 100 ms), so a checkpoint's
+time can be the time one exchange ended.
 
 The rest (`served_summary/1` and any other derivation) shows what this node
 serves, so with this switch off it goes only to a counterparty: a node that
