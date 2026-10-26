@@ -44,6 +44,14 @@ with `--test-threads=1`. Tests that need a real `mesh-llm` binary are ignored by
 default; [docs/REAL-HOST-VERIFICATION.md](docs/REAL-HOST-VERIFICATION.md)
 explains how to run them.
 
+To build and install the plugin from the repository root (needs GNU tar;
+`make` lists the targets):
+
+```bash
+make package
+make install MESH_LLM=/path/to/mesh-llm   # default: mesh-llm on PATH
+```
+
 ## CI
 
 ### Tier 1: every pull request (target: under 10 minutes)
