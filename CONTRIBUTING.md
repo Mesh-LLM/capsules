@@ -30,10 +30,6 @@ cd web-ui
 pnpm install --frozen-lockfile
 pnpm typecheck && pnpm test && pnpm build   # writes ../bundle/register-mesh-plugin-ui.js
 
-# Package and install the plugin (needs GNU tar; `make` lists the targets)
-make package
-make install MESH_LLM=/path/to/mesh-llm   # default: mesh-llm on PATH
-
 # Repository checks
 scripts/no-keys.sh
 scripts/mutants.sh            # each plugin mutant fails its tests (slow)
@@ -47,6 +43,14 @@ mesh-llm's plugin wire protocol, and share ports and directories, so run them
 with `--test-threads=1`. Tests that need a real `mesh-llm` binary are ignored by
 default; [docs/REAL-HOST-VERIFICATION.md](docs/REAL-HOST-VERIFICATION.md)
 explains how to run them.
+
+To build and install the plugin from the repository root (needs GNU tar;
+`make` lists the targets):
+
+```bash
+make package
+make install MESH_LLM=/path/to/mesh-llm   # default: mesh-llm on PATH
+```
 
 ## CI
 
