@@ -4,6 +4,12 @@
 
 ### Changed
 
+- **Strangers no longer crowd counterparties out of the evidence answer cap.** A node answers at
+  most 8 evidence requests at once from requesters whose signature proves a node, and at most 2
+  at once from anyone else (unsigned, or signed by a key no host binds). Each group has its own
+  pool, so a full stranger pool declines only strangers, with the same signed `policy_declined`
+  as before.
+
 - **An evidence answer is now the interop profile's signed envelope. Upgrade both nodes.** The
   protocol crate is `evidence-request` `=0.2.0` (what `capsule-emit-evidence-request` became when it
   moved to agent-action-capsule), which signs and checks the envelope of agent-action-capsule's
