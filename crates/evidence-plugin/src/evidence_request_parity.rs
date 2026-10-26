@@ -525,10 +525,11 @@ fn corpus_cases(ledger: &[Value], cps: &[CorpusCheckpoint]) -> Vec<Value> {
             "peers",
             req(json!({"record": id(0)}), &latest),
         ),
-        case(
+        case_by(
             "record_local_block_never_leaves",
             "a local block is never served, even under peers",
             "peers",
+            "node-y",
             req(json!({"record": id(21)}), &latest),
         ),
         case_by(
@@ -1451,7 +1452,7 @@ const EXPECTED: &[(&str, &str)] = &[
     ),
     (
         "record_local_block_never_leaves",
-        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"78461563dd9830102634c9eadaaad51c39787a472cef9303f7a23ab31e5ba0d4","principal_node_id":"node-y","replay":"checked","subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
     ),
     (
         "record_unknown",

@@ -2826,10 +2826,16 @@ pub(crate) mod tests {
                 ("unsigned", serde_json::to_vec(&n1).unwrap()),
                 ("unbound", signed_with(&stranger, &n1)),
             ] {
+                let reads = evidence_log::index_reads();
                 assert_eq!(
                     refused(&ask_with(dir.path(), &bytes, segments, true)),
                     Some(Reason::NotAuthorized),
                     "{segments} {who}"
+                );
+                assert_eq!(
+                    evidence_log::index_reads(),
+                    reads,
+                    "{segments} {who}: refused before the ledger is read"
                 );
             }
         }
