@@ -4,6 +4,18 @@
 
 ### Changed
 
+- **Strangers get no record under `share_history_segments = peers`, and nobody gets an underived
+  range or full history.** Under `peers`, a record now goes only to a node whose signature proves
+  it, on both `evidence-request/1` and `ledger-fetch/1`. An unsigned request, or one signed by a key
+  no host binds, is refused `not_authorized` before the ledger is read, for every subject that
+  carries records (`record`, `correlation`, `exchange`, and a fetch by id). Under `peers`, an
+  unsigned "Ask them for their record" was answered before and is refused now: the asking node's
+  host must announce its key. A `range` or `full_history`
+  subject with no derivation is refused `not_authorized` under every setting, to every asker,
+  including a counterparty that every record in it names. Checkpoints, `history_card/1`, Standard
+  History and `exchange_corroboration/1` are unchanged. This applies evidencebook#114's ruling to
+  the plugin.
+
 - **Strangers no longer crowd counterparties out of the evidence answer cap.** A node answers at
   most 8 evidence requests at once from requesters whose signature proves a node, and at most 2
   at once from anyone else (unsigned, or signed by a key no host binds). Each group has its own

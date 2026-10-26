@@ -106,7 +106,13 @@ pub(crate) fn sealed(mut body: Value) -> Value {
     body
 }
 
-fn served(counterparty: &str, model: &str, status: &str, latency: &str, extra: Value) -> Value {
+pub(crate) fn served(
+    counterparty: &str,
+    model: &str,
+    status: &str,
+    latency: &str,
+    extra: Value,
+) -> Value {
     let mut poc = json!({
         "role": "served",
         "latency_ms": latency,
@@ -371,7 +377,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CorpusCheckpoint]) -> Vec<Value> {
         ),
         case_by(
             "range_over_limit_to_a_stranger",
-            "a stranger is refused before the size is counted: it learns nothing of this log's size",
+            "a range is refused before who asks or its size is checked: it learns nothing of this log's size",
             "counterparties",
             "node-z",
             req(json!({"range": [0, 299]}), &latest),
@@ -433,7 +439,7 @@ fn corpus_cases(ledger: &[Value], cps: &[CorpusCheckpoint]) -> Vec<Value> {
         ),
         case(
             "record_signed_by_an_unannounced_key",
-            "a valid signature under a key no host binds reads as unsigned where no identity is needed",
+            "a key no host binds proves no node: a stranger gets no record, even under peers",
             "peers",
             signed_as(
                 &SigningKey::from_bytes(&[0x77; 32]),
@@ -492,10 +498,11 @@ fn corpus_cases(ledger: &[Value], cps: &[CorpusCheckpoint]) -> Vec<Value> {
                 r
             },
         ),
-        case(
+        case_by(
             "record_under_peers",
-            "under peers a record goes to anyone",
+            "under peers a record goes to any proven node, one no record names included",
             "peers",
+            "node-y",
             req(json!({"record": id(0)}), &latest),
         ),
         case_by(
@@ -513,89 +520,101 @@ fn corpus_cases(ledger: &[Value], cps: &[CorpusCheckpoint]) -> Vec<Value> {
             with(req(json!({"record": id(1)}), &first), "requester_id", json!("node-b")),
         ),
         case(
+            "record_unsigned_under_peers",
+            "an unsigned request is a stranger's: no record under any setting, peers included",
+            "peers",
+            req(json!({"record": id(0)}), &latest),
+        ),
+        case_by(
             "record_local_block_never_leaves",
             "a local block is never served, even under peers",
             "peers",
+            "node-y",
             req(json!({"record": id(21)}), &latest),
         ),
-        case(
+        case_by(
             "record_unknown",
             "a record this node does not hold",
             "peers",
+            "node-y",
             req(json!({"record": "a".repeat(64)}), &latest),
         ),
-        case(
+        case_by(
             "record_padding",
             "padding is a leaf, never a record",
             "peers",
+            "node-y",
             req(json!({"record": id(9)}), &latest),
         ),
-        case(
+        case_by(
             "record_prefix",
             "a record id must be the whole digest (no prefix match)",
             "peers",
+            "node-y",
             req(json!({"record": id(0)[..16]}), &latest),
         ),
-        case(
+        case_by(
             "record_not_yet_checkpointed",
             "a record after the newest checkpoint is not committed under any anchor",
             "peers",
+            "node-y",
             req(json!({"record": id(300)}), &fresh),
         ),
-        case(
+        case_by(
             "record_under_first_anchor",
             "a pinned older anchor serves what it covers",
             "peers",
+            "node-y",
             req(json!({"record": id(3)}), &first),
         ),
         // Ranges and the full history.
         case(
             "range_under_peers",
-            "a range carries every leaf, padding included, with a range proof",
+            "a range is refused under peers too: no one requester is party to it",
             "peers",
             req(json!({"range": [5, 12]}), &first),
         ),
         case_by(
             "range_to_a_counterparty",
-            "a range naming only one counterparty's records goes to it",
+            "a range is refused even to the counterparty every record in it names",
             "counterparties",
             "node-a",
             with(req(json!({"range": [16, 20]}), &latest), "requester_id", json!("node-a")),
         ),
         case_by(
             "range_mixed_counterparties",
-            "a range with another node's record is refused whole, never filtered",
+            "a range with another node's record is refused",
             "counterparties",
             "node-a",
             with(req(json!({"range": [0, 4]}), &latest), "requester_id", json!("node-a")),
         ),
         case(
             "range_with_a_local_block",
-            "a range holding a local block is refused whole, even under peers",
+            "a range holding a local block is refused",
             "peers",
             req(json!({"range": [20, 22]}), &latest),
         ),
         case(
             "range_past_anchor",
-            "a range ending past the anchor",
+            "a range past the anchor is refused before it is resolved",
             "peers",
             req(json!({"range": [10, 16]}), &first),
         ),
         case(
             "range_over_limit",
-            "more than 256 records is declined: ask for a smaller range",
+            "a range over the limit is refused before its size is counted",
             "peers",
             req(json!({"range": [0, 299]}), &latest),
         ),
         case(
             "full_history_over_limit",
-            "the full history of 300 records is over the limit",
+            "the full history is refused before its size is counted",
             "peers",
             req(json!({"full_history": null}), &latest),
         ),
         case(
             "full_history_under_first_anchor",
-            "the full history under a pinned anchor",
+            "the full history is refused under every setting",
             "peers",
             req(json!({"full_history": null}), &first),
         ),
@@ -607,16 +626,18 @@ fn corpus_cases(ledger: &[Value], cps: &[CorpusCheckpoint]) -> Vec<Value> {
             "node-a",
             with(req(json!({"correlation": "n-1"}), &latest), "requester_id", json!("node-a")),
         ),
-        case(
+        case_by(
             "correlation_by_exchange_id",
             "an exchange_id is a correlation identifier",
             "peers",
+            "node-y",
             req(json!({"correlation": "ex-1"}), &latest),
         ),
-        case(
+        case_by(
             "correlation_unknown",
             "no record carries this identifier",
             "peers",
+            "node-y",
             req(json!({"correlation": "n-9"}), &latest),
         ),
         // Exchange corroboration (exchange_corroboration/1): the subject is the
@@ -638,19 +659,21 @@ fn corpus_cases(ledger: &[Value], cps: &[CorpusCheckpoint]) -> Vec<Value> {
             "on: a request nonce is not a client nonce, even where the correlation index holds it",
             corroboration(nonce_digest("n-1")),
         ),
-        case(
+        case_by(
             "exchange_citing_the_half",
             "the record citing the asker's half, proven under the earliest checkpoint covering it",
             "peers",
+            "node-y",
             req(
                 json!({"exchange": foreign_half()}),
                 &json!({"expected_pin": foreign_half()}),
             ),
         ),
-        case(
+        case_by(
             "exchange_nothing_cites",
             "no record cites this half",
             "peers",
+            "node-y",
             req(json!({"exchange": "b".repeat(64)}), &latest),
         ),
         // Checkpoints and derivations: no record bodies, so never gated.
@@ -1133,20 +1156,24 @@ fn the_corpus_reaches_every_outcome() {
     ] {
         assert!(refused.contains(reason), "no case is refused {reason}");
     }
-    for form in [
-        "record",
-        "range",
-        "full_history",
-        "checkpoints",
-        "correlation",
-        "exchange",
-    ] {
+    for form in ["record", "checkpoints", "correlation", "exchange"] {
         assert!(
             replies
                 .iter()
                 .any(|r| r["answered"] == json!(form)
                     && r["verification"]["state"] == json!("artifact")),
             "no case answers a {form} subject with an artifact that verifies"
+        );
+    }
+    // Refused under every setting: no case answers them with a record (the
+    // derivations over `full_history` carry none).
+    for form in ["range", "full_history"] {
+        assert!(
+            !replies.iter().any(|r| r["answered"] == json!(form)
+                && r["verification"]["records"]
+                    .as_array()
+                    .is_some_and(|records| !records.is_empty())),
+            "a case answers a {form} subject with records"
         );
     }
 }
@@ -1365,7 +1392,7 @@ const EXPECTED: &[(&str, &str)] = &[
     ),
     (
         "range_over_limit_to_a_stranger",
-        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"7808d43d8cf3775d0d679359fd0771ff3090bc1d23aecc650170af8a0c5bca2d","principal_node_id":"node-z","replay":"checked","subject_kind":"range"},"reply":{"refused":"not_authorized"}}"#,
+        r#"{"log":{"subject_kind":"range"},"reply":{"refused":"not_authorized"}}"#,
     ),
     (
         "record_unsigned_naming_its_counterparty",
@@ -1389,7 +1416,7 @@ const EXPECTED: &[(&str, &str)] = &[
     ),
     (
         "record_signed_by_an_unannounced_key",
-        r#"{"log":{"audience":"node-r","principal_binding":"unbound","principal_key_id":"c853ad0f0cd2b619aea92ceec4fd56a24d6499d584ce79257e45cfd8139b60a7","replay":"checked","subject_kind":"record"},"reply":{"answered":"record","verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[0],"state":"artifact"}}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"unbound","principal_key_id":"c853ad0f0cd2b619aea92ceec4fd56a24d6499d584ce79257e45cfd8139b60a7","replay":"checked","subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
     ),
     (
         "record_signed_by_an_unannounced_key_needing_identity",
@@ -1409,7 +1436,11 @@ const EXPECTED: &[(&str, &str)] = &[
     ),
     (
         "record_under_peers",
-        r#"{"log":{"subject_kind":"record"},"reply":{"answered":"record","verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[0],"state":"artifact"}}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"78461563dd9830102634c9eadaaad51c39787a472cef9303f7a23ab31e5ba0d4","principal_node_id":"node-y","replay":"checked","subject_kind":"record"},"reply":{"answered":"record","verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[0],"state":"artifact"}}}"#,
+    ),
+    (
+        "record_unsigned_under_peers",
+        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
     ),
     (
         "record_sharing_off",
@@ -1421,15 +1452,15 @@ const EXPECTED: &[(&str, &str)] = &[
     ),
     (
         "record_local_block_never_leaves",
-        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"78461563dd9830102634c9eadaaad51c39787a472cef9303f7a23ab31e5ba0d4","principal_node_id":"node-y","replay":"checked","subject_kind":"record"},"reply":{"refused":"not_authorized"}}"#,
     ),
     (
         "record_unknown",
-        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"no_such_subject"}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"78461563dd9830102634c9eadaaad51c39787a472cef9303f7a23ab31e5ba0d4","principal_node_id":"node-y","replay":"checked","subject_kind":"record"},"reply":{"refused":"no_such_subject"}}"#,
     ),
     (
         "record_padding",
-        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"no_such_subject"}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"78461563dd9830102634c9eadaaad51c39787a472cef9303f7a23ab31e5ba0d4","principal_node_id":"node-y","replay":"checked","subject_kind":"record"},"reply":{"refused":"no_such_subject"}}"#,
     ),
     (
         "record_prefix",
@@ -1437,23 +1468,23 @@ const EXPECTED: &[(&str, &str)] = &[
     ),
     (
         "record_not_yet_checkpointed",
-        r#"{"log":{"subject_kind":"record"},"reply":{"refused":"coverage_unsatisfiable"}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"78461563dd9830102634c9eadaaad51c39787a472cef9303f7a23ab31e5ba0d4","principal_node_id":"node-y","replay":"checked","subject_kind":"record"},"reply":{"refused":"coverage_unsatisfiable"}}"#,
     ),
     (
         "record_under_first_anchor",
-        r#"{"log":{"subject_kind":"record"},"reply":{"answered":"record","verification":{"anchor":"checkpoints[0]","checkpoints":0,"records":[3],"state":"artifact"}}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"78461563dd9830102634c9eadaaad51c39787a472cef9303f7a23ab31e5ba0d4","principal_node_id":"node-y","replay":"checked","subject_kind":"record"},"reply":{"answered":"record","verification":{"anchor":"checkpoints[0]","checkpoints":0,"records":[3],"state":"artifact"}}}"#,
     ),
     (
         "range_under_peers",
-        r#"{"log":{"subject_kind":"range"},"reply":{"answered":"range","verification":{"anchor":"checkpoints[0]","checkpoints":0,"records":[5,6,7,8,9,10,11,12],"state":"artifact"}}}"#,
+        r#"{"log":{"subject_kind":"range"},"reply":{"refused":"not_authorized"}}"#,
     ),
     (
         "range_to_a_counterparty",
-        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"3e7d04d3813a4c90546bf2dec79da711152dbdc5f927f152485c6555887f2dde","principal_node_id":"node-a","replay":"checked","requester_id":"node-a","subject_kind":"range"},"reply":{"answered":"range","verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[16,17,18,19,20],"state":"artifact"}}}"#,
+        r#"{"log":{"requester_id":"node-a","subject_kind":"range"},"reply":{"refused":"not_authorized"}}"#,
     ),
     (
         "range_mixed_counterparties",
-        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"3e7d04d3813a4c90546bf2dec79da711152dbdc5f927f152485c6555887f2dde","principal_node_id":"node-a","replay":"checked","requester_id":"node-a","subject_kind":"range"},"reply":{"refused":"not_authorized"}}"#,
+        r#"{"log":{"requester_id":"node-a","subject_kind":"range"},"reply":{"refused":"not_authorized"}}"#,
     ),
     (
         "range_with_a_local_block",
@@ -1461,19 +1492,19 @@ const EXPECTED: &[(&str, &str)] = &[
     ),
     (
         "range_past_anchor",
-        r#"{"log":{"subject_kind":"range"},"reply":{"refused":"coverage_unsatisfiable"}}"#,
+        r#"{"log":{"subject_kind":"range"},"reply":{"refused":"not_authorized"}}"#,
     ),
     (
         "range_over_limit",
-        r#"{"log":{"subject_kind":"range"},"reply":{"refused":"policy_declined"}}"#,
+        r#"{"log":{"subject_kind":"range"},"reply":{"refused":"not_authorized"}}"#,
     ),
     (
         "full_history_over_limit",
-        r#"{"log":{"subject_kind":"full_history"},"reply":{"refused":"policy_declined"}}"#,
+        r#"{"log":{"subject_kind":"full_history"},"reply":{"refused":"not_authorized"}}"#,
     ),
     (
         "full_history_under_first_anchor",
-        r#"{"log":{"subject_kind":"full_history"},"reply":{"answered":"full_history","verification":{"anchor":"checkpoints[0]","checkpoints":0,"records":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],"state":"artifact"}}}"#,
+        r#"{"log":{"subject_kind":"full_history"},"reply":{"refused":"not_authorized"}}"#,
     ),
     (
         "correlation_to_its_counterparty",
@@ -1481,11 +1512,11 @@ const EXPECTED: &[(&str, &str)] = &[
     ),
     (
         "correlation_by_exchange_id",
-        r#"{"log":{"subject_kind":"correlation"},"reply":{"answered":"correlation","verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[2],"state":"artifact"}}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"78461563dd9830102634c9eadaaad51c39787a472cef9303f7a23ab31e5ba0d4","principal_node_id":"node-y","replay":"checked","subject_kind":"correlation"},"reply":{"answered":"correlation","verification":{"anchor":"checkpoints[1]","checkpoints":0,"records":[2],"state":"artifact"}}}"#,
     ),
     (
         "correlation_unknown",
-        r#"{"log":{"subject_kind":"correlation"},"reply":{"refused":"no_such_subject"}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"78461563dd9830102634c9eadaaad51c39787a472cef9303f7a23ab31e5ba0d4","principal_node_id":"node-y","replay":"checked","subject_kind":"correlation"},"reply":{"refused":"no_such_subject"}}"#,
     ),
     (
         "corroboration_to_a_stranger",
@@ -1501,11 +1532,11 @@ const EXPECTED: &[(&str, &str)] = &[
     ),
     (
         "exchange_citing_the_half",
-        r#"{"log":{"subject_kind":"exchange"},"reply":{"answered":"exchange","verification":{"anchor":"checkpoints[0]","checkpoints":0,"records":[6],"state":"artifact"}}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"78461563dd9830102634c9eadaaad51c39787a472cef9303f7a23ab31e5ba0d4","principal_node_id":"node-y","replay":"checked","subject_kind":"exchange"},"reply":{"answered":"exchange","verification":{"anchor":"checkpoints[0]","checkpoints":0,"records":[6],"state":"artifact"}}}"#,
     ),
     (
         "exchange_nothing_cites",
-        r#"{"log":{"subject_kind":"exchange"},"reply":{"refused":"no_such_subject"}}"#,
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"78461563dd9830102634c9eadaaad51c39787a472cef9303f7a23ab31e5ba0d4","principal_node_id":"node-y","replay":"checked","subject_kind":"exchange"},"reply":{"refused":"no_such_subject"}}"#,
     ),
     (
         "checkpoints_with_sharing_off",

@@ -85,7 +85,7 @@ starts, so a push from a client node is never accepted (INSTALL.md says more).
 A peer can ask this node for one of its records by id, over the plugin's
 `ledger-fetch/1` mesh stream. The switch decides who gets an answer:
 
-| value | counterparty (a node this record names as the other side) | any other peer |
+| value | counterparty (a node this record names as the other side) | any other proven node |
 | --- | :---: | :---: |
 | `off` | | |
 | `counterparties` (default) | ✓ | |
@@ -95,9 +95,10 @@ A local block and an owner-maintenance record are never served. A declined
 request is answered `not_authorized`. The counterparty is the node the
 request's signature proves it came from, checked as for an evidence request
 (below) before anything is looked up: the id a request states is never
-trusted. Under `counterparties` an unsigned request, or one whose signature
-fails, is refused before the record is looked up; under `peers` an unsigned
-request is answered, and a signature that fails any check is still refused.
+trusted. Under every setting an unsigned request, one whose signature fails,
+or one signed under a key no host announced, is refused before the record is
+looked up: `peers` opens records to any node a signature proves, never to a
+stranger.
 
 A record of an exchange this node served for a peer names that peer as the
 other side (mesh-llm reports it from the mesh connection, never from the
@@ -108,9 +109,18 @@ also means any peer that reads the record learns which node asked.
 are answered in-process by `evidence_answer.rs`, with the protocol from the
 `evidence-request` crate. The same rule applies to every record
 an answer would carry, for every subject that carries record bodies (`record`,
-`range`, `full_history`, `correlation`, `exchange`). An answer is served whole
-or refused `not_authorized` whole, never filtered per asker, because an
-artifact is the same for every requester.
+`correlation`, `exchange`). A `correlation` subject is an exact key (a
+client nonce, an exchange id, or `exchange-digests:<request>:<response>`),
+never a prefix or a pattern. An answer is served whole or refused
+`not_authorized` whole, never filtered per asker, because an artifact is the
+same for every requester.
+
+`range` and `full_history` with no derivation reach records no single
+requester is party to. They are refused `not_authorized` under every setting
+and to every asker, a counterparty that every record in the range names
+included. The refusal comes before anything is looked up, so it is the same
+whether or not the range exists. Only a derivation prepared for one recipient
+could grant them, and this node has none.
 
 **Who asks is proven, not stated.** The asking node signs its request with
 the key its host announces for it (mesh-llm `plugin_keys.v1`), in a
@@ -155,10 +165,13 @@ That node is the asker. Under `counterparties`:
   subject is resolved, the same refusal for any subject, so which refusal it
   gets tells it nothing about the log's size.
 
-Under `peers` an unsigned request is answered, as before. A signed one is
-checked all the same. A valid signature under a key no host announced is the
-one failure answered as an unsigned request would be, and only where an
-unsigned request is answered. Every other failed check is refused.
+Under `peers` a record goes to any node proven this way, whether or not a
+record names it. An unsigned request gets no record under any setting, and
+neither does a valid signature under a key no host announced: it proves no
+node. That signature is the one failure answered as an unsigned request would
+be, and only where an unsigned request is answered (the checkpoint list,
+`history_card/1`, and Standard History when it is shared). Every other failed
+check is refused.
 
 Each request's digest is recorded in the "asked of you" log, with the key and
 node it was proven to come from (or `unbound`), the audience it named, and

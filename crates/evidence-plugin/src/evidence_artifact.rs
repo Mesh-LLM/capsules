@@ -1022,7 +1022,8 @@ mod tests {
         SigningKey::from_bytes(&NODE_KEY_SEED)
     }
 
-    /// A node over the corpus that answers anyone everything.
+    /// A node over the corpus that answers anyone everything
+    /// (`evidence_answer::ungated`).
     struct Node {
         _dir: tempfile::TempDir,
         ledger: std::path::PathBuf,
@@ -1049,25 +1050,27 @@ mod tests {
             let announced = announced_keys();
             let replay = crate::requester_auth::ReplayCache::default();
             let key = key();
-            let outcome = evidence_answer::answer_and_log(
-                &bytes,
-                false,
-                &Responder {
-                    ledger_dir: &self.ledger,
-                    signing_key: &key,
-                    now: NOW,
-                    history_segments: "peers",
-                    share_standard_history: true,
-                    share_exchange_corroboration: false,
-                    keys: crate::requester_auth::Keys {
-                        announced: &announced,
-                        configured: None,
+            let outcome = evidence_answer::ungated(|| {
+                evidence_answer::answer_and_log(
+                    &bytes,
+                    false,
+                    &Responder {
+                        ledger_dir: &self.ledger,
+                        signing_key: &key,
+                        now: NOW,
+                        history_segments: "peers",
+                        share_standard_history: true,
+                        share_exchange_corroboration: false,
+                        keys: crate::requester_auth::Keys {
+                            announced: &announced,
+                            configured: None,
+                        },
+                        replay: &replay,
+                        node_id: Some(RESPONDER_NODE),
                     },
-                    replay: &replay,
-                    node_id: Some(RESPONDER_NODE),
-                },
-                None,
-            );
+                    None,
+                )
+            });
             let Outcome::Answered { wire, .. } = outcome else {
                 panic!("{request}: {outcome:?}");
             };
@@ -1758,8 +1761,8 @@ mod tests {
         .unwrap()
     }
 
-    /// `request` answered from `ledger`, openly, and checked as a requester
-    /// checks it.
+    /// `request` answered from `ledger`, openly (`evidence_answer::ungated`),
+    /// and checked as a requester checks it.
     fn ask_ledger(
         ledger: &std::path::Path,
         key: &SigningKey,
@@ -1768,25 +1771,27 @@ mod tests {
         let bytes = serde_json::to_vec(request).unwrap();
         let announced = announced_keys();
         let replay = crate::requester_auth::ReplayCache::default();
-        let outcome = evidence_answer::answer_and_log(
-            &bytes,
-            false,
-            &Responder {
-                ledger_dir: ledger,
-                signing_key: key,
-                now: NOW,
-                history_segments: "peers",
-                share_standard_history: true,
-                share_exchange_corroboration: false,
-                keys: crate::requester_auth::Keys {
-                    announced: &announced,
-                    configured: None,
+        let outcome = evidence_answer::ungated(|| {
+            evidence_answer::answer_and_log(
+                &bytes,
+                false,
+                &Responder {
+                    ledger_dir: ledger,
+                    signing_key: key,
+                    now: NOW,
+                    history_segments: "peers",
+                    share_standard_history: true,
+                    share_exchange_corroboration: false,
+                    keys: crate::requester_auth::Keys {
+                        announced: &announced,
+                        configured: None,
+                    },
+                    replay: &replay,
+                    node_id: Some(RESPONDER_NODE),
                 },
-                replay: &replay,
-                node_id: Some(RESPONDER_NODE),
-            },
-            None,
-        );
+                None,
+            )
+        });
         let Outcome::Answered { wire, .. } = outcome else {
             panic!("{request}: {outcome:?}");
         };
