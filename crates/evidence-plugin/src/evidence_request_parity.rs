@@ -660,6 +660,26 @@ fn corpus_cases(ledger: &[Value], cps: &[CorpusCheckpoint]) -> Vec<Value> {
             corroboration(nonce_digest("n-1")),
         ),
         case_by(
+            "exchange_to_its_counterparty",
+            "the record citing the half goes to the node it names (node-b)",
+            "counterparties",
+            "node-b",
+            req(
+                json!({"exchange": foreign_half()}),
+                &json!({"expected_pin": foreign_half()}),
+            ),
+        ),
+        case_by(
+            "exchange_to_another_node",
+            "a counterparty of other records gets no record that names another node",
+            "counterparties",
+            "node-a",
+            req(
+                json!({"exchange": foreign_half()}),
+                &json!({"expected_pin": foreign_half()}),
+            ),
+        ),
+        case_by(
             "exchange_citing_the_half",
             "the record citing the asker's half, proven under the earliest checkpoint covering it",
             "peers",
@@ -1529,6 +1549,14 @@ const EXPECTED: &[(&str, &str)] = &[
     (
         "corroboration_by_a_request_nonce",
         r#"{"log":{"subject_kind":"correlation"},"reply":{"refused":"no_such_subject"}}"#,
+    ),
+    (
+        "exchange_to_its_counterparty",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"86f14770b6f56d58727d65f274104d73ecf947c2e0ed1330d09818fad8b8fa05","principal_node_id":"node-b","replay":"checked","subject_kind":"exchange"},"reply":{"answered":"exchange","verification":{"anchor":"checkpoints[0]","checkpoints":0,"records":[6],"state":"artifact"}}}"#,
+    ),
+    (
+        "exchange_to_another_node",
+        r#"{"log":{"audience":"node-r","principal_binding":"bound","principal_key_id":"3e7d04d3813a4c90546bf2dec79da711152dbdc5f927f152485c6555887f2dde","principal_node_id":"node-a","replay":"checked","subject_kind":"exchange"},"reply":{"refused":"not_authorized"}}"#,
     ),
     (
         "exchange_citing_the_half",
