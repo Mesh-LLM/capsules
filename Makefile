@@ -5,7 +5,7 @@
 # See INSTALL.md "Build it yourself". `make` lists the targets.
 
 VERSION   := $(shell sed -n 's/^version *= *"\([^"]*\)".*/\1/p' plugin.toml)
-TARGET    := $(shell rustc -vV | sed -n 's/^host: //p')
+override TARGET := $(shell rustc -vV | sed -n 's/^host: //p')
 MESH_LLM  ?= mesh-llm
 BINARY    := crates/evidence-plugin/target/release/capsules
 ARCHIVE   := dist/capsules-$(VERSION)-$(TARGET).tar.gz
@@ -28,7 +28,8 @@ check-tar:
 	@command -v gtar >/dev/null 2>&1 || tar --version 2>/dev/null | grep -q 'GNU tar' || \
 	  { echo "make: GNU tar is required (macOS: brew install gnu-tar)" >&2; exit 1; }
 
-package: check-tar web-ui plugin ## Build both and write dist/capsules-<version>-<target>.tar.gz
+package: check-tar ## Build both and write dist/capsules-<version>-<target>.tar.gz
+	$(MAKE) web-ui plugin
 	scripts/package.sh $(VERSION) $(TARGET) $(BINARY) dist
 
 install: package ## Install the package with mesh-llm (override with MESH_LLM=)
