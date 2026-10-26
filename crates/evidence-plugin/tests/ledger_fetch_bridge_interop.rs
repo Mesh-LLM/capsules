@@ -328,78 +328,41 @@ async fn responder_declines_an_unsigned_fetch_by_default() {
     harness.shutdown_process().await;
 }
 
-/// (A) Responder role, happy path: a mesh-inbound ledger-fetch stream for a
-/// capsule_id THIS node really sealed gets answered with the real capsule,
-/// the real (base64) signed_statement bytes, and this node's real pubkey --
-/// never fabricated, never a second attestation wrapper.
+/// (A) Responder role under `peers`, over the real wire: an unsigned fetch
+/// is a stranger's and gets no record, for a capsule this node really sealed
+/// and for one it never sealed alike, so the refusal tells it nothing of
+/// what is held (the evidencebook#114 ruling, Q2: `peers` opens records to
+/// any proven node, never to a stranger). `found` and `not_found` for a
+/// proven node are the pure `answer()` unit tests': this stand-in host
+/// announces no keys, so no request it carries proves a node.
 #[tokio::test]
-async fn responder_answers_a_real_sealed_capsule_over_the_real_wire() {
-    // This capsule names no other side (the fake host sends no requester),
-    // so only the `peers` tier serves it; the default declines it (below).
+async fn responder_declines_an_unsigned_fetch_under_peers_over_the_real_wire() {
     let mut harness = Harness::spawn(&[("CAPSULES_SHARE_HISTORY_SEGMENTS", "peers")]).await;
     let manifest = harness.initialize().await;
-    let capsule_id = harness.seal_one_real_capsule(&manifest).await;
+    let sealed = harness.seal_one_real_capsule(&manifest).await;
 
-    let stream = harness.open_ledger_fetch_stream().await;
-    let (mut read_half, mut write_half) = stream.into_split();
-    let request_bytes =
-        serde_json::to_vec(&serde_json::json!({ "capsule_id": capsule_id })).unwrap();
-    write_half
-        .write_all(&request_bytes)
-        .await
-        .expect("write ledger-fetch request");
-    write_half.shutdown().await.expect("half-close request");
+    for capsule_id in [sealed.as_str(), "never-sealed"] {
+        let stream = harness.open_ledger_fetch_stream().await;
+        let (mut read_half, mut write_half) = stream.into_split();
+        let request_bytes =
+            serde_json::to_vec(&serde_json::json!({ "capsule_id": capsule_id })).unwrap();
+        write_half
+            .write_all(&request_bytes)
+            .await
+            .expect("write ledger-fetch request");
+        write_half.shutdown().await.expect("half-close request");
 
-    let mut response_bytes = Vec::new();
-    timeout(TEST_TIMEOUT, read_half.read_to_end(&mut response_bytes))
-        .await
-        .expect("responder answered before timeout")
-        .expect("read response bytes");
-    let response: serde_json::Value = serde_json::from_slice(&response_bytes).expect("valid JSON");
-
-    assert_eq!(response["status"], "found");
-    assert_eq!(response["capsule"]["capsule_id"], capsule_id);
-    assert!(!response["signed_statement_b64"]
-        .as_str()
-        .unwrap()
-        .is_empty());
-    assert!(response["node_pub_key_pem"]
-        .as_str()
-        .unwrap()
-        .contains("PUBLIC KEY"));
-
-    harness.shutdown_process().await;
-}
-
-/// (B) Responder role, miss: a capsule_id this node never sealed comes back
-/// `not_found`, never a fabricated `found` -- proven over the real wire, not
-/// just the pure `answer()` unit tests.
-#[tokio::test]
-async fn responder_reports_not_found_for_a_real_miss_over_the_real_wire() {
-    // Under `peers` an unsigned fetch is looked up; the default refuses it
-    // before the ledger is read (above).
-    let mut harness = Harness::spawn(&[("CAPSULES_SHARE_HISTORY_SEGMENTS", "peers")]).await;
-    harness.initialize().await;
-
-    let stream = harness.open_ledger_fetch_stream().await;
-    let (mut read_half, mut write_half) = stream.into_split();
-    let request_bytes =
-        serde_json::to_vec(&serde_json::json!({ "capsule_id": "never-sealed" })).unwrap();
-    write_half
-        .write_all(&request_bytes)
-        .await
-        .expect("write ledger-fetch request");
-    write_half.shutdown().await.expect("half-close request");
-
-    let mut response_bytes = Vec::new();
-    timeout(TEST_TIMEOUT, read_half.read_to_end(&mut response_bytes))
-        .await
-        .expect("responder answered before timeout")
-        .expect("read response bytes");
-    let response: serde_json::Value = serde_json::from_slice(&response_bytes).expect("valid JSON");
-
-    assert_eq!(response["status"], "not_found");
-    assert_eq!(response["capsule_id"], "never-sealed");
+        let mut response_bytes = Vec::new();
+        timeout(TEST_TIMEOUT, read_half.read_to_end(&mut response_bytes))
+            .await
+            .expect("responder answered before timeout")
+            .expect("read response bytes");
+        let response: serde_json::Value =
+            serde_json::from_slice(&response_bytes).expect("valid JSON");
+        assert_eq!(response["status"], "not_authorized", "{capsule_id}");
+        assert_eq!(response["capsule_id"], capsule_id);
+        assert!(response.get("capsule").is_none());
+    }
 
     harness.shutdown_process().await;
 }

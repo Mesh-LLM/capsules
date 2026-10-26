@@ -19,16 +19,17 @@
 //!    malformed `requester_auth` (or a signed request with no `audience`)
 //!    → `request_malformed`;
 //! 3. a deadline already past → `deadline_unmet`;
-//! 4. the sharing policy switched `off` for any request that carries record
-//!    bodies → `not_authorized`, before anything is looked up;
+//! 4. a request that carries record bodies, with the sharing policy
+//!    switched `off` or over `range` or `full_history` →
+//!    `not_authorized`, before anything is looked up;
 //! 5. who asks (`requester_auth`), before the ledger is read: a signature
 //!    that fails its window, its key, its `audience` (this node), its nonce
 //!    or its stated id → refused; a valid signature under a key no host
 //!    binds → read as unsigned where the answer needs no identity, refused
 //!    otherwise; an unsigned request whose answer depends on who asks →
 //!    refused (see below);
-//! 6. an answer that depends on who asks, to a node no record of this one
-//!    names → refused, before the subject is looked up;
+//! 6. an answer only a counterparty may have, to a node no record of this
+//!    one names → refused, before the subject is looked up;
 //! 7. resolution against the index → the crate's reason;
 //! 8. the number of records (or checkpoints) the answer would carry, counted
 //!    from the index without reading one → `policy_declined` over
@@ -44,9 +45,14 @@
 //! **The sharing policy** (`share_policy::history_segments`) decides who gets
 //! record bodies, by the same rule the plugin's `ledger-fetch/1` channel uses:
 //! `off` serves none; a local block or an owner-maintenance record is never
-//! served; under `peers` every other record goes to anyone; otherwise a
-//! record goes only to the node it names as the other side of its exchange.
-//! An answer is served whole or refused whole (`not_authorized`): an
+//! served; under `peers` every other record goes to any node a signed
+//! request proves; otherwise a record goes only to the node it names as the
+//! other side of its exchange. A request with no proven node gets no record
+//! under any setting. `range` and `full_history` reach records no one
+//! requester is party to, and are refused `not_authorized` under every
+//! setting, since only a derivation prepared for one recipient could grant
+//! them and this node has none (the evidencebook#114 ruling, as the Go
+//! responder applies it). An answer is served whole or refused whole (`not_authorized`): an
 //! artifact is the same for every requester (§5), so it is never filtered
 //! per asker. Checkpoints, the history card and the served summary carry no
 //! record bodies and are not gated by it.
@@ -57,10 +63,9 @@
 //! (`requester_auth`). A request's `requester_id` is only the asker's word:
 //! it picks among nodes that announced the same key, one that names any
 //! other node is refused, and an unsigned request has no principal at all. So an answer that depends on who asks (record bodies
-//! unless they go to any peer, Standard History unless it is shared) is
-//! refused to an unsigned request, before the ledger is read. Under `peers`,
-//! or with Standard History shared, an unsigned request is answered as
-//! before.
+//! always, Standard History unless it is shared) is refused to an unsigned
+//! request, before the ledger is read. With Standard History shared, an
+//! unsigned request for it is answered as before.
 //!
 //! **Stranger-safe answers** (PRD R-8): `checkpoints` with no derivation and
 //! `history_card/1` go to anyone who asks, whatever the settings: an
@@ -88,7 +93,8 @@
 //! carries) and when they were answered (`issued_at`), and the signature
 //! over those.
 //!
-//! A record request from a proven node that no record names is refused
+//! Unless records go to any proven node (`peers`), a record request from a
+//! proven node that no record names is refused
 //! `not_authorized` before the subject is resolved too, so a stranger cannot
 //! read this log's size or cadence from which refusal it gets (it reads them
 //! from the checkpoint list). A real counterparty asking for more than its
@@ -296,8 +302,12 @@ fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Ask
     if req.deadline.is_some_and(|deadline| deadline < now) {
         return refuse(Reason::DeadlineUnmet, kind);
     }
-    // 4. Sharing switched off: no record bodies to anyone.
-    if carries_records(&req) && responder.history_segments == "off" && policy_gate_applies() {
+    // 4. No record bodies to anyone: sharing switched off, or a subject
+    // that spans parties.
+    if carries_records(&req)
+        && (responder.history_segments == "off" || spans_parties(&req))
+        && policy_gate_applies()
+    {
         return refuse(Reason::NotAuthorized, kind);
     }
     // 5. Who asks: the requester's signature, before anything is looked up.
@@ -348,9 +358,16 @@ fn stranger_safe(req: &Request) -> bool {
     }
 }
 
-/// Whether the answer to `req` depends on who asks: record bodies, unless
-/// the operator serves them to any peer (`peers`); Standard History, unless
-/// the operator shares it. A stranger-safe answer never does.
+/// Whether `req` asks for record bodies over a subject no one requester is
+/// party to (`range`, `full_history`): refused under every setting (see the
+/// module doc).
+fn spans_parties(req: &Request) -> bool {
+    carries_records(req) && matches!(req.subject, Subject::Range(..) | Subject::FullHistory)
+}
+
+/// Whether the answer to `req` depends on who asks: record bodies, always;
+/// Standard History, unless the operator shares it. A stranger-safe answer
+/// never does.
 fn needs_requester(req: &Request, responder: &Responder<'_>) -> bool {
     if stranger_safe(req) {
         return false;
@@ -364,10 +381,18 @@ fn needs_requester(req: &Request, responder: &Responder<'_>) -> bool {
         return !responder.share_exchange_corroboration;
     }
     if carries_records(req) {
-        responder.history_segments != "peers"
+        policy_gate_applies()
     } else {
         !responder.share_standard_history
     }
+}
+
+/// Whether the answer to `req` goes only to a counterparty: one that depends
+/// on who asks, except record bodies under `peers`, which go to any proven
+/// node.
+fn needs_counterparty(req: &Request, responder: &Responder<'_>) -> bool {
+    needs_requester(req, responder)
+        && !(carries_records(req) && responder.history_segments == "peers")
 }
 
 /// Step 5: the principal a signed request proves (`requester_auth::check`),
@@ -468,9 +493,36 @@ fn requester(
 }
 
 /// The sharing-policy gate, except in the deliberately broken build CI uses
-/// to show the parity run catches a responder that drops it.
+/// to show the parity run catches a responder that drops it, and inside
+/// [`ungated`].
 fn policy_gate_applies() -> bool {
+    #[cfg(test)]
+    if UNGATED.with(std::cell::Cell::get) {
+        return false;
+    }
     !cfg!(feature = "mutant-evidence-skips-policy-gate")
+}
+
+#[cfg(test)]
+thread_local! {
+    static UNGATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f`, with this thread's responder answering anyone every subject, as no
+/// setting does. The artifact tests use it to have answers a requester must
+/// still check (a `range` or `full_history` from a responder that grants
+/// one) built by this node's own builder.
+#[cfg(test)]
+pub(crate) fn ungated<T>(f: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            UNGATED.with(|u| u.set(false));
+        }
+    }
+    UNGATED.with(|u| u.set(true));
+    let _reset = Reset;
+    f()
 }
 
 /// Steps 6 to 10, over the index.
@@ -482,12 +534,11 @@ fn answer_from(
     view: &LogView<'_>,
 ) -> Result<Value, Reason> {
     let index = view.index;
-    // 6. An answer that depends on who asks goes only to a counterparty,
-    // decided before the subject is resolved: Standard History unless it is
-    // shared, and record bodies unless they go to any peer. A node no record
-    // names learns nothing of this log's size or cadence from which
-    // refusal it gets.
-    if needs_requester(req, responder)
+    // 6. An answer only a counterparty may have, decided before the subject
+    // is resolved: Standard History unless it is shared, and record bodies
+    // unless they go to any peer. A node no record names learns nothing of
+    // this log's size or cadence from which refusal it gets.
+    if needs_counterparty(req, responder)
         && policy_gate_applies()
         && !is_counterparty(index, principal)
     {
@@ -703,8 +754,9 @@ fn may_serve_all(
             return false;
         };
         !leaf.never_leaves
+            && asker.is_some()
             && (history_segments == "peers"
-                || (!leaf.padding && asker.is_some() && leaf.counterparty.as_deref() == asker))
+                || (!leaf.padding && leaf.counterparty.as_deref() == asker))
     })
 }
 
@@ -1110,8 +1162,9 @@ pub(crate) mod tests {
             r#"{{"subject":{{"record":"{}"}},"coverage":{{"min_freshness":1}}}}"#,
             ledger[0]["capsule_id"].as_str().unwrap()
         );
+        let record: Value = serde_json::from_str(&record).unwrap();
         assert_eq!(
-            refused(&ask(dir.path(), record.as_bytes(), "peers")),
+            refused(&ask(dir.path(), &signed_by("node-y", &record), "peers")),
             Some(Reason::PolicyDeclined)
         );
     }
@@ -1135,32 +1188,36 @@ pub(crate) mod tests {
             }}},
         }));
         let dir = node(&ledger);
+        // Asked by a proven node: under `peers` any proven node may have it.
         let by = |id: &str| {
-            json!({"subject": {"correlation": id}, "coverage": {"min_freshness": 1}}).to_string()
+            signed_by(
+                "node-y",
+                &json!({"subject": {"correlation": id}, "coverage": {"min_freshness": 1}}),
+            )
         };
 
         let by_nonce = by("payer-forwarded-nonce");
         assert_eq!(
-            refused(&ask(dir.path(), by_nonce.as_bytes(), "peers")),
+            refused(&ask(dir.path(), &by_nonce, "peers")),
             Some(Reason::NoSuchSubject)
         );
         let by_placeholder = by(crate::evidence_log::HOST_SERVED_NO_NONCE);
         assert_eq!(
-            refused(&ask(dir.path(), by_placeholder.as_bytes(), "peers")),
+            refused(&ask(dir.path(), &by_placeholder, "peers")),
             Some(Reason::NoSuchSubject)
         );
         let by_one_wrong_digest = by(&crate::evidence_log::exchange_binding(&req, &req));
         assert_eq!(
-            refused(&ask(dir.path(), by_one_wrong_digest.as_bytes(), "peers")),
+            refused(&ask(dir.path(), &by_one_wrong_digest, "peers")),
             Some(Reason::NoSuchSubject)
         );
 
         let by_digests = by(&crate::evidence_log::exchange_binding(&req, &resp));
-        let Outcome::Answered { wire, .. } = ask(dir.path(), by_digests.as_bytes(), "peers") else {
+        let Outcome::Answered { wire, .. } = ask(dir.path(), &by_digests, "peers") else {
             panic!("answered");
         };
         let verification = verify_response(
-            by_digests.as_bytes(),
+            &by_digests,
             &wire,
             &key().verifying_key(),
             &Default::default(),
@@ -1998,8 +2055,8 @@ pub(crate) mod tests {
     /// A valid signature under a key no host announced (ruling addendum §2):
     /// where an unsigned request would be answered, it is answered exactly as
     /// one, the same artifact and nothing more, and the log says `unbound`
-    /// with no node. Where the answer needs an identity it is refused, before
-    /// the ledger is read.
+    /// with no node. Where the answer needs an identity (a record, under
+    /// every setting) it is refused, before the ledger is read.
     #[test]
     fn an_unbound_key_reads_as_unsigned_only_where_no_identity_is_needed() {
         let ledger = corpus_ledger();
@@ -2012,11 +2069,20 @@ pub(crate) mod tests {
             Outcome::Answered { wire, .. } => wire["artifact"].clone(),
             other => panic!("{other:?}"),
         };
-        assert_eq!(
-            artifact(ask_with(dir.path(), &unbound, "peers", false)),
-            artifact(ask_with(dir.path(), &unsigned, "peers", false)),
-            "under peers: the unsigned answer"
-        );
+        // A record needs an identity under every setting, `peers` included.
+        for bytes in [&unbound, &unsigned] {
+            let reads = evidence_log::index_reads();
+            assert_eq!(
+                refused(&ask_with(dir.path(), bytes, "peers", false)),
+                Some(Reason::NotAuthorized),
+                "a record under peers"
+            );
+            assert_eq!(
+                evidence_log::index_reads(),
+                reads,
+                "refused before the ledger is read"
+            );
+        }
         for request in standard_history_requests() {
             let unbound = signed_with(&stranger, &request);
             let unsigned = serde_json::to_vec(&request).unwrap();
@@ -2059,8 +2125,8 @@ pub(crate) mod tests {
             ledger_dir: dir.path(),
             signing_key: &key,
             now: NOW,
-            history_segments: "peers",
-            share_standard_history: false,
+            history_segments: "counterparties",
+            share_standard_history: true,
             share_exchange_corroboration: false,
             keys: Keys {
                 announced: &announced,
@@ -2069,7 +2135,8 @@ pub(crate) mod tests {
             replay: &replay,
             node_id: Some(RESPONDER),
         };
-        let outcome = answer_and_log(&unbound, false, &responder, Some(log.path()));
+        let summary = signed_with(&stranger, &standard_history_requests()[2]);
+        let outcome = answer_and_log(&summary, false, &responder, Some(log.path()));
         assert!(matches!(outcome, Outcome::Answered { .. }));
         let text = std::fs::read_to_string(log.path().join(crate::received_log::RECEIVED_LOG_FILE))
             .unwrap();
@@ -2083,7 +2150,7 @@ pub(crate) mod tests {
 
     /// The unbound pool full of live nonces (ruling u290 §2): a validly
     /// signed request under a key no host announced is answered as an
-    /// unsigned one would be, not refused, and logged `unbound` with
+    /// unsigned one would be (here the served summary, shared), not refused, and logged `unbound` with
     /// `replay` `unchecked`. A replay the pool still holds is refused, and a
     /// bound key's replay is refused whatever that pool holds.
     #[test]
@@ -2092,17 +2159,19 @@ pub(crate) mod tests {
         let dir = node(&ledger);
         let stranger = SigningKey::from_bytes(&[0x77; 32]);
         let record = node_a_record(&ledger);
-        let unsigned = serde_json::to_vec(&record).unwrap();
-        let held = signed_with(&stranger, &record);
+        // Where no identity is needed: the served summary, shared.
+        let summary = standard_history_requests()[2].clone();
+        let unsigned = serde_json::to_vec(&summary).unwrap();
+        let held = signed_with(&stranger, &summary);
         let bound = signed_by("node-a", &record);
         let (key, announced, replay) = (key(), announced(), ReplayCache::default());
-        let ask = |bytes: &[u8], segments: &str, log: Option<&Path>| {
+        let ask = |bytes: &[u8], shared: bool, log: Option<&Path>| {
             let responder = Responder {
                 ledger_dir: dir.path(),
                 signing_key: &key,
                 now: NOW,
-                history_segments: segments,
-                share_standard_history: false,
+                history_segments: "counterparties",
+                share_standard_history: shared,
                 share_exchange_corroboration: false,
                 keys: Keys {
                     announced: &announced,
@@ -2117,12 +2186,9 @@ pub(crate) mod tests {
             Outcome::Answered { wire, .. } => wire["artifact"].clone(),
             other => panic!("{other:?}"),
         };
-        let expected = artifact(ask(&unsigned, "peers", None));
-        assert_eq!(artifact(ask(&held, "peers", None)), expected);
-        assert!(matches!(
-            ask(&bound, "counterparties", None),
-            Outcome::Answered { .. }
-        ));
+        let expected = artifact(ask(&unsigned, true, None));
+        assert_eq!(artifact(ask(&held, true, None)), expected);
+        assert!(matches!(ask(&bound, false, None), Outcome::Answered { .. }));
         let now = parse_utc(NOW).unwrap().seconds;
         for i in 1..requester_auth::MAX_UNBOUND_NONCES {
             assert_eq!(
@@ -2132,9 +2198,9 @@ pub(crate) mod tests {
         }
 
         let log = tempfile::tempdir().unwrap();
-        let fresh = signed_with(&stranger, &record);
+        let fresh = signed_with(&stranger, &summary);
         assert_eq!(
-            artifact(ask(&fresh, "peers", Some(log.path()))),
+            artifact(ask(&fresh, true, Some(log.path()))),
             expected,
             "answered as unsigned, not refused"
         );
@@ -2145,21 +2211,17 @@ pub(crate) mod tests {
         assert_eq!(line["principal_binding"], json!("unbound"));
         assert_eq!(line["replay"], json!("unchecked"));
         assert_eq!(
-            refused(&ask(&held, "peers", None)),
+            refused(&ask(&held, true, None)),
             Some(Reason::NotAuthorized),
             "a replay the pool holds"
         );
         assert_eq!(
-            refused(&ask(&bound, "counterparties", None)),
+            refused(&ask(&bound, false, None)),
             Some(Reason::NotAuthorized),
             "a bound key's replay"
         );
         assert_eq!(
-            refused(&ask(
-                &signed_with(&stranger, &record),
-                "counterparties",
-                None
-            )),
+            refused(&ask(&signed_with(&stranger, &record), false, None)),
             Some(Reason::NotAuthorized),
             "still nothing where the answer needs an identity"
         );
@@ -2324,23 +2386,24 @@ pub(crate) mod tests {
     fn a_failed_request_is_never_answered_as_unsigned() {
         let ledger = corpus_ledger();
         let dir = node(&ledger);
-        let record = record_request(&ledger, 0);
+        // Where an unsigned request is answered: the served summary, shared.
+        let request = standard_history_requests()[2].clone();
         let stranger = SigningKey::from_bytes(&[0x77; 32]);
         for key in [asker_key("node-z"), stranger] {
-            let signed: Value = serde_json::from_slice(&signed_with(&key, &record)).unwrap();
+            let signed: Value = serde_json::from_slice(&signed_with(&key, &request)).unwrap();
             let with = |member: &str, value: Value| {
                 let mut r = signed.clone();
                 r[member] = value;
                 serde_json::to_vec(&r).unwrap()
             };
             let resign = |member: &str, value: Value| {
-                let mut r = record.clone();
+                let mut r = request.clone();
                 r[member] = value;
                 signed_with(&key, &r)
             };
             let mut no_audience = signed.clone();
             no_audience.as_object_mut().unwrap().remove("audience");
-            let mut to_x = record.clone();
+            let mut to_x = request.clone();
             requester_auth::sign(
                 requester_auth::Channel::EvidenceRequest,
                 &mut to_x,
@@ -2477,13 +2540,13 @@ pub(crate) mod tests {
     fn an_unsigned_request_naming_another_audience_is_answered_as_unsigned() {
         let ledger = corpus_ledger();
         let dir = node(&ledger);
-        let mut request = record_request(&ledger, 0);
+        let mut request = stranger_safe_requests()[0].clone();
         request["audience"] = json!("node-x");
         assert!(matches!(
             ask_with(
                 dir.path(),
                 &serde_json::to_vec(&request).unwrap(),
-                "peers",
+                "counterparties",
                 false
             ),
             Outcome::Answered { .. }
@@ -2660,22 +2723,34 @@ pub(crate) mod tests {
         );
     }
 
-    /// Under `peers` an unsigned request is answered a record, as before
-    /// (R-13's operator exception); a signed one is checked all the same.
+    /// Under `peers` a record goes to any node a signed request proves, one
+    /// no record names included, and to no stranger: an unsigned request, or
+    /// one under a key no host binds, is refused before the ledger is read
+    /// (the evidencebook#114 ruling, Q2). A signature that fails is refused.
     #[test]
-    fn under_peers_an_unsigned_request_is_answered_and_a_bad_signature_is_not() {
+    fn under_peers_a_record_goes_to_any_proven_node_and_never_to_a_stranger() {
         let ledger = corpus_ledger();
         let dir = node(&ledger);
         let record = record_request(&ledger, 0);
         assert!(matches!(
-            ask_with(
-                dir.path(),
-                &serde_json::to_vec(&record).unwrap(),
-                "peers",
-                false
-            ),
+            ask_with(dir.path(), &signed_by("node-z", &record), "peers", false),
             Outcome::Answered { .. }
         ));
+        let unsigned = serde_json::to_vec(&record).unwrap();
+        let unbound = signed_with(&SigningKey::from_bytes(&[0x77; 32]), &record);
+        for (what, bytes) in [("unsigned", &unsigned), ("unbound", &unbound)] {
+            let reads = evidence_log::index_reads();
+            assert_eq!(
+                refused(&ask_with(dir.path(), bytes, "peers", true)),
+                Some(Reason::NotAuthorized),
+                "{what}"
+            );
+            assert_eq!(
+                evidence_log::index_reads(),
+                reads,
+                "{what}: refused before the ledger is read"
+            );
+        }
         let mut tampered: Value = serde_json::from_slice(&signed_by("node-z", &record)).unwrap();
         tampered["nonce"] = json!("not-the-signed-one");
         assert_eq!(
@@ -2687,6 +2762,49 @@ pub(crate) mod tests {
             )),
             Some(Reason::NotAuthorized)
         );
+    }
+
+    /// `range` and `full_history` with no derivation are refused
+    /// `not_authorized` under every setting, to every asker, their own
+    /// counterparty included, and before the ledger is read, so the refusal
+    /// is the same whether or not the subject exists (the evidencebook#114
+    /// ruling, Q1: only a recipient-specific derivation grants them, and this
+    /// node has none). The corpus's records 16 to 20 all name node-a.
+    #[test]
+    fn a_range_or_the_full_history_is_refused_to_everyone_under_every_setting() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let pin = corpus_checkpoints(&ledger, &key())[1].anchor();
+        let coverage = json!({"expected_pin": pin});
+        let subjects = [
+            json!({"range": [16, 20]}),
+            json!({"range": [0, 3]}),
+            json!({"range": [100_000, 100_001]}),
+            json!({"full_history": null}),
+        ];
+        for subject in subjects {
+            let request = json!({"subject": subject, "coverage": coverage});
+            let askers = [
+                ("unsigned", serde_json::to_vec(&request).unwrap()),
+                ("node-a", signed_by("node-a", &request)),
+                ("node-z", signed_by("node-z", &request)),
+            ];
+            for segments in ["counterparties", "peers", "off"] {
+                for (who, bytes) in &askers {
+                    let reads = evidence_log::index_reads();
+                    assert_eq!(
+                        refused(&ask_with(dir.path(), bytes, segments, true)),
+                        Some(Reason::NotAuthorized),
+                        "{subject} {segments} {who}"
+                    );
+                    assert_eq!(
+                        evidence_log::index_reads(),
+                        reads,
+                        "{subject} {segments} {who}: refused before the ledger is read"
+                    );
+                }
+            }
+        }
     }
 
     /// Who asked is recorded with the request's digest: the verified key and

@@ -38,9 +38,10 @@
 //! node it fetches from, and the responder checks that signature, its
 //! `audience`, its deadline and nonce, and the key's binding before it looks
 //! anything up ([`answer`]). A record goes only to the node the signature
-//! proves, never to the `requester_id` an asker states; unless the operator
-//! serves records to any peer (`peers`), an unsigned request is refused
-//! before the ledger is read.
+//! proves, never to the `requester_id` an asker states; an unsigned request
+//! is refused before the ledger is read, under every setting (the
+//! evidencebook#114 ruling: `peers` opens records to any proven node, never
+//! to a stranger).
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -219,7 +220,7 @@ async fn bridge_inbound_ledger_fetch_stream(
 /// Whether `record` goes to the asker under the node's `history_segments`
 /// switch. `off` serves nothing. A local block and an owner-maintenance
 /// record never leave this node. Under `peers` any other record goes to any
-/// node; otherwise a record goes only to the node it names as the other side
+/// proven node; otherwise a record goes only to the node it names as the other side
 /// of its exchange, so a record that names no other side is not served.
 /// `requester_id` is the node the request's signature proved ([`answer`]).
 fn may_serve(record: &Value, requester_id: Option<&str>, history_segments: &str) -> bool {
@@ -233,7 +234,7 @@ fn may_serve(record: &Value, requester_id: Option<&str>, history_segments: &str)
         return false;
     }
     if history_segments == "peers" {
-        return true;
+        return requester_id.is_some();
     }
     crate::evidence_panes::full_counterparty_node_id(record)
         .is_some_and(|other_side| requester_id == Some(other_side.as_str()))
@@ -265,8 +266,8 @@ fn lookups() -> u64 {
 /// so it is directly unit-testable without a live mesh stream. In order:
 /// parse; the switch `off` serves nothing; who asks
 /// (`requester_auth::principal`: a signature that fails its deadline,
-/// window, key, `audience`, nonce or stated id is refused, and an unsigned
-/// request is refused unless records go to any peer); and only then the
+/// window, key, `audience`, nonce or stated id is refused, and so is an
+/// unsigned request or one under a key no host binds); and only then the
 /// lookup, served to the proven node alone.
 fn answer(
     capsules: &CapsuleState,
@@ -305,7 +306,7 @@ fn answer(
         door.keys,
         door.replay,
         door.own_node,
-        history_segments != "peers",
+        true,
     ) {
         Ok(principal) => principal,
         Err(crate::requester_auth::Refused::Malformed) => {
@@ -640,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn the_sharing_switch_decides_off_serves_nothing_and_peers_serves_any_node() {
+    fn the_sharing_switch_decides_off_serves_nothing_and_peers_serves_any_proven_node() {
         let state = open_state("switch");
         let id = seal_one(&state);
         assert!(is_refused(&ask(&state, &id, Some(ASKER), "off")));
@@ -652,7 +653,13 @@ mod tests {
             }
         );
         assert!(is_found(&ask(&state, &id, Some("node-y"), "peers")));
-        assert!(is_found(&ask(&state, &id, None, "peers")));
+        // A stranger gets nothing under any setting, before the lookup.
+        for tier in ["counterparties", "peers", "off"] {
+            let bytes = serde_json::to_vec(&json!({ "capsule_id": id })).unwrap();
+            let (response, looked) = answer_counted(&state, &bytes, tier);
+            assert!(is_refused(&response), "{tier}: {response:?}");
+            assert!(!looked, "{tier}: the ledger was read");
+        }
     }
 
     /// A local block names no other side of an exchange: it never leaves this
@@ -833,11 +840,11 @@ mod tests {
         assert_eq!(lookups(), before, "the ledger was read");
     }
 
-    /// Where records go to any peer no identity is needed, yet a signature
-    /// that fails is still refused (never read as unsigned); a valid one under
-    /// a key no host binds reads as unsigned, as an unsigned fetch does.
+    /// Under `peers` a signature that fails is refused, and so is a valid one
+    /// under a key no host binds: it proves no node, so it is a stranger's,
+    /// as an unsigned fetch is.
     #[test]
-    fn under_peers_a_failed_signature_is_refused_and_an_unbound_key_reads_as_unsigned() {
+    fn under_peers_a_failed_signature_and_an_unbound_key_are_refused() {
         let state = open_state("peers-signed");
         let id = seal_one(&state);
         let mut tampered: Value = serde_json::from_slice(&signed_by(ASKER, &id)).unwrap();
@@ -854,10 +861,11 @@ mod tests {
             RESPONDER_NODE,
             json!({"capsule_id": id}),
         );
-        assert!(is_found(&answer_now(&state, &unbound, "peers")));
-        let (response, looked) = answer_counted(&state, &unbound, "counterparties");
-        assert!(is_refused(&response), "{response:?}");
-        assert!(!looked, "the ledger was read");
+        for tier in ["counterparties", "peers"] {
+            let (response, looked) = answer_counted(&state, &unbound, tier);
+            assert!(is_refused(&response), "{tier}: {response:?}");
+            assert!(!looked, "{tier}: the ledger was read");
+        }
     }
 
     /// A malformed `requester_auth` is an `Error`, never served.
