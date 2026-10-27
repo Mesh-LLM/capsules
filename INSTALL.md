@@ -10,12 +10,12 @@ needed.
 ## What's new in 0.1.5
 
 **Upgrade both nodes:** a node on 0.1.4 cannot read this version's evidence answers, and under the
-default settings this version refuses its unsigned requests for records and Standard History.
+default settings this version refuses its unsigned requests for records and `served_summary/1`.
 
 **Requests are signed only on a host that announces plugin keys** (`plugin_keys.v1`, mesh-llm
 #2299, expected in mesh-llm 0.79.0; no release has it yet). On mesh-llm 0.78.1 or older, requests
-go out unsigned, and two upgraded nodes with the default settings answer each other no record and
-no Standard History; see the CHANGELOG for the settings that keep answering them.
+go out unsigned, and two upgraded nodes answer each other no record, and with the default settings
+no `served_summary/1`; see the CHANGELOG for the setting that keeps answering the latter.
 
 **Updating from mesh-llm 0.78.x.** The default `capsules` comes from the mesh-llm release's own
 bundled copy. Upgrade mesh-llm to the release that pins capsules 0.1.5, then run:
@@ -24,9 +24,10 @@ bundled copy. Upgrade mesh-llm to the release that pins capsules 0.1.5, then run
 mesh-llm plugins install-defaults
 ```
 
-It installs from that release's bundled copy and never downloads. A node that runs `capsules` from
-its own `[[plugin]]` entry (a `command` or `url`) is operator-managed and is left as it is: install
-the 0.1.5 package below instead.
+It installs from that release's bundled copy and never downloads. A `capsules` that the operator
+installed themselves (`mesh-llm plugins install`, which is what the steps below
+do, or a `[[plugin]]` entry with a `command` or `url`) is operator-managed and is left as it is:
+install the 0.1.5 package below instead.
 
 - **Who asks for evidence is proven, not stated.** On a host that announces plugin keys, each
   request is signed with the key mesh-llm announces for the node, and a node that claims to be
