@@ -1,6 +1,45 @@
 # Changelog
 
-## Unreleased
+## 0.1.5
+
+**Milestone M1: who asks for evidence is proven, and a node gets back the record of the exchange it
+asked for** (PRD-SERVICE-EVIDENCE §6, R-7 to R-14). **Upgrade both nodes.** Evidence answers are now
+the interop profile's signed envelope, which a node on 0.1.4 cannot read, and anchor pins taken from
+0.1.4 no longer reproduce. A node on 0.1.4 also sends unsigned requests, which this version refuses
+for records (under every setting) and for `served_summary/1` under the default settings. Checkpoints
+and `history_card/1` are still answered to anyone.
+
+**Signing needs a host that announces plugin keys (`plugin_keys.v1`, Mesh-LLM/mesh-llm#2299).** No mesh-llm
+release has it yet: it is on mesh-llm main and is expected in 0.79.0. On 0.78.1 or older, this
+version's requests go out unsigned, so two upgraded nodes answer each other no record, and with the
+default settings no `served_summary/1`. Only `share_standard_history = on` keeps answering unsigned
+requests for `served_summary/1`; records need a signed request. The records status
+(`requests_signed`) shows which case a node is in.
+
+**Updating from mesh-llm 0.78.x:** upgrade mesh-llm to the release that pins capsules 0.1.5, then
+run `mesh-llm plugins install-defaults`. It installs from that release's bundled copy and never
+downloads; a node whose `capsules` the operator installed themselves (with `mesh-llm plugins
+install`, as INSTALL.md describes, or a `[[plugin]]` `command` or `url`) is left as it is and
+installs the 0.1.5 package from INSTALL.md.
+
+### Verified on live hosts, and not
+
+- **T3 and T7 passed at PR commit 3902731, whose code is this release's (later commits changed only
+  docs), on a lab host built from mesh-llm main
+  (b5ed6bd8) plus Mesh-LLM/mesh-llm#2620, not on a stock release.** The signed counterparty record
+  came back verified; a node that signed for itself while stating another node's id got a signed
+  refusal, with 0 ledger reads; and T7 answers were the same for the counterparty and a stranger.
+- **An earlier run, on 2026-10-22, passed on three nodes built from mesh-llm main (95f9b48),** with
+  an earlier plugin build (265ede5) and default settings. It predates Mesh-LLM/capsules#50, so its T7 result (a
+  signed `policy_declined` for checkpoints and `history_card/1`) no longer describes this version.
+- **Not run on a stock mesh-llm release.** No release has `plugin_keys.v1` yet (see above), so a
+  stock 0.78.1 host cannot run T3.
+- **A referee verdict on live hosts,** which 0.1.4 said would wait on 0.1.5, has still not run. It is
+  covered by tests only.
+- **Exchange corroboration and the payer's delivered leg for a deposit-covered bill** are covered by
+  tests only. Matching both halves of a host-served exchange by client nonce also needs the host to
+  pass the nonce on its served terminal event (Mesh-LLM/mesh-llm#2536, on mesh-llm main and in no
+  release yet).
 
 ### Changed
 
@@ -21,6 +60,22 @@
   at once from anyone else (unsigned, or signed by a key no host binds). Each group has its own
   pool, so a full stranger pool declines only strangers, with the same signed `policy_declined`
   as before.
+
+- **A record of an exchange this node served for a peer now names the peer that asked, so that peer
+  gets its record back. Operators on `share_history_segments = peers`: your records now show which
+  node asked.** mesh-llm reports the node that asked for a host-served exchange
+  (`requested_by_node_id`, from the mesh connection, never from the request), but the plugin
+  sealed `requesting_party: "unknown"`, so under the default `counterparties` no node could get the
+  record of an exchange it asked for.
+  - **Now, under the default settings,** the node that asked is that record's counterparty: it gets
+    the record (by evidence request or ledger fetch), and it counts as a counterparty for Standard
+    History (`served_summary/1`).
+  - **Behaviour change under `peers`,** which already serves records to any peer: those records now
+    also say which node asked. Nothing named the asker before, so this changes what a node on
+    `peers` shares without any setting changing.
+  - A node that signs for itself while stating another node's id is still refused `not_authorized`
+    before anything is looked up. A record of an exchange this node asked for, one that reached its
+    local API, or one from a host that does not report the field still names `"unknown"`.
 
 - **An evidence answer is now the interop profile's signed envelope. Upgrade both nodes.** The
   protocol crate is `evidence-request` `=0.2.0` (what `capsule-emit-evidence-request` became when it
@@ -76,7 +131,7 @@
     - that the request is addressed to it;
     - that the nonce is new;
     - that a host announced the key for the node the request comes from.
-  - Records and Standard History are then answered only to that node. The id a request states is
+  - Records and `served_summary/1` are then answered only to that node. The id a request states is
     no longer trusted; if several nodes announced the same key, it picks between them.
   - **Refused:**
     - a request stating one node's id while signed by another;
@@ -85,17 +140,17 @@
     - a replayed nonce;
     - a deadline more than 5 minutes ahead.
   - **An unsigned request now gets a signed refusal wherever the answer depends on who asks:**
-    `not_authorized` for a record, `policy_declined` for Standard History. It never gets
+    `not_authorized` for a record, `policy_declined` for `served_summary/1`. It never gets
     silence.
-  - **Two settings still answer unsigned requests:** `share_history_segments = peers` for records,
-    and `share_standard_history = on` for Standard History. Under them, a valid signature under a
-    key no host announced is answered as an unsigned request, and nothing more. Any other failed
-    check is still refused.
-  - **A node on 0.1.5 or older sends unsigned requests,** so after you upgrade, its requests for
-    your records or Standard History are refused until it upgrades too.
+  - **One setting still answers unsigned requests:** `share_standard_history = on`, for
+    `served_summary/1`. Under it, a valid signature under a key no host announced is answered as an
+    unsigned request, and nothing more. Any other failed check is still refused. No setting answers
+    an unsigned request for a record.
+  - **A node on 0.1.4 or older sends unsigned requests,** so after you upgrade, its requests for
+    your records or `served_summary/1` are refused until it upgrades too.
   - **A node signs only once its host has taken its key.** On a host without `plugin_keys.v1` its
-    requests go out unsigned, so an upgraded node with the default settings no longer answers it
-    any record or Standard History.
+    requests go out unsigned, so an upgraded node no longer answers it any record, and with the
+    default settings no `served_summary/1`.
   - **A node that no record names is refused a record before the subject is looked up,** with the
     same refusal for any subject, so the refusal no longer shows how large the log is.
   - **The replay check is held in memory,** so a restart forgets it: a request can be repeated to
@@ -112,8 +167,9 @@
   fetch, and the node answering checks it before it looks the record up. Unless records go to
   any peer (`peers`), a record goes only to the node the signature proves, never to the id the
   fetch states. Under the default
-  `share_history_segments` an unsigned fetch, from a node on 0.1.5 or older, is now refused
-  `not_authorized`; under `peers` it is answered as before. With sharing `off`, a fetch is refused
+  `share_history_segments` an unsigned fetch, from a node on 0.1.4 or older, is now refused
+  `not_authorized`, and so is one under `peers` (see the entry on strangers under `peers`). With
+  sharing `off`, a fetch is refused
   before the lookup, so the refusal no longer shows whether the record exists.
 - **A referee checks the signature on an `adjudicate` request** before it reads anything. A
   request addressed to another node, changed after signing, past its deadline or replayed is
@@ -126,14 +182,16 @@
 - **The records status (`evidence_records_status`) says whether this node's requests are
   signed** (`requests_signed`). They are not when its host refused its key or lacks
   `plugin_keys.v1`; its requests then go out unsigned.
-- **Standard History is no longer answered to every node that asks.** A node's checkpoint list,
-  `history_card/1` and `served_summary/1` now go only to a counterparty (a node one of its records
-  names as the other side of an exchange). Every other node gets a signed `policy_declined` that
-  carries nothing about the asker: it is signed over the request's digest, the reason and the
-  time, so the same request gets the same refusal whoever sends it. Before 0.1.6 any node could
-  read them. **After upgrading, a node you have never exchanged with can no longer read your
-  checkpoints, history card or served summary** until you set the new `share_standard_history`
-  switch to `on` (console: Sharing policy › Standard history; or
+- **Standard History is no longer answered to every node that asks; checkpoints and
+  `history_card/1` are.** Checkpoints and `history_card/1` are answered to any requester, signed or
+  not (Mesh-LLM/capsules#50); `share_standard_history` now governs only `served_summary/1` and other derivations.
+  With record push and the checkpoint cadence on, checkpoint times can show when exchanges ended.
+  `served_summary/1` goes only to a counterparty (a node one of its records names as the other side
+  of an exchange); every other node gets a signed `policy_declined` that carries nothing about the
+  asker: it is signed over the request's digest, the reason and the time, so the same request gets
+  the same refusal whoever sends it. Before 0.1.5 any node could read it. **After upgrading, a node
+  you have never exchanged with can no longer read your served summary** until you set the new
+  `share_standard_history` switch to `on` (console: Sharing policy › Standard history; or
   `CAPSULES_SHARE_STANDARD_HISTORY=on`). Your records are unaffected: they stay under
   `share_history_segments`. A counterparty is the node a signed request proves it came from
   (see above).

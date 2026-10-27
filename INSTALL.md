@@ -7,6 +7,42 @@ each exchange, and whether this node's log still verifies. It installs and
 runs on an unmodified mesh-llm release (0.77 or newer). No other runtime is
 needed.
 
+## What's new in 0.1.5
+
+**Upgrade both nodes:** a node on 0.1.4 cannot read this version's evidence answers, and under the
+default settings this version refuses its unsigned requests for records and `served_summary/1`.
+
+**Requests are signed only on a host that announces plugin keys** (`plugin_keys.v1`,
+Mesh-LLM/mesh-llm#2299, expected in mesh-llm 0.79.0; no release has it yet). On mesh-llm 0.78.1 or older, requests
+go out unsigned, and two upgraded nodes answer each other no record, and with the default settings
+no `served_summary/1`; see the CHANGELOG for the setting that keeps answering the latter.
+
+**Updating from mesh-llm 0.78.x.** The default `capsules` comes from the mesh-llm release's own
+bundled copy. Upgrade mesh-llm to the release that pins capsules 0.1.5, then run:
+
+```bash
+mesh-llm plugins install-defaults
+```
+
+It installs from that release's bundled copy and never downloads. A `capsules` that the operator
+installed themselves (`mesh-llm plugins install`, which is what the steps below
+do, or a `[[plugin]]` entry with a `command` or `url`) is operator-managed and is left as it is:
+install the 0.1.5 package below instead.
+
+- **Who asks for evidence is proven, not stated.** On a host that announces plugin keys, each
+  request is signed with the key mesh-llm announces for the node, and a node that claims to be
+  another is refused before anything is looked up.
+- **A node gets back the record of the exchange it asked for,** and counts as that record's
+  counterparty. On `share_history_segments = peers`, records now also show which node asked.
+- **Evidence answers are the interop profile's signed envelope** (`evidence-request` 0.2.0), the
+  same envelope the Go, Python and evidencebook implementations sign.
+- **Checkpoints and `history_card/1` are answered to any requester;** the rest of Standard History
+  (`served_summary/1`) goes only to counterparties by default (`share_standard_history`).
+- **Exchange corroboration,** off by default (`share_exchange_corroboration`): another node can ask
+  whether this node holds a half of one earlier exchange.
+
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGELOG.md).
+
 ## What's new in 0.1.4
 
 - **Paid exchanges on the Evidence page:** what each one charged and who paid, from the records
@@ -116,7 +152,7 @@ glibc 2.35 or newer (x86_64 or arm64).
 and set `VERSION` to the release (without the leading `v`):
 
 ```bash
-VERSION=0.1.4
+VERSION=0.1.5
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  TARGET=aarch64-apple-darwin ;;
   Linux-x86_64)  TARGET=x86_64-unknown-linux-gnu ;;
@@ -195,8 +231,8 @@ key from either of two places:
   `plugin_keys.v1` capability): each directly-connected peer's key for this
   plugin, bound to that peer by its node key, read from the host's
   `GET /api/plugin-keys` (`CAPSULES_HOST_CONSOLE_URL`, default
-  `http://127.0.0.1:3131`). This plugin announcing its own key there follows
-  once a mesh-llm plugin release carries the request.
+  `http://127.0.0.1:3131`). This plugin announces its own key there at start,
+  on a host that lists `plugin_keys.v1`.
 - **You:** set `CAPSULES_PEER_KEYS` in the node's environment to a JSON object
   mapping each peer's id to its raw Ed25519 public key in hex. A node writes
   its own id to `<data dir>/self-peer-id` and its public key to
