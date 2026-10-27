@@ -38,7 +38,8 @@ installs the 0.1.5 package from INSTALL.md.
   covered by tests only.
 - **Exchange corroboration and the payer's delivered leg for a deposit-covered bill** are covered by
   tests only. Matching both halves of a host-served exchange by client nonce also needs the host to
-  pass the nonce on its served terminal event (Mesh-LLM/mesh-llm#2464).
+  pass the nonce on its served terminal event (Mesh-LLM/mesh-llm#2536, on mesh-llm main and in no
+  release yet).
 
 ### Changed
 
