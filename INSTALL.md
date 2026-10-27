@@ -12,8 +12,8 @@ needed.
 **Upgrade both nodes:** a node on 0.1.4 cannot read this version's evidence answers, and under the
 default settings this version refuses its unsigned requests for records and `served_summary/1`.
 
-**Requests are signed only on a host that announces plugin keys** (`plugin_keys.v1`, mesh-llm
-#2299, expected in mesh-llm 0.79.0; no release has it yet). On mesh-llm 0.78.1 or older, requests
+**Requests are signed only on a host that announces plugin keys** (`plugin_keys.v1`,
+Mesh-LLM/mesh-llm#2299, expected in mesh-llm 0.79.0; no release has it yet). On mesh-llm 0.78.1 or older, requests
 go out unsigned, and two upgraded nodes answer each other no record, and with the default settings
 no `served_summary/1`; see the CHANGELOG for the setting that keeps answering the latter.
 
