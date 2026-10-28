@@ -61,11 +61,17 @@ pub const ENV_RECORD_AT_COMPLETION: &str = "CAPSULES_SHARE_RECORD_AT_COMPLETION"
 /// counterparty's push. `off`, and any value this plugin does not know, is off:
 /// a typo never widens what is shared.
 pub fn record_at_completion_is_off() -> bool {
-    record_at_completion_is_off_for(
-        crate::settings::var(ENV_RECORD_AT_COMPLETION)
-            .ok()
-            .as_deref(),
-    )
+    record_at_completion_is_off_from(crate::settings::var(ENV_RECORD_AT_COMPLETION))
+}
+
+fn record_at_completion_is_off_from(read: Result<String, std::env::VarError>) -> bool {
+    match read {
+        Ok(raw) => record_at_completion_is_off_for(Some(&raw)),
+        Err(std::env::VarError::NotPresent) => record_at_completion_is_off_for(None),
+        // A value that is not valid Unicode is a value the operator set and
+        // this plugin cannot read: off, never the default.
+        Err(std::env::VarError::NotUnicode(_)) => true,
+    }
 }
 
 fn record_at_completion_is_off_for(raw: Option<&str>) -> bool {
@@ -628,6 +634,18 @@ mod tests {
     fn every_setting_is_optional_shipping_this_schema_flips_no_runtime_behavior() {
         let schema = as_config_schema(share_policy_config_schema("capsules"));
         assert!(schema.settings.iter().all(|s| !s.required));
+    }
+
+    #[test]
+    fn an_unreadable_record_at_completion_value_is_off_not_the_default() {
+        use std::env::VarError;
+        use std::ffi::OsString;
+        assert!(!record_at_completion_is_off_from(Err(VarError::NotPresent)));
+        assert!(record_at_completion_is_off_from(Err(VarError::NotUnicode(
+            OsString::from("x")
+        ))));
+        assert!(!record_at_completion_is_off_from(Ok("counterparty".into())));
+        assert!(record_at_completion_is_off_from(Ok("off".into())));
     }
 
     #[test]

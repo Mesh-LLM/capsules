@@ -42,7 +42,8 @@ console: `CAPSULES_SHARE_RECORD_AT_COMPLETION`,
 `CAPSULES_ADVERTISE_EVIDENCE_REQUESTS`, `CAPSULES_SHARE_ADJUDICATIONS` and
 `CAPSULES_CHECKPOINT_WITNESS_URLS` (a comma list of witness URLs) with
 `CAPSULES_CHECKPOINT_WITNESS_KEYS` (a JSON object from witness URL to its key
-in hex). An unset or unknown value means the default.
+in hex). An unset value means the default; an unknown value means `off` for the
+switches that reach a peer.
 
 ## The record at completion (`share_record_at_completion`)
 

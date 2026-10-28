@@ -76,7 +76,7 @@ const RETIRED_PHRASES = [
   'Register a checkpoint',
   'The response bytes hash to the digest',
   'disagree about the request or the answer',
-  // Evidence page demo pass (#44): record push is off by default, so their
+  // Evidence page demo pass (#44): record push can be off on their node, so their
   // record never "usually" arrives; one plain word per state; no dead
   // controls; no internal terms on the face.
   'usually arrives on its own',

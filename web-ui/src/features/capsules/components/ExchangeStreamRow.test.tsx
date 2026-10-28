@@ -913,7 +913,7 @@ describe('ExchangeStreamRow — UX §3: the left cell is the event in words; no 
     expect(tokenFlowText(34, 1)).toBe('34 → 1 token')
   })
 
-  it('offers both asks on a fresh exchange: record push is off by default, so there is no wait', () => {
+  it('offers both asks on a fresh exchange: asking does not wait for a push', () => {
     const fresh = new Date(Date.now() - 1_000).toISOString()
     render(<ExchangeStreamRow {...toggleProps()} rail={NO_RAIL} row={makeRow('open_not_asked', { timestamp: fresh })} />)
     expect(screen.getByRole('button', { name: 'Ask them for their record' })).toBeEnabled()

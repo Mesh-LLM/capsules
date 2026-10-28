@@ -524,7 +524,7 @@ describe('rightCellText — the load-bearing distinction', () => {
     expect(rightCellText(stateOf('open_refused', '4 Sep'))).toBe('They declined, and signed the refusal — 4 Sep')
     expect(rightCellText(stateOf('open_absent', '4 Sep'))).toBe('They say they have no record of this — 4 Sep')
     expect(rightCellText(stateOf('open_asked', '3 Sep'))).toBe('Asked 3 Sep. No verified reply yet.')
-    // Push is off by default: "not asked" isn't why it's missing, so it reads
+    // Their push may be off: "not asked" isn't why it's missing, so it reads
     // like every other record that hasn't arrived.
     expect(rightCellText(stateOf('open_not_asked'))).toBe('Their record hasn’t arrived yet.')
     // UX §7 ruling: "not held" and "id not given" share one face; the (i)

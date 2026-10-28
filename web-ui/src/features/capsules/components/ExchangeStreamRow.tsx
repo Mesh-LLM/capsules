@@ -364,8 +364,8 @@ export function ExchangeStreamRow({
     .map(sentence)
     .filter((text) => text !== sentence(faceText))
     .join(' ')
-  // The row's two asks, always on the row face: record push is off by
-  // default, so asking is how their record (or their history) gets here. Each
+  // The row's two asks, always on the row face: record push may be off
+  // on their node, so asking is how their record (or their history) gets here. Each
   // is live as soon as our record names the other side's node, and otherwise
   // says why not.
   const asks = rowAskControls({
