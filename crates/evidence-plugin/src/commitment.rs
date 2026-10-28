@@ -68,7 +68,7 @@ pub const ANSWERS_WITHIN: &str = "PT1M";
 pub const DERIVATIONS: [&str; 4] = [
     "checkpoints",
     evidence_request::registry::DERIVATION_HISTORY_CARD,
-    crate::served_summary::SERVED_SUMMARY_DERIVATION_TOKEN,
+    evidencebook::served_summary::DERIVATION,
     crate::exchange_corroboration::DEFINITION_DIGEST,
 ];
 
