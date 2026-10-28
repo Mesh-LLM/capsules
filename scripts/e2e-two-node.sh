@@ -150,6 +150,9 @@ holds() { [ -f "$(plugin_data provider)/joins/$requester_id.$1.json" ]; }
 export CAPSULES_SHARE_RECORD_AT_COMPLETION=counterparty
 
 # --- the provider: serves the model -----------------------------------------
+# It cuts a checkpoint every 5 s once it has a record, so it has one to answer
+# a history card under.
+NODE_ENV=(CAPSULES_CHECKPOINT_CADENCE_SECONDS=5)
 start_node provider "$PROVIDER_API" "$PROVIDER_CONSOLE" --gguf "$model" --model "$MODEL_NAME"
 wait_for 600 "the provider has loaded the model" status_field "$PROVIDER_CONSOLE" '.llama_ready == true'
 token=$(status_field "$PROVIDER_CONSOLE" '.token')
@@ -205,6 +208,19 @@ holds_providers_record() {
   [ -f "$file" ] && [ "$(wc -l < "$file")" -ge "$EXCHANGES" ]
 }
 wait_for 120 "the requester holds the provider's record of each exchange" holds_providers_record
+
+# --- node to node: the requester asks the provider for its history card -----
+# Answered by evidencebook's builder on the provider (evidencebook#35) and
+# checked on the requester under the provider's announced key.
+provider_checkpointed() { [ -s "$(plugin_data provider)/ledger/checkpoints.jsonl" ]; }
+wait_for 120 "the provider has cut a checkpoint" provider_checkpointed
+history_card() {
+  tool "$REQUESTER_CONSOLE" mesh_evidence_request "$(jq -cn --arg p "$provider_id" '{peer_id: $p,
+    request: {subject: {full_history: null}, coverage: {min_freshness: 1}, derivation: "history_card/1"}}')" \
+    > "$out/history-card.json" \
+    && jq -e '.verification.state == "artifact" and .answer.derivation == "history_card/1"' "$out/history-card.json"
+}
+wait_for 60 "the provider served its history card, verified under its key" history_card
 
 # --- join again after the first exchange: now it is complete ----------------
 wait_for 120 "join on the requester says it has joined" joined
