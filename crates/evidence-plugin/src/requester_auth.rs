@@ -992,6 +992,23 @@ mod tests {
         let claimed = request_claimants(keys, &declared(&anchor), &km, now, Some("self"));
         assert_eq!(claimed.nodes, ["node-a"]);
         assert_eq!(claimed.replay_key, ka, "the anchor's budget");
+        // An operator label on the hosted anchor adds no name to the key it
+        // binds either.
+        let label_too = format!(r#"{{"my-label": "{ka}"}}"#);
+        let labelled_keys = Keys {
+            configured: Some(&label_too),
+            ..keys
+        };
+        let claimed = request_claimants(labelled_keys, &declared(&anchor), &km, now, Some("self"));
+        assert_eq!(claimed.nodes, ["node-a"]);
+        assert_eq!(
+            bound_node(&claimed.nodes, None),
+            Binding::Node("node-a".into())
+        );
+        assert_eq!(
+            bound_node(&claimed.nodes, Some("my-label")),
+            Binding::Mismatch(Some("node-a".into()))
+        );
         let plain = request_claimants(keys, &Map::new(), &ka, now, Some("self"));
         assert_eq!(plain.replay_key, ka);
 

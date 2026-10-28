@@ -324,7 +324,8 @@ impl AcceptedVia {
 pub struct Accepted {
     pub via: AcceptedVia,
     /// The peers the key (or, for a declaration, its anchor key) is bound to
-    /// in the registry: never empty.
+    /// in the registry: the host's peers when a host announced it, else the
+    /// operator's names for it. Never empty.
     pub peers: Vec<String>,
 }
 
@@ -353,15 +354,24 @@ pub fn accepted_via(
         if peers.is_empty() {
             return None;
         }
-        let via = if peers
+        // A key a host announced is bound to the host's peers only: an
+        // operator label never adds a second name to it.
+        let hosted: Vec<String> = peers
             .iter()
-            .any(|p| announced.get(p).map(String::as_str) == Some(key))
-        {
-            AcceptedVia::HostAnnounced
+            .filter(|p| announced.get(*p).map(String::as_str) == Some(key))
+            .cloned()
+            .collect();
+        Some(if hosted.is_empty() {
+            Accepted {
+                via: AcceptedVia::OperatorStopgap,
+                peers,
+            }
         } else {
-            AcceptedVia::OperatorStopgap
-        };
-        Some(Accepted { via, peers })
+            Accepted {
+                via: AcceptedVia::HostAnnounced,
+                peers: hosted,
+            }
+        })
     };
     if key_id == own_key || binds_to_own(declaration, key_id, own_key, now) {
         return None;
@@ -485,6 +495,17 @@ mod tests {
             "a host binding wins the label"
         );
         assert_eq!(both.peers, ["node-a", "node-a-2"]);
+        let labelled = accept(
+            Some(&format!(r#"{{"my-label": "{KA}"}}"#)),
+            &[("node-a", KA)],
+            KA,
+        )
+        .unwrap();
+        assert_eq!(
+            labelled.peers,
+            ["node-a"],
+            "a label adds no name to a hosted key"
+        );
         assert_eq!(accept(None, &[("node-a", KA)], KB), None, "unknown key");
         assert_eq!(
             accept(
