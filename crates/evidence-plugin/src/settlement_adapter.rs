@@ -229,8 +229,9 @@ fn lifecycle_event_ref(block: &Map<String, Value>) -> Check {
     )
 }
 
-/// The `(currency, decade)` band of an amount, the rule the standard
-/// history card uses: `currency` is the `assetCode`, and `decade` is
+/// The `(currency, decade)` band of an amount (the signed decade the
+/// standard history card is to adopt, AAC #440): `currency` is the
+/// `assetCode`, and `decade` is
 /// `floor(log10(value / 10^assetScale))`, signed, which in exact integer
 /// arithmetic is the digits of `value` minus `assetScale` minus one. So
 /// 250 sats is `BTC` decade -6 and 1 msat is decade -11. `None` for zero,

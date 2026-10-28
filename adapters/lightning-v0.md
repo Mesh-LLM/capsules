@@ -21,7 +21,7 @@ node's own book. The tool seals nothing and contacts nobody.
 | mesh-llm, `mesh/crates/mesh-llm-host-runtime/src/network/payments/lifecycle.rs` | `main` at `3947de0cb` | the `payment.lifecycle.v1` event: its members, which side emits which phase, and the `event_ref` digest |
 | mesh-llm, `mesh/crates/mesh-llm-wallet/src/invoice.rs` | same | the invoice's `payment_hash`, and `sha256(preimage) == payment_hash` |
 | Agent Action Capsule, `spec/interop-profile-v0.md` and `spec/adapters/x402-v0.md` | `main` at `40549d239` | the five statuses (§7.1), the `native_check` report (§7.2), and the shape of x402's per-check results (§7) |
-| Agent Action Capsule, `vectors/settlement/cases.json`, and pull request #440 (`spec/standard-history-v0.md` §5.3) | `main` at `40549d239`; #440 open at `a3d1fc08` | a Lightning amount as `assetCode` `BTC`, `assetScale` 11; the card's value band, with the signed decade this declaration uses |
+| Agent Action Capsule, `vectors/settlement/cases.json`, and pull request #440 (`spec/standard-history-v0.md` §5.3) | `main` at `40549d239`; #440 open at `a3d1fc08` | a Lightning amount as `assetCode` `BTC`, `assetScale` 11; the card's value band as `(currency, decade)`. #440 is to adopt the signed decade this declaration uses; at `a3d1fc08` it still uses the unsigned whole-part rule |
 | mesh-llm#2654 | draft, head `3899080b` | the `pay.ln.v1` channel and `Message::Settlement { id, bill }` (see [Sources](#sources)) |
 
 ## (a) The native object
@@ -119,8 +119,7 @@ method `wallet_reported`, and `preimage` is `NOT_PRESENT`.
 ## Band
 
 Each exchange carries one value band per side, `{"currency", "decade"}`. It is never one band per
-payment. The rule is the one the standard history card uses, so a card can count these exchanges
-by band.
+payment.
 
 - The adapter sums that side's distinct terminal settlements, deposit and final together, so a job
   split into several payments still has one band.
