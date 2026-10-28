@@ -275,6 +275,30 @@
           "category_summary": "An optional rule of yours for when this node stops routing to a peer. Off by default.",
           "category_order": 1
         }
+      },
+      {
+        "key": "join_network",
+        "value_schema": {
+          "kind": "enum",
+          "enum_values": [
+            "off",
+            "on"
+          ],
+          "allow_additional_properties": false
+        },
+        "required": false,
+        "default_json": "\"off\"",
+        "apply_mode": "static_on_load",
+        "restart_scope": "none",
+        "visibility": "user",
+        "description": "I add this node to the evidence network to help improve the evidence layer. The network may ask it for its history summary, usually daily, and never for the content of any request, answer or payment. A summary of its answers, or that it did not answer, is published at https://evidence-network.github.io/loop/stats/. To leave, turn this switch off: the asks stop on the next run, and past reports stay.",
+        "presentation": {
+          "label": "Join the evidence network",
+          "category_id": "network",
+          "category_label": "Evidence network",
+          "category_summary": "Whether this node is on the evidence network's list. Off by default.",
+          "category_order": 0
+        }
       }
     ]
   },

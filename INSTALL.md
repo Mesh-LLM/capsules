@@ -298,6 +298,13 @@ https://github.com/evidence-network/loop/blob/main/nodes/README.md
 curl -s -X POST -H 'content-type: application/json' -d '{}' $CONSOLE/api/plugins/capsules/tools/commitment
 ```
 
+4. **Join the list.** In the console (Configuration, Plugins, capsules), turn on
+"Join the evidence network". The statement under the switch is what you agree to. The node then
+signs one join with its plugin key, with no handle and no operator name, and sends
+it to the network's reporter node; `join` shows under `network` whether the reporter
+has it. While no reporter is named yet (`network.reporter` is null), nothing is sent.
+To leave, turn the switch off.
+
 `join` and `doctor` seal nothing and contact nobody.
 <!-- /join-quickstart -->
 

@@ -74,7 +74,12 @@ on_exit() {
 trap on_exit EXIT
 
 # One node: its own HOME (mesh-llm keeps its key, config and sockets under
-# it), and the plugin's data under the same HOME.
+# it), and the plugin's data under the same HOME. The plugin reads its console
+# settings from the same config file (MESH_LLM_CONFIG), per use; they are
+# added with `setting` once the node runs, since mesh-llm refuses to start
+# with settings it cannot check against an installed plugin's schema.
+# NODE_ENV holds the node's extra environment.
+NODE_ENV=()
 start_node() {
   local name=$1 api=$2 console=$3
   shift 3
@@ -89,8 +94,11 @@ name = "capsules"
 enabled = true
 command = "$plugin"
 args = []
+
+[plugin.settings]
 EOF
-  HOME=$home XDG_DATA_HOME=$home/.local/share \
+  env ${NODE_ENV[@]+"${NODE_ENV[@]}"} HOME="$home" XDG_DATA_HOME="$home/.local/share" \
+    MESH_LLM_CONFIG="$home/config.toml" \
     "$mesh_llm" serve --config "$home/config.toml" \
     --port "$api" --console "$console" --headless \
     --disable-iroh-relays --log-format json "$@" \
@@ -125,6 +133,16 @@ halves() {
   jq -c --arg r "$2" 'select(.model_attestation.compute_attestation["x-mesh-poc-v1"].role? == $r)' "$file" | wc -l
 }
 has_halves() { [ "$(halves "$1" "$2")" -ge "$EXCHANGES" ]; }
+# setting NODE LINE: add a line to the node's [plugin.settings] (the last table).
+setting() { printf '%s\n' "$2" >> "$(node_home "$1")/config.toml"; }
+# tool CONSOLE OPERATION BODY: POST to one of the plugin's operations.
+tool() {
+  curl -fsS -X POST -H 'content-type: application/json' -d "$3" \
+    "http://127.0.0.1:$1/api/plugins/capsules/tools/$2"
+}
+joined() { tool "$REQUESTER_CONSOLE" join '{}' > "$out/join-after.json" && jq -e '.joined == true' "$out/join-after.json"; }
+# holds KIND: the provider, as the reporter, keeps the requester's record.
+holds() { [ -f "$(plugin_data provider)/joins/$requester_id.$1.json" ]; }
 
 # Record push is on by default; set explicitly at both ends here (a node with it
 # off does not take the other side's push either), so the run shows what a
@@ -137,6 +155,9 @@ wait_for 600 "the provider has loaded the model" status_field "$PROVIDER_CONSOLE
 token=$(status_field "$PROVIDER_CONSOLE" '.token')
 provider_id=$(curl -fsS "http://127.0.0.1:$PROVIDER_CONSOLE/api/diagnostics/network" | jq -er '.node_id')
 echo "provider node id: $provider_id"
+# The provider is this mesh's reporter: it takes joins once its console names
+# it (read per use, so no restart).
+setting provider "join_reporter = \"$provider_id\""
 # The requester accepts the provider's record under the provider's own key
 # (its raw Ed25519 public key, hex). The provider cannot be given the
 # requester's: a client node's id is new each time it starts.
@@ -146,8 +167,21 @@ CAPSULES_PEER_KEYS=$(jq -cn --arg id "$provider_id" --arg k "$provider_key" '{($
 export CAPSULES_PEER_KEYS
 
 # --- the requester: serves nothing, joins the provider's mesh ---------------
+# The provider is its reporter; it checks its join switch every second and
+# cuts a checkpoint every 5 s once it has a record.
+NODE_ENV=(CAPSULES_JOIN_REPORTER="$provider_id" CAPSULES_JOIN_TICK_MS=1000
+  CAPSULES_CHECKPOINT_CADENCE_SECONDS=5)
 start_node requester "$REQUESTER_API" "$REQUESTER_CONSOLE" --client --join "$token"
 wait_for 300 "the requester can route to the provider's model" lists_model "$REQUESTER_API"
+requester_id=$(curl -fsS "http://127.0.0.1:$REQUESTER_CONSOLE/api/diagnostics/network" | jq -er '.node_id')
+echo "requester node id: $requester_id"
+setting requester 'join_network = "on"'
+
+# --- join on a fresh node: the first checkpoint is still missing ------------
+tool "$REQUESTER_CONSOLE" join '{}' > "$out/join-before.json"
+jq -e '.joined == false' "$out/join-before.json" > /dev/null \
+  || { echo "join said a fresh node had joined" >&2; exit 1; }
+wait_for 120 "the reporter holds the requester's signed join" holds join
 
 # --- the exchanges: each asked of the provider by id ------------------------
 for n in $(seq "$EXCHANGES"); do
@@ -172,6 +206,13 @@ holds_providers_record() {
 }
 wait_for 120 "the requester holds the provider's record of each exchange" holds_providers_record
 
+# --- join again after the first exchange: now it is complete ----------------
+wait_for 120 "join on the requester says it has joined" joined
+
+# --- the switch off: a signed leave -----------------------------------------
+sed -i.bak 's/^join_network = "on"$/join_network = "off"/' "$(node_home requester)/config.toml"
+wait_for 120 "the reporter holds the requester's signed leave" holds leave
+
 stop_nodes
 
 # --- the scenario checks, over copies of what each node wrote ---------------
@@ -180,4 +221,5 @@ cp -a "$(plugin_data requester)" "$out/data/requester"
 cp -a "$(plugin_data provider)" "$out/data/provider"
 cd "$repo/crates/evidence-plugin"
 E2E_REQUESTER_DIR=$out/data/requester E2E_PROVIDER_DIR=$out/data/provider E2E_EXCHANGES=$EXCHANGES \
+  E2E_JOIN_DIR=$out \
   cargo test --locked --bin capsules -- --ignored --test-threads=1 two_node_e2e::

@@ -521,5 +521,8 @@ async fn doctor_and_join_answer_through_the_real_hosts_console() {
         .as_str()
         .unwrap()
         .starts_with("the first checkpoint"));
+    // The join switch is off by default, and no reporter is named yet.
+    assert_eq!(join["network"]["switch"], "off", "{join:#}");
+    assert_eq!(join["network"]["acknowledged"], serde_json::Value::Null);
     assert_eq!(sealed(), before, "doctor and join seal nothing");
 }

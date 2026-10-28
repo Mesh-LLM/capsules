@@ -1,0 +1,13 @@
+{
+  "node_id": "0000000000000000000000000000000000000000000000000000000000000000",
+  "key_id": "0000000000000000000000000000000000000000000000000000000000000000",
+  "operator": "<GitHub handle of the person who runs the reporter node>",
+  "mesh": "lab",
+  "host_build": "<mesh-llm build with plugin key announcement (#2299)>",
+  "plugin_version": "capsules 0.1.5",
+  "retry_after_s": [
+    3600,
+    10800,
+    21600
+  ]
+}

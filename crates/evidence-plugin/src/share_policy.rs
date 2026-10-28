@@ -157,7 +157,7 @@ pub const ENV_EXCHANGE_CORROBORATION: &str = "CAPSULES_SHARE_EXCHANGE_CORROBORAT
 
 /// An on/off switch: on only for `on` (or `1`, `true`, `yes`); unset and
 /// anything else is off.
-fn switched_on(raw: Option<&str>) -> bool {
+pub(crate) fn switched_on(raw: Option<&str>) -> bool {
     matches!(
         normalized(raw).as_deref(),
         Some("on" | "1" | "true" | "yes")
@@ -168,7 +168,7 @@ fn switched_on(raw: Option<&str>) -> bool {
 /// as off: for the page, so a typo is seen rather than silently obeyed.
 pub fn setting_problems() -> Vec<String> {
     const ON_OFF: &[&str] = &["on", "off", "1", "0", "true", "false", "yes", "no"];
-    let known: [(&str, &[&str]); 8] = [
+    let known: [(&str, &[&str]); 9] = [
         (ENV_RECORD_AT_COMPLETION, &["counterparty", "off"]),
         (
             ENV_HISTORY_SEGMENTS,
@@ -183,6 +183,7 @@ pub fn setting_problems() -> Vec<String> {
             ON_OFF,
         ),
         (crate::checkpoint_cadence::ENV_ENABLE, ON_OFF),
+        (crate::network_join::ENV_JOIN_NETWORK, ON_OFF),
     ];
     known
         .iter()
@@ -222,6 +223,14 @@ const REFEREE_CATEGORY_SUMMARY: &str =
     "An independent check of two twins that answered the same request differently. \
     Eligibility is yes or no, from this node's own records; no figure about a peer is computed. Off by default: \
     asking a referee sends the twins' request, including the prompt, and both twins' answers to the referee peer.";
+
+/// The join switch's label in the console.
+pub const JOIN_NETWORK_LABEL: &str = "Join the evidence network";
+
+const NETWORK_CATEGORY_ID: &str = "network";
+const NETWORK_CATEGORY_LABEL: &str = "Evidence network";
+const NETWORK_CATEGORY_SUMMARY: &str =
+    "Whether this node is on the evidence network's list. Off by default.";
 
 const RULE_CATEGORY_ID: &str = "routing_rule";
 const RULE_CATEGORY_LABEL: &str = "Routing rule";
@@ -399,6 +408,15 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                 .label("Within D days")
                 .category(RULE_CATEGORY_ID, RULE_CATEGORY_LABEL, RULE_CATEGORY_SUMMARY, 1),
         )
+        .setting(
+            // The statement, byte for byte, as Steven approved it (loop's
+            // joins/SWITCH_CONSENT.txt); a join signs its digest.
+            config_setting(crate::network_join::JOIN_NETWORK_KEY, config_enum(["off", "on"]))
+                .default_value(&"off")
+                .description(crate::network_join::SWITCH_CONSENT)
+                .label(JOIN_NETWORK_LABEL)
+                .category(NETWORK_CATEGORY_ID, NETWORK_CATEGORY_LABEL, NETWORK_CATEGORY_SUMMARY, 0),
+        )
         .into()
 }
 
@@ -432,7 +450,8 @@ mod tests {
                 ADJUDICATE_DIFFERING_TWINS_KEY,
                 REFEREE_BAR_DAYS_KEY,
                 STOP_ROUTING_AFTER_KEY,
-                STOP_ROUTING_WINDOW_KEY
+                STOP_ROUTING_WINDOW_KEY,
+                crate::network_join::JOIN_NETWORK_KEY
             ]
         );
     }
@@ -466,7 +485,7 @@ mod tests {
             );
             checked += 1;
         }
-        assert_eq!(checked, 7, "the seven choice settings were checked");
+        assert_eq!(checked, 8, "the eight choice settings were checked");
     }
 
     #[test]

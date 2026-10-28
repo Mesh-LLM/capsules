@@ -677,9 +677,18 @@ pub async fn handle_join(
         let now = evidence_answer::now_utc();
         let witnesses = Witnesses::read(capsules.ledger_dir());
         let served = crate::commitment_bridge::own(&capsules, node_id.as_deref());
-        commitment::with_responder(&capsules, &now, node_id.as_deref(), |responder, policy| {
-            join_report(responder, policy, &served, &witnesses)
-        })
+        let mut report = commitment::with_responder(
+            &capsules,
+            &now,
+            node_id.as_deref(),
+            |responder, policy| join_report(responder, policy, &served, &witnesses),
+        )?;
+        // The ledger is `<data dir>/ledger`; the join switch keeps its state
+        // in the data directory.
+        if let Some(data_dir) = capsules.ledger_dir().parent() {
+            report["network"] = crate::network_join::status(data_dir);
+        }
+        Ok(report)
     })
     .await
 }
@@ -745,7 +754,15 @@ pub fn quickstart(plugin_id: &str) -> String {
          curl -s -X POST -H 'content-type: application/json' -d '{{}}' {commitment}\n\
          ```\n\
          \n\
+         4. **Join the list.** In the console (Configuration, Plugins, capsules), turn on\n\
+         \"{switch}\". The statement under the switch is what you agree to. The node then\n\
+         signs one join with its plugin key, with no handle and no operator name, and sends\n\
+         it to the network's reporter node; `join` shows under `network` whether the reporter\n\
+         has it. While no reporter is named yet (`network.reporter` is null), nothing is sent.\n\
+         To leave, turn the switch off.\n\
+         \n\
          `join` and `doctor` seal nothing and contact nobody.\n",
+        switch = crate::share_policy::JOIN_NETWORK_LABEL,
         join = tool(JOIN_OPERATION),
         doctor = tool(DOCTOR_OPERATION),
         commitment = tool(crate::commitment_bridge::OWN_COMMITMENT_OPERATION),

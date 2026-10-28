@@ -428,6 +428,11 @@ fn spki(key: &VerifyingKey) -> Vec<u8> {
     [&ED25519_SPKI_PREFIX[..], &key.to_bytes()[..]].concat()
 }
 
+/// `spki` form of a key: its DER SubjectPublicKeyInfo, standard base64.
+pub(crate) fn spki_b64(key: &VerifyingKey) -> String {
+    base64::engine::general_purpose::STANDARD.encode(spki(key))
+}
+
 fn jcs(value: &Value) -> String {
     evidence_request::jcs::to_string(value)
         .expect("strings, booleans and lists always canonicalize")
@@ -439,7 +444,8 @@ fn without_sig(doc: &Value) -> Value {
     Value::Object(map)
 }
 
-fn sign(doc: Value, key: &SigningKey) -> Value {
+/// `doc` with `sig`: Ed25519 by `key` over the JCS form of `doc` without `sig`.
+pub(crate) fn sign(doc: Value, key: &SigningKey) -> Value {
     let sig = key.sign(jcs(&without_sig(&doc)).as_bytes());
     let mut map = doc.as_object().cloned().unwrap_or_default();
     map.insert(
@@ -453,7 +459,7 @@ fn sign(doc: Value, key: &SigningKey) -> Value {
     Value::Object(map)
 }
 
-fn signature_verifies(doc: &Value, key: &VerifyingKey) -> bool {
+pub(crate) fn signature_verifies(doc: &Value, key: &VerifyingKey) -> bool {
     let sig = &doc["sig"];
     if sig["alg"] != "Ed25519" || sig["canon"] != "jcs" {
         return false;
@@ -476,7 +482,8 @@ fn signature_verifies(doc: &Value, key: &VerifyingKey) -> bool {
         .is_ok()
 }
 
-fn key_of(doc: &Value) -> Result<VerifyingKey, String> {
+/// The key `doc`'s `spki` carries, when it is the key `key_id` names.
+pub(crate) fn key_of(doc: &Value) -> Result<VerifyingKey, String> {
     let der = base64::engine::general_purpose::STANDARD
         .decode(doc["spki"].as_str().unwrap_or_default())
         .map_err(|_| "spki is not base64".to_string())?;
