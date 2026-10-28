@@ -1971,7 +1971,7 @@ mod tests {
     fn every_answer_form_is_byte_for_byte_the_baseline() {
         const FIXTURE: &str = "tests/fixtures/evidence_answers_5d2d102.json";
         const FIXTURE_SHA256: &str =
-            "b4639728f8e932be7f187979b6cc9e737877929a95ba6daf8680238a4de3182d";
+            "f06115e14dcf39f76c87484bb559e79cf0de9927b2d634b0b5eb106e69f32aaa";
         let node = node();
         let last = node.anchors.len() - 1;
         let half = hex::encode(Sha256::digest(b"the counterparty's own half"));
@@ -2198,7 +2198,11 @@ mod tests {
         let mut bound = ledger.clone();
         bound[3] = crate::evidence_request_parity::sealed(json!({
             "action_type": "fyi",
-            "effect": {"status": "confirmed", "request_digest": "q", "response_digest": "r"},
+            "effect": {
+                "status": "confirmed",
+                "request_digest": "309957a1892149c2ec8f2b55d3b742d19f821ab3d534ff8b486f70846a76397b",
+                "response_digest": "6fd96e3c9fcc6c5ef8b787eb7603c742072030a98fec58c6b2ded29c738d3578",
+            },
             "model_attestation": {"compute_attestation": {"x-mesh-poc-v1": {
                 "role": "served",
                 "client_nonce_source": "client",
