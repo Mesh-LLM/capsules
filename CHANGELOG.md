@@ -43,9 +43,10 @@
 ### Changed
 
 - **Evidence answers, the served summary and the received log come from the `evidencebook` crate
-  (0.0.9).** The plugin's own copies are deleted. evidencebook builds and signs every artifact answer over
-  the plugin's ledger index, and never opens the MMR node store the checkpointer writes. The
-  plugin keeps how a ledger line is read, which requests it answers to whom, and the witness keys.
+  (0.0.9).** The plugin's own copies are deleted. evidencebook builds and signs every artifact
+  answer over the plugin's ledger index, and never opens the MMR node store the checkpointer
+  writes. The plugin keeps how a ledger line is read, which requests it answers to whom, and the
+  witness keys.
   Every answer is byte for byte what it was, except one change for readers of
   `served_summary/1`. A witness receipt now counts toward `coverage.witnessed` and
   `coverage.witnesses` only if it verifies under the key this node configures for that witness.
