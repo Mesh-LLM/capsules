@@ -56,7 +56,7 @@ pub const REFEREE_BAR_DAYS_KEY: &str = "referee_bar_days";
 pub const ENV_RECORD_AT_COMPLETION: &str = "CAPSULES_SHARE_RECORD_AT_COMPLETION";
 
 /// Whether this process's `share_record_at_completion` is off. Unset or
-/// `counterparty` is the default, on (Steven's D-37 ruling): a node pushes its
+/// `counterparty` is the default, on (#68): a node pushes its
 /// sealed record of a completed exchange to the counterparty, and accepts the
 /// counterparty's push. `off`, and any value this plugin does not know, is off:
 /// a typo never widens what is shared.

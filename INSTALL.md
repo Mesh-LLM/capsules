@@ -68,7 +68,7 @@ Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGEL
   `MESH_LLM_CONFIG=<path>` in its environment, or the plugin reads `~/.mesh-llm/config.toml`.
 
 - **Quiet by default.** Pushing this node's record to the counterparty, delivering verdicts, and
-  asking a referee are now **off by default**; turn each on under Configuration › Plugins (see
+  asking a referee are now **off by default** (record push is on by default again since #68); turn each on under Configuration › Plugins (see
   [What it sends](#what-it-sends-and-where-it-listens)). Answering a peer that asks for a record is
   unchanged.
 - **Stop routing after N goes through the host's plugin path.** The rule now asks mesh-llm to block

@@ -3,7 +3,7 @@
 //! real plugin wire protocol by a fake host, is handed a completed exchange
 //! with a known counterparty and must not open a mesh stream, send a channel
 //! message or a bulk transfer, or ask for a peer block. With the default
-//! settings (the push is on, D-37) the same exchange opens a mesh stream to
+//! settings (the push is on, #68) the same exchange opens a mesh stream to
 //! the counterparty and nothing else: no stream to any other peer, no channel
 //! message, no bulk transfer, no peer block. The default run therefore also
 //! shows the quiet run can see a push when one happens.
