@@ -42,6 +42,18 @@
 
 ### Changed
 
+- **Evidence answers, the served summary and the received log come from the `evidencebook` crate
+  (0.0.9).** The plugin's own copies are deleted. evidencebook builds and signs every answer over
+  the plugin's ledger index, and never opens the MMR node store the checkpointer writes. The
+  plugin keeps how a ledger line is read, which requests it answers to whom, and the witness keys.
+  Every answer is byte for byte what it was, except one change for readers of
+  `served_summary/1`. A witness receipt now counts toward `coverage.witnessed` and
+  `coverage.witnesses` only if it verifies under the key this node configures for that witness.
+  Each receipt is also listed in `coverage.witness_receipts` with `PASS`, `NOT_CHECKED` or
+  `FAIL`, and the overall result is in `coverage.witness_check`. A receipt the node cannot check,
+  such as one with no configured key, now reads `NOT_CHECKED` instead of counting as witnessed.
+  action-state-group/evidencebook#35, Mesh-LLM/capsules-plugin#84, #87, #89, #90, #91, #92,
+  #93.
 - **`share_record_at_completion` is on by default (`counterparty`), reversing the 0.1.3 default.**
   Every node now pushes its sealed record of a completed exchange to the counterparty and accepts
   the counterparty's push, with no setting; `off` still does neither. The record goes only to the
