@@ -1,46 +1,45 @@
 //! The Lightning settlement adapter (`adapters/lightning-v0.md`): checks the
-//! settlement objects this node holds for a paid exchange and derives each
-//! settled payment's value band. Read-only: it seals nothing and contacts
-//! nobody.
+//! settlement objects this node holds for a paid exchange, evaluates the
+//! declared predicate `settled`, and derives each exchange's value band.
+//! Read-only: it seals nothing and contacts nobody.
 //!
 //! **The settlement object.** Today it is the host's `payment.lifecycle.v1`
 //! event, which this node seals verbatim as a settlement record
 //! ([`crate::settlement_channel`], `seal_settlement_record`). The adapter
-//! reads those records through one reader per source ([`Observation::from_lifecycle_record`])
-//! into a rail-neutral [`Observation`], so a host whose settlement objects
-//! arrive on another channel needs a new reader, not a new adapter.
+//! reads those records through one reader per source
+//! ([`Observation::from_lifecycle_record`]) into a rail-neutral
+//! [`Observation`], so a host whose settlement objects arrive on another
+//! channel needs a new reader, not a new adapter.
 //!
-//! **What each property means** (the declaration's item (e)):
-//! - `object_held`: the record's `event_ref` recomputes over the event the
-//!   host emitted, rebuilt from the record. `INCONCLUSIVE` when no host shape
-//!   this plugin knows recomputes (a host may add fields the record does not
-//!   keep), never `FAIL`.
-//! - `invoice_join`: the settlement's `payment_hash` is the hash of an
-//!   invoice the provider issued for the same exchange and segment.
-//! - `amount`: the settled amount equals that invoice's amount.
-//! - `finality`: the wallet reported the payment terminal (`wallet_reported`,
-//!   `settlement: "terminal"`). That is the wallet's statement; the host
-//!   passes no proof of it.
-//! - `preimage`: the native Lightning check, `sha256(preimage) ==
-//!   payment_hash`. Always `NOT_CHECKED` today: the host's event never
-//!   carries the preimage.
-//! - `payee_credit`: provider side only, what the receiving wallet credited
-//!   plus its fee equals the amount.
+//! **Results** use the five statuses of the interop profile (§7.1), each
+//! reported as a `native_check` with the check's name in `detail.check`, as
+//! the x402 declaration reports its checks. `NOT_PRESENT` means the input is
+//! absent; `NOT_CHECKED` means it is present and the check was not run. Every
+//! result names its method; a `finality` PASS names `wallet_reported`, the
+//! wallet's own statement, never a proof.
 //!
-//! An invoice with no terminal settlement is reported, never read as
-//! "unpaid": the host emits nothing for a payment whose outcome it does not
-//! know.
+//! **Joining.** A settlement joins an invoice of the same side and segment
+//! by `payment_hash`. A settlement with no hash joins nothing (`NOT_PRESENT`);
+//! for its amount it is compared with its segment's invoice only when that
+//! segment has exactly one. Payer and provider records are never joined.
 //!
-//! **Band** (`(currency, decade)`): derived from the settled amount with no
-//! conversion. The decade is that of the amount in [`BAND_CURRENCY`], so
-//! 250 sats is `sat:e+2` and 1 msat is `sat:e-3`.
+//! **Band** (`(currency, decade)`): per exchange and side, from the sum of
+//! that side's distinct terminal settlements (deposit and final together,
+//! never per payment), with no conversion. The currency is part of the band:
+//! 250 sats is `sat:e+2`, and a `sat` band is never compared with another
+//! currency's.
+//!
+//! **Counts.** The disclosed count is this node's distinct terminal
+//! settlements, by `payment_hash`. Lightning has no public ledger to check it
+//! against, so `public_ledger_count` is always `NOT_CHECKED`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use crate::producer::capsule::{SETTLEMENT_BLOCK_POINTER, SETTLEMENT_CHANNEL};
 use crate::producer::jcs;
 
 /// The MCP operation name.
@@ -49,47 +48,56 @@ pub const SETTLEMENT_CHECK_OPERATION: &str = "settlement_check";
 /// The adapter declaration these results are produced under.
 pub const LIGHTNING_ADAPTER: &str = "lightning-v0";
 
-/// The band's currency label. The decade is of the amount in this unit
-/// (1 sat = 1000 msat).
+/// The band's currency: the decade is of the amount in this unit
+/// (1 sat = 1000 msat = 1e-8 BTC).
 pub const BAND_CURRENCY: &str = "sat";
 
-/// Where the plugin records the observed event.
-const SETTLEMENT_BLOCK: &str = "/model_attestation/compute_attestation/x-mesh-settlement-v1";
+/// The finality method: the wallet's report, which the declaration names.
+pub const FINALITY_METHOD: &str = "wallet_reported";
 
-/// A per-property result (profile §7.1 vocabulary). Never a score.
+/// A property status (interop profile §7.1). Never a score.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Outcome {
+pub enum Status {
     Pass,
     Fail,
-    Inconclusive,
+    NotPresent,
     NotChecked,
+    Inconclusive,
 }
 
-impl Outcome {
+impl Status {
     pub fn wire(self) -> &'static str {
         match self {
-            Outcome::Pass => "PASS",
-            Outcome::Fail => "FAIL",
-            Outcome::Inconclusive => "INCONCLUSIVE",
-            Outcome::NotChecked => "NOT_CHECKED",
+            Status::Pass => "PASS",
+            Status::Fail => "FAIL",
+            Status::NotPresent => "NOT_PRESENT",
+            Status::NotChecked => "NOT_CHECKED",
+            Status::Inconclusive => "INCONCLUSIVE",
         }
     }
 }
 
-/// One property's result and the method (or reason) behind it.
+/// One check's status and the method (or reason) behind it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Property {
-    pub outcome: Outcome,
+pub struct Check {
+    pub status: Status,
     pub method: &'static str,
 }
 
-fn prop(outcome: Outcome, method: &'static str) -> Property {
-    Property { outcome, method }
+fn check(status: Status, method: &'static str) -> Check {
+    Check { status, method }
 }
 
-impl Property {
-    fn to_value(&self) -> Value {
-        json!({"result": self.outcome.wire(), "method": self.method})
+impl Check {
+    /// A `native_check` report (interop profile §7.2), the shape the x402
+    /// declaration (§7) uses.
+    fn report(&self, name: &str) -> Value {
+        json!({
+            "property": "native_check",
+            "status": self.status.wire(),
+            "method": self.method,
+            "detail": {"check": name, "object": SETTLEMENT_CHANNEL},
+        })
     }
 }
 
@@ -130,7 +138,7 @@ pub struct Observation {
     pub fee_msat: Option<u64>,
     /// The rail reported this payment terminal.
     pub terminal: bool,
-    pub held: Property,
+    pub held: Check,
 }
 
 impl Observation {
@@ -138,7 +146,7 @@ impl Observation {
     /// `None` for a record that is not a settlement record or lacks the
     /// fields every such record carries.
     pub fn from_lifecycle_record(record: &Value) -> Option<Self> {
-        let block = record.pointer(SETTLEMENT_BLOCK)?.as_object()?;
+        let block = record.pointer(SETTLEMENT_BLOCK_POINTER)?.as_object()?;
         let s = |k: &str| block.get(k).and_then(Value::as_str);
         let u = |k: &str| block.get(k).and_then(Value::as_u64);
         let exchange_id = s("exchange_id").filter(|x| !x.is_empty())?.to_string();
@@ -147,8 +155,7 @@ impl Observation {
             "provider" => Side::Provider,
             _ => return None,
         };
-        let phase = s("phase")?;
-        let kind = match phase {
+        let kind = match s("phase")? {
             "input_invoice_issued" | "output_invoice_issued" => Kind::Invoice,
             "input_settlement_observed" | "output_settlement_observed" => Kind::Settlement,
             _ => Kind::Other,
@@ -158,13 +165,21 @@ impl Observation {
             side,
             kind,
             segment: u("segment").and_then(|v| u32::try_from(v).ok()),
-            payment_hash: s("payment_hash").map(str::to_string),
+            payment_hash: s("payment_hash")
+                .filter(|h| !h.is_empty())
+                .map(str::to_string),
             amount_msat: u("amount_msat")?,
             credited_msat: u("credited_msat"),
             fee_msat: u("fee_msat"),
             terminal: s("source") == Some("wallet_reported") && s("settlement") == Some("terminal"),
             held: lifecycle_event_ref(block),
         })
+    }
+
+    /// The key a settlement is counted under: its payment hash, or, with
+    /// none, the record itself (each record is one event, sealed once).
+    fn settlement_key(&self) -> (Side, Option<&str>) {
+        (self.side, self.payment_hash.as_deref())
     }
 }
 
@@ -173,9 +188,9 @@ impl Observation {
 /// `observed_by`; the host serializes `null`s and, since `role` and `tokens`
 /// were added, both members. A host from before then sent neither, so both
 /// shapes are tried.
-fn lifecycle_event_ref(block: &Map<String, Value>) -> Property {
+fn lifecycle_event_ref(block: &Map<String, Value>) -> Check {
     let Some(claimed) = block.get("event_ref").and_then(Value::as_str) else {
-        return prop(Outcome::Fail, "the record carries no event_ref");
+        return check(Status::NotPresent, "the record carries no event_ref");
     };
     let mut base = Map::new();
     for key in [
@@ -206,11 +221,11 @@ fn lifecycle_event_ref(block: &Map<String, Value>) -> Property {
     );
     for shape in [current, base] {
         if jcs::json_digest(&Value::Object(shape)).ok().as_deref() == Some(claimed) {
-            return prop(Outcome::Pass, "event_ref recomputed over the host's event");
+            return check(Status::Pass, "event_ref recomputed over the host's event");
         }
     }
-    prop(
-        Outcome::Inconclusive,
+    check(
+        Status::Inconclusive,
         "event_ref does not recompute over any host event shape this plugin knows",
     )
 }
@@ -221,174 +236,270 @@ pub fn band(amount_msat: u64) -> Option<String> {
     if amount_msat == 0 {
         return None;
     }
-    let digits = amount_msat.ilog10() as i64;
-    let decade = digits - 3;
+    let decade = amount_msat.ilog10() as i64 - 3;
     let sign = if decade > 0 { "+" } else { "" };
     Some(format!("{BAND_CURRENCY}:e{sign}{decade}"))
 }
 
-/// One terminal settlement's per-property results.
-fn check_settlement(settlement: &Observation, invoices: &[&Observation]) -> Value {
-    let invoice = invoices
+/// The invoice a settlement is compared with: the one of the same side and
+/// segment under its hash; with no hash, the segment's only invoice.
+fn invoice_for<'a>(
+    settlement: &Observation,
+    invoices: &[&'a Observation],
+) -> (Check, Option<&'a Observation>) {
+    let on_segment: Vec<&Observation> = invoices
         .iter()
-        .find(|i| i.side == settlement.side && i.segment == settlement.segment);
-    let invoice_join = match (&settlement.payment_hash, invoice) {
-        (None, _) => prop(
-            Outcome::NotChecked,
-            "the wallet reported no payment_hash for this settlement",
+        .copied()
+        .filter(|i| i.side == settlement.side && i.segment == settlement.segment)
+        .collect();
+    match &settlement.payment_hash {
+        None => (
+            check(
+                Status::NotPresent,
+                "the wallet reported no payment_hash for this settlement",
+            ),
+            match on_segment.as_slice() {
+                [only] => Some(*only),
+                _ => None,
+            },
         ),
-        (Some(_), None) => prop(
-            Outcome::Inconclusive,
-            "no invoice for this segment is held on this side",
-        ),
-        (Some(hash), Some(i)) if i.payment_hash.as_ref() == Some(hash) => prop(
-            Outcome::Pass,
-            "payment_hash equals the invoice's for the same exchange and segment",
-        ),
-        (Some(_), Some(_)) => prop(
-            Outcome::Fail,
-            "payment_hash differs from the invoice's for the same exchange and segment",
-        ),
-    };
+        Some(hash) => match on_segment
+            .iter()
+            .find(|i| i.payment_hash.as_ref() == Some(hash))
+        {
+            Some(invoice) => (
+                check(
+                    Status::Pass,
+                    "payment_hash equals an invoice's for the same exchange, side and segment",
+                ),
+                Some(*invoice),
+            ),
+            None if on_segment.is_empty() => (
+                check(
+                    Status::NotPresent,
+                    "no invoice for this segment is held on this side",
+                ),
+                None,
+            ),
+            None => (
+                check(
+                    Status::Fail,
+                    "payment_hash is not the hash of any invoice for the same exchange, side and segment",
+                ),
+                None,
+            ),
+        },
+    }
+}
+
+/// One terminal settlement's checks, in declaration order.
+fn settlement_checks(
+    settlement: &Observation,
+    invoices: &[&Observation],
+) -> Vec<(&'static str, Check)> {
+    let (invoice_join, invoice) = invoice_for(settlement, invoices);
     let amount = match invoice {
-        None => prop(
-            Outcome::Inconclusive,
-            "no invoice to compare the amount with",
-        ),
-        Some(i) if i.amount_msat == 0 => prop(Outcome::NotChecked, "the invoice names no amount"),
+        None => check(Status::NotPresent, "no invoice to compare the amount with"),
+        Some(i) if i.amount_msat == 0 => check(Status::NotPresent, "the invoice names no amount"),
         Some(i) if i.amount_msat == settlement.amount_msat => {
-            prop(Outcome::Pass, "settled amount equals the invoice amount")
+            check(Status::Pass, "settled amount equals the invoice amount")
         }
-        Some(_) => prop(
-            Outcome::Fail,
+        Some(_) => check(
+            Status::Fail,
             "settled amount differs from the invoice amount",
         ),
     };
     let finality = if settlement.terminal {
-        prop(
-            Outcome::Pass,
-            "wallet_report: the wallet reported the payment terminal",
-        )
+        check(Status::Pass, FINALITY_METHOD)
     } else {
-        prop(Outcome::Fail, "the settlement is not reported terminal")
+        check(Status::Fail, "the settlement is not reported terminal")
     };
     let payee_credit = match (
         settlement.side,
         settlement.credited_msat,
         settlement.fee_msat,
     ) {
-        (Side::Payer, ..) => prop(
-            Outcome::NotChecked,
-            "the payer's wallet does not see the credit",
+        (Side::Payer, ..) => check(
+            Status::NotChecked,
+            "the payer's wallet does not see what the payee credited",
         ),
         (Side::Provider, Some(credited), Some(fee)) => {
             if credited.checked_add(fee) == Some(settlement.amount_msat) {
-                prop(
-                    Outcome::Pass,
+                check(
+                    Status::Pass,
                     "credited_msat plus fee_msat equals the amount",
                 )
             } else {
-                prop(
-                    Outcome::Fail,
+                check(
+                    Status::Fail,
                     "credited_msat plus fee_msat differs from the amount",
                 )
             }
         }
-        (Side::Provider, ..) => prop(
-            Outcome::NotChecked,
+        (Side::Provider, ..) => check(
+            Status::NotPresent,
             "the receiving wallet did not report what it credited and deducted",
         ),
     };
-    json!({
-        "side": settlement.side.wire(),
-        "segment": settlement.segment,
-        "payment_hash": settlement.payment_hash,
-        "amount_msat": settlement.amount_msat,
-        "band": band(settlement.amount_msat),
-        "properties": {
-            "object_held": settlement.held.to_value(),
-            "invoice_join": invoice_join.to_value(),
-            "amount": amount.to_value(),
-            "finality": finality.to_value(),
-            "preimage": prop(Outcome::NotChecked, "the settlement object carries no preimage").to_value(),
-            "payee_credit": payee_credit.to_value(),
-        },
-    })
+    vec![
+        ("object_held", settlement.held.clone()),
+        ("invoice_join", invoice_join),
+        ("amount", amount),
+        ("finality", finality),
+        (
+            "preimage",
+            check(
+                Status::NotPresent,
+                "the settlement object carries no preimage",
+            ),
+        ),
+        ("payee_credit", payee_credit),
+    ]
 }
 
-/// The adapter's result for one exchange's observations.
-///
-/// `result` is `PASS` when at least one settlement is held and every
-/// property of every settlement is `PASS` or `NOT_CHECKED`; `FAIL` when any
-/// property is `FAIL` (an invoice or other record whose `event_ref` fails
-/// counts); otherwise `INCONCLUSIVE`, which includes an exchange whose
-/// invoices have no terminal settlement held.
-pub fn check_exchange(exchange_id: &str, observations: &[&Observation]) -> Value {
+/// One side's book of one exchange: every check, the `settled` predicate
+/// and the band.
+fn side_book(side: Side, observations: &[&Observation]) -> Value {
     let invoices: Vec<&Observation> = observations
         .iter()
         .copied()
         .filter(|o| o.kind == Kind::Invoice)
         .collect();
-    let settlements: Vec<Value> = observations
+    let settled_objects: Vec<&Observation> = observations
         .iter()
+        .copied()
         .filter(|o| o.kind == Kind::Settlement)
-        .map(|s| check_settlement(s, &invoices))
         .collect();
+    let rows: Vec<Vec<(&'static str, Check)>> = settled_objects
+        .iter()
+        .map(|s| settlement_checks(s, &invoices))
+        .collect();
+    let settlements: Vec<Value> = settled_objects
+        .iter()
+        .zip(&rows)
+        .map(|(s, checks)| {
+            json!({
+                "segment": s.segment,
+                "payment_hash": s.payment_hash,
+                "amount_msat": s.amount_msat,
+                "checks": checks.iter().map(|(name, c)| c.report(name)).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    // An invoice is answered only by a settlement joined under its hash.
     let unsettled: Vec<Value> = invoices
         .iter()
         .filter(|i| {
-            !observations.iter().any(|o| {
-                o.kind == Kind::Settlement
-                    && o.side == i.side
-                    && o.segment == i.segment
+            !settled_objects.iter().any(|s| {
+                s.segment == i.segment
+                    && s.payment_hash.is_some()
+                    && s.payment_hash == i.payment_hash
             })
         })
-        .map(|i| json!({"side": i.side.wire(), "segment": i.segment, "payment_hash": i.payment_hash}))
+        .map(|i| json!({"segment": i.segment, "payment_hash": i.payment_hash}))
         .collect();
-    let outcomes: Vec<&str> = settlements
+    let invoice_records: Vec<Value> = invoices
         .iter()
-        .flat_map(|s| {
-            s["properties"]
-                .as_object()
-                .into_iter()
-                .flat_map(|p| p.values().filter_map(|v| v["result"].as_str()))
+        .map(|i| {
+            json!({
+                "segment": i.segment,
+                "payment_hash": i.payment_hash,
+                "amount_msat": i.amount_msat,
+                "checks": [i.held.report("object_held")],
+            })
         })
-        .chain(
-            observations
-                .iter()
-                .filter(|o| o.kind != Kind::Settlement)
-                .map(|o| o.held.outcome.wire()),
-        )
         .collect();
-    let result = if outcomes.contains(&Outcome::Fail.wire()) {
-        Outcome::Fail
-    } else if settlements.is_empty()
-        || !unsettled.is_empty()
-        || outcomes.contains(&Outcome::Inconclusive.wire())
-    {
-        Outcome::Inconclusive
-    } else {
-        Outcome::Pass
-    };
+    // Distinct settlements (by hash; a hashless one counts once per record)
+    // summed for the band: a job split into several payments is one band.
+    let mut seen: BTreeSet<Option<&str>> = BTreeSet::new();
+    let total: u64 = settled_objects
+        .iter()
+        .filter(|s| {
+            s.terminal && (s.payment_hash.is_none() || seen.insert(s.payment_hash.as_deref()))
+        })
+        .fold(0u64, |sum, s| sum.saturating_add(s.amount_msat));
+    let settled = settled_predicate(&rows, &invoices, unsettled.is_empty());
     json!({
-        "exchange_id": exchange_id,
-        "adapter": LIGHTNING_ADAPTER,
-        "result": result.wire(),
+        "side": side.wire(),
+        "settled": settled.report_predicate(),
+        "band": band(total),
         "settlements": settlements,
+        "invoices": invoice_records,
         "invoices_without_settlement": unsettled,
     })
 }
 
+/// The declared predicate `settled` (declaration item (d)): every invoice
+/// this side holds is answered by a terminal settlement joined under its
+/// hash, every record recomputes, and no check fails. A missing preimage and
+/// a payer's unseen credit are expected absences; so is an amount when the
+/// joined invoice names none (with the join PASS, an invoice is held, so an
+/// amount `NOT_PRESENT` can only mean that).
+fn settled_predicate(
+    rows: &[Vec<(&'static str, Check)>],
+    invoices: &[&Observation],
+    every_invoice_answered: bool,
+) -> Check {
+    const METHOD: &str = "lightning-v0 settled: every invoice held on this side has a terminal settlement joined by payment_hash";
+    let status = |row: &[(&'static str, Check)], name: &str| {
+        row.iter()
+            .find(|(n, _)| *n == name)
+            .map_or(Status::NotPresent, |(_, c)| c.status)
+    };
+    if rows.iter().flatten().any(|(_, c)| c.status == Status::Fail) {
+        return check(Status::Fail, METHOD);
+    }
+    let every_settlement_passes = rows.iter().all(|row| {
+        status(row, "object_held") == Status::Pass
+            && status(row, "invoice_join") == Status::Pass
+            && matches!(status(row, "amount"), Status::Pass | Status::NotPresent)
+            && status(row, "finality") == Status::Pass
+    });
+    let invoices_held = invoices.iter().all(|i| i.held.status == Status::Pass);
+    if !rows.is_empty() && every_settlement_passes && invoices_held && every_invoice_answered {
+        check(Status::Pass, METHOD)
+    } else {
+        check(Status::Inconclusive, METHOD)
+    }
+}
+
+impl Check {
+    fn report_predicate(&self) -> Value {
+        json!({"status": self.status.wire(), "method": self.method})
+    }
+}
+
+/// One exchange: each side's book that holds records for it.
+pub fn check_exchange(exchange_id: &str, observations: &[&Observation]) -> Value {
+    let mut sides: BTreeMap<Side, Vec<&Observation>> = BTreeMap::new();
+    for o in observations {
+        sides.entry(o.side).or_default().push(o);
+    }
+    json!({
+        "exchange_id": exchange_id,
+        "books": sides
+            .iter()
+            .map(|(side, held)| side_book(*side, held))
+            .collect::<Vec<_>>(),
+    })
+}
+
 /// The whole report over the settlement records a book holds, in ledger
-/// order. `settlement_records` counts every settlement record the book
-/// holds, read or not: the denominator for any count of settled exchanges.
+/// order.
+///
+/// - `disclosed_count`: this node's distinct terminal settlements, by
+///   payment hash per side (a hashless one counts once per record).
+/// - `public_ledger_count`: always `NOT_CHECKED`; Lightning has no public
+///   ledger, so the node's count is never checked against itself.
+/// - `settlement_records`: every settlement record the book holds, and
+///   `settlement_records_unread` those the reader could not read.
 pub fn report(records: impl IntoIterator<Item = Value>, exchange_id: Option<&str>) -> Value {
     let mut settlement_records = 0u64;
     let mut unread = 0u64;
     let mut by_exchange: BTreeMap<String, Vec<Observation>> = BTreeMap::new();
     let mut order: Vec<String> = Vec::new();
     for record in records {
-        if record.pointer(SETTLEMENT_BLOCK).is_none() {
+        if record.pointer(SETTLEMENT_BLOCK_POINTER).is_none() {
             continue;
         }
         settlement_records += 1;
@@ -404,6 +515,18 @@ pub fn report(records: impl IntoIterator<Item = Value>, exchange_id: Option<&str
             .or_default()
             .push(obs);
     }
+    let mut hashed: BTreeSet<(Side, Option<&str>)> = BTreeSet::new();
+    let mut hashless = 0u64;
+    for obs in by_exchange.values().flatten() {
+        if obs.kind != Kind::Settlement || !obs.terminal {
+            continue;
+        }
+        if obs.payment_hash.is_some() {
+            hashed.insert(obs.settlement_key());
+        } else {
+            hashless += 1;
+        }
+    }
     let exchanges: Vec<Value> = order
         .iter()
         .filter(|id| exchange_id.is_none_or(|want| want == id.as_str()))
@@ -414,9 +537,14 @@ pub fn report(records: impl IntoIterator<Item = Value>, exchange_id: Option<&str
         .collect();
     json!({
         "adapter": LIGHTNING_ADAPTER,
+        "disclosed_count": {
+            "settlements": hashed.len() as u64 + hashless,
+            "settlements_without_payment_hash": hashless,
+            "method": "distinct terminal settlements in this node's book, by payment_hash",
+        },
+        "public_ledger_count": {"status": Status::NotChecked.wire(), "reason": "no_public_ledger"},
         "settlement_records": settlement_records,
         "settlement_records_unread": unread,
-        "exchanges_with_settlement_records": order.len(),
         "exchanges": exchanges,
     })
 }
@@ -429,7 +557,8 @@ pub struct SettlementCheckArgs {
     pub exchange_id: Option<String>,
 }
 
-/// `settlement_check`: [`report`] over this node's book.
+/// `settlement_check`: [`report`] over this node's book. Only settlement
+/// records are kept in memory.
 pub async fn handle(
     args: SettlementCheckArgs,
     capsules: std::sync::Arc<crate::capsule_emit::CapsuleState>,
@@ -438,8 +567,10 @@ pub async fn handle(
         let mut records = Vec::new();
         for id in capsules.capsule_ids_in_order() {
             match capsules.lookup(&id) {
-                Ok(Some(entry)) => records.push(entry.capsule),
-                Ok(None) => {}
+                Ok(Some(entry)) if entry.capsule.pointer(SETTLEMENT_BLOCK_POINTER).is_some() => {
+                    records.push(entry.capsule)
+                }
+                Ok(_) => {}
                 Err(e) => return Err(format!("the ledger could not be read: {e}")),
             }
         }

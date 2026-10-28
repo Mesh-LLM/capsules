@@ -72,7 +72,7 @@ fn invoice(role: &str, segment: u32, h: &str, amount: u64) -> Value {
     seal(host_event(role, phase, Some(segment), Some(h), amount))
 }
 
-fn settled(role: &str, segment: u32, h: Option<&str>, amount: u64) -> Value {
+fn paid(role: &str, segment: u32, h: Option<&str>, amount: u64) -> Value {
     let phase = if segment == 0 {
         "input_settlement_observed"
     } else {
@@ -87,35 +87,62 @@ fn one(records: Vec<Value>) -> Value {
     r["exchanges"][0].clone()
 }
 
-fn property<'a>(exchange: &'a Value, i: usize, name: &str) -> &'a str {
-    exchange["settlements"][i]["properties"][name]["result"]
-        .as_str()
-        .unwrap()
+/// The one side's book an exchange holds.
+fn book(records: Vec<Value>) -> Value {
+    let ex = one(records);
+    let books = ex["books"].as_array().unwrap();
+    assert_eq!(books.len(), 1, "{ex:#}");
+    books[0].clone()
+}
+
+fn settled(book: &Value) -> &str {
+    book["settled"]["status"].as_str().unwrap()
+}
+
+/// A settlement's check by name, as a `native_check` report.
+fn chk<'a>(book: &'a Value, i: usize, name: &str) -> &'a str {
+    let checks = book["settlements"][i]["checks"].as_array().unwrap();
+    let c = checks
+        .iter()
+        .find(|c| c["detail"]["check"] == name)
+        .unwrap_or_else(|| panic!("no {name} check: {book:#}"));
+    assert_eq!(c["property"], "native_check");
+    assert_eq!(c["detail"]["object"], "payment.lifecycle.v1");
+    assert!(c["method"].as_str().is_some_and(|m| !m.is_empty()));
+    c["status"].as_str().unwrap()
 }
 
 #[test]
-fn a_payer_deposit_and_final_settle_and_pass() {
-    let ex = one(vec![
+fn a_payer_deposit_and_final_settle() {
+    let b = book(vec![
         seal(host_event("payer", "terms_accepted", None, None, 5000)),
         invoice("payer", 0, &hash("aa"), 1000),
-        settled("payer", 0, Some(&hash("aa")), 1000),
+        paid("payer", 0, Some(&hash("aa")), 1000),
         invoice("payer", 1, &hash("bb"), 250_000),
-        settled("payer", 1, Some(&hash("bb")), 250_000),
+        paid("payer", 1, Some(&hash("bb")), 250_000),
         seal(host_event("payer", "final_accounted", None, None, 251_000)),
     ]);
-    assert_eq!(ex["result"], "PASS", "{ex:#}");
-    assert_eq!(ex["adapter"], LIGHTNING_ADAPTER);
+    assert_eq!(settled(&b), "PASS", "{b:#}");
+    assert_eq!(b["side"], "payer");
     for i in 0..2 {
-        assert_eq!(property(&ex, i, "object_held"), "PASS");
-        assert_eq!(property(&ex, i, "invoice_join"), "PASS");
-        assert_eq!(property(&ex, i, "amount"), "PASS");
-        assert_eq!(property(&ex, i, "finality"), "PASS");
-        assert_eq!(property(&ex, i, "preimage"), "NOT_CHECKED");
-        assert_eq!(property(&ex, i, "payee_credit"), "NOT_CHECKED");
+        assert_eq!(chk(&b, i, "object_held"), "PASS");
+        assert_eq!(chk(&b, i, "invoice_join"), "PASS");
+        assert_eq!(chk(&b, i, "amount"), "PASS");
+        assert_eq!(chk(&b, i, "finality"), "PASS");
+        assert_eq!(chk(&b, i, "preimage"), "NOT_PRESENT");
+        assert_eq!(chk(&b, i, "payee_credit"), "NOT_CHECKED");
     }
-    assert_eq!(ex["settlements"][0]["band"], "sat:e0");
-    assert_eq!(ex["settlements"][1]["band"], "sat:e+2");
-    assert_eq!(ex["invoices_without_settlement"], json!([]));
+    let finality = b["settlements"][0]["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["detail"]["check"] == "finality")
+        .unwrap();
+    assert_eq!(finality["method"], FINALITY_METHOD);
+    // One band for the exchange: deposit and final together.
+    assert_eq!(b["band"], "sat:e+2");
+    assert_eq!(b["invoices_without_settlement"], json!([]));
+    assert_eq!(b["invoices"][0]["checks"][0]["status"], "PASS");
 }
 
 #[test]
@@ -129,23 +156,20 @@ fn a_provider_settlement_checks_what_the_wallet_credited() {
     );
     good["credited_msat"] = json!(995);
     good["fee_msat"] = json!(5);
-    let ex = one(vec![
+    let b = book(vec![
         invoice("provider", 0, &hash("aa"), 1000),
         seal(good.clone()),
     ]);
-    assert_eq!(ex["result"], "PASS", "{ex:#}");
-    assert_eq!(property(&ex, 0, "payee_credit"), "PASS");
-    assert_eq!(ex["settlements"][0]["side"], "provider");
+    assert_eq!(settled(&b), "PASS", "{b:#}");
+    assert_eq!(chk(&b, 0, "payee_credit"), "PASS");
+    assert_eq!(b["side"], "provider");
 
     good["credited_msat"] = json!(990);
-    let ex = one(vec![
-        invoice("provider", 0, &hash("aa"), 1000),
-        seal(good.clone()),
-    ]);
-    assert_eq!(property(&ex, 0, "payee_credit"), "FAIL");
-    assert_eq!(ex["result"], "FAIL");
+    let b = book(vec![invoice("provider", 0, &hash("aa"), 1000), seal(good)]);
+    assert_eq!(chk(&b, 0, "payee_credit"), "FAIL");
+    assert_eq!(settled(&b), "FAIL");
 
-    // No wallet numbers: not checked, and the exchange still passes.
+    // No wallet numbers: absent, and the exchange still settles.
     let bare = host_event(
         "provider",
         "input_settlement_observed",
@@ -153,106 +177,162 @@ fn a_provider_settlement_checks_what_the_wallet_credited() {
         Some(&hash("aa")),
         1000,
     );
-    let ex = one(vec![invoice("provider", 0, &hash("aa"), 1000), seal(bare)]);
-    assert_eq!(property(&ex, 0, "payee_credit"), "NOT_CHECKED");
-    assert_eq!(ex["result"], "PASS");
+    let b = book(vec![invoice("provider", 0, &hash("aa"), 1000), seal(bare)]);
+    assert_eq!(chk(&b, 0, "payee_credit"), "NOT_PRESENT");
+    assert_eq!(settled(&b), "PASS");
 }
 
 #[test]
 fn a_settlement_under_another_hash_fails_the_join() {
-    let ex = one(vec![
+    let b = book(vec![
         invoice("payer", 0, &hash("aa"), 1000),
-        settled("payer", 0, Some(&hash("cc")), 1000),
+        paid("payer", 0, Some(&hash("cc")), 1000),
     ]);
-    assert_eq!(property(&ex, 0, "invoice_join"), "FAIL");
-    assert_eq!(ex["result"], "FAIL");
+    assert_eq!(chk(&b, 0, "invoice_join"), "FAIL");
+    assert_eq!(settled(&b), "FAIL");
 }
 
 #[test]
 fn a_settled_amount_off_the_invoice_fails() {
-    let ex = one(vec![
+    let b = book(vec![
         invoice("payer", 0, &hash("aa"), 1000),
-        settled("payer", 0, Some(&hash("aa")), 999),
+        paid("payer", 0, Some(&hash("aa")), 999),
     ]);
-    assert_eq!(property(&ex, 0, "amount"), "FAIL");
-    assert_eq!(ex["result"], "FAIL");
+    assert_eq!(chk(&b, 0, "amount"), "FAIL");
+    assert_eq!(settled(&b), "FAIL");
+}
+
+/// No hash, no join: the settlement is compared by amount with its
+/// segment's only invoice, but the exchange never reads settled.
+#[test]
+fn a_settlement_with_no_hash_joins_nothing() {
+    let b = book(vec![
+        invoice("payer", 0, &hash("aa"), 1000),
+        paid("payer", 0, None, 1000),
+    ]);
+    assert_eq!(chk(&b, 0, "invoice_join"), "NOT_PRESENT");
+    assert_eq!(chk(&b, 0, "amount"), "PASS");
+    assert_eq!(settled(&b), "INCONCLUSIVE");
+    assert_eq!(b["invoices_without_settlement"][0]["segment"], 0);
+}
+
+/// A retry under the same exchange id: two invoices on one segment.
+#[test]
+fn a_retried_segment_joins_by_hash() {
+    // Only the second invoice was paid: the first stays unanswered.
+    let b = book(vec![
+        invoice("payer", 0, &hash("aa"), 1000),
+        invoice("payer", 0, &hash("bb"), 1000),
+        paid("payer", 0, Some(&hash("bb")), 1000),
+    ]);
+    assert_eq!(chk(&b, 0, "invoice_join"), "PASS", "{b:#}");
+    assert_eq!(chk(&b, 0, "amount"), "PASS");
+    assert_eq!(settled(&b), "INCONCLUSIVE");
+    assert_eq!(
+        b["invoices_without_settlement"],
+        json!([{"segment": 0, "payment_hash": hash("aa")}])
+    );
+
+    // Both paid: both join, and the exchange settles.
+    let b = book(vec![
+        invoice("payer", 0, &hash("aa"), 1000),
+        invoice("payer", 0, &hash("bb"), 2000),
+        paid("payer", 0, Some(&hash("aa")), 1000),
+        paid("payer", 0, Some(&hash("bb")), 2000),
+    ]);
+    assert_eq!(chk(&b, 0, "amount"), "PASS");
+    assert_eq!(chk(&b, 1, "amount"), "PASS");
+    assert_eq!(settled(&b), "PASS");
+    assert_eq!(b["band"], "sat:e0");
+
+    // A hashless settlement cannot say which of two invoices it paid.
+    let b = book(vec![
+        invoice("payer", 0, &hash("aa"), 1000),
+        invoice("payer", 0, &hash("bb"), 1000),
+        paid("payer", 0, None, 1000),
+    ]);
+    assert_eq!(chk(&b, 0, "amount"), "NOT_PRESENT");
+    assert_eq!(settled(&b), "INCONCLUSIVE");
+    assert_eq!(
+        b["invoices_without_settlement"].as_array().unwrap().len(),
+        2
+    );
 }
 
 #[test]
-fn a_settlement_with_no_hash_is_not_checked_for_the_join() {
-    let ex = one(vec![
+fn an_invoice_with_no_settlement_never_reads_unpaid() {
+    let b = book(vec![
         invoice("payer", 0, &hash("aa"), 1000),
-        settled("payer", 0, None, 1000),
-    ]);
-    assert_eq!(property(&ex, 0, "invoice_join"), "NOT_CHECKED");
-    assert_eq!(ex["result"], "PASS");
-}
-
-#[test]
-fn an_invoice_with_no_settlement_is_inconclusive_never_unpaid() {
-    let ex = one(vec![
-        invoice("payer", 0, &hash("aa"), 1000),
-        settled("payer", 0, Some(&hash("aa")), 1000),
+        paid("payer", 0, Some(&hash("aa")), 1000),
         invoice("payer", 1, &hash("bb"), 2000),
     ]);
-    assert_eq!(ex["result"], "INCONCLUSIVE");
-    assert_eq!(ex["invoices_without_settlement"][0]["segment"], 1);
+    assert_eq!(settled(&b), "INCONCLUSIVE");
+    assert_eq!(b["invoices_without_settlement"][0]["segment"], 1);
 
-    let ex = one(vec![invoice("payer", 0, &hash("aa"), 1000)]);
-    assert_eq!(ex["result"], "INCONCLUSIVE");
-    assert_eq!(ex["settlements"], json!([]));
+    let b = book(vec![invoice("payer", 0, &hash("aa"), 1000)]);
+    assert_eq!(settled(&b), "INCONCLUSIVE");
+    assert_eq!(b["settlements"], json!([]));
+    assert_eq!(b["band"], Value::Null);
 }
 
 #[test]
-fn a_settlement_with_no_invoice_held_is_inconclusive() {
-    let ex = one(vec![settled("payer", 0, Some(&hash("aa")), 1000)]);
-    assert_eq!(property(&ex, 0, "invoice_join"), "INCONCLUSIVE");
-    assert_eq!(property(&ex, 0, "amount"), "INCONCLUSIVE");
-    assert_eq!(ex["result"], "INCONCLUSIVE");
+fn a_settlement_with_no_invoice_held_has_nothing_to_join() {
+    let b = book(vec![paid("payer", 0, Some(&hash("aa")), 1000)]);
+    assert_eq!(chk(&b, 0, "invoice_join"), "NOT_PRESENT");
+    assert_eq!(chk(&b, 0, "amount"), "NOT_PRESENT");
+    assert_eq!(settled(&b), "INCONCLUSIVE");
 }
 
 #[test]
-fn an_amountless_invoice_leaves_the_amount_not_checked() {
-    let ex = one(vec![
+fn an_amountless_invoice_leaves_the_amount_absent() {
+    let b = book(vec![
         invoice("payer", 0, &hash("aa"), 0),
-        settled("payer", 0, Some(&hash("aa")), 1000),
+        paid("payer", 0, Some(&hash("aa")), 1000),
     ]);
-    assert_eq!(property(&ex, 0, "amount"), "NOT_CHECKED");
-    assert_eq!(ex["result"], "PASS");
+    assert_eq!(chk(&b, 0, "amount"), "NOT_PRESENT");
+    assert_eq!(settled(&b), "PASS");
 }
 
-/// An invoice the payer saw is not joined to a settlement the provider
-/// sealed: each side's book is checked on its own.
+/// Each side's records form their own book; an invoice the provider saw
+/// never answers for the payer's settlement.
 #[test]
 fn sides_are_never_joined() {
     let ex = one(vec![
         invoice("provider", 0, &hash("aa"), 1000),
-        settled("payer", 0, Some(&hash("aa")), 1000),
+        paid("payer", 0, Some(&hash("aa")), 1000),
     ]);
-    assert_eq!(property(&ex, 0, "invoice_join"), "INCONCLUSIVE");
+    let books = ex["books"].as_array().unwrap();
+    assert_eq!(books.len(), 2);
+    assert_eq!(books[0]["side"], "payer");
+    assert_eq!(chk(&books[0], 0, "invoice_join"), "NOT_PRESENT");
+    assert_eq!(books[1]["side"], "provider");
+    assert_eq!(books[1]["settlements"], json!([]));
 }
 
 #[test]
 fn a_record_whose_event_ref_does_not_recompute_is_inconclusive() {
-    let mut record = settled("payer", 0, Some(&hash("aa")), 1000);
+    let mut record = paid("payer", 0, Some(&hash("aa")), 1000);
     record["model_attestation"]["compute_attestation"]["x-mesh-settlement-v1"]["amount_msat"] =
         json!(1001);
     let obs = Observation::from_lifecycle_record(&record).unwrap();
-    assert_eq!(obs.held.outcome, Outcome::Inconclusive);
-    let ex = one(vec![invoice("payer", 0, &hash("aa"), 1001), record]);
-    assert_eq!(property(&ex, 0, "object_held"), "INCONCLUSIVE");
-    assert_eq!(ex["result"], "INCONCLUSIVE");
+    assert_eq!(obs.held.status, Status::Inconclusive);
+    let b = book(vec![invoice("payer", 0, &hash("aa"), 1001), record]);
+    assert_eq!(chk(&b, 0, "object_held"), "INCONCLUSIVE");
+    assert_eq!(settled(&b), "INCONCLUSIVE");
 }
 
+/// An invoice record that does not recompute is reported on the invoice and
+/// keeps the exchange from reading settled.
 #[test]
-fn a_record_with_no_event_ref_fails_object_held() {
+fn an_invoice_with_no_event_ref_is_reported_and_blocks_settled() {
     let mut record = invoice("payer", 0, &hash("aa"), 1000);
     record["model_attestation"]["compute_attestation"]["x-mesh-settlement-v1"]
         .as_object_mut()
         .unwrap()
         .remove("event_ref");
-    let ex = one(vec![record, settled("payer", 0, Some(&hash("aa")), 1000)]);
-    assert_eq!(ex["result"], "FAIL");
+    let b = book(vec![record, paid("payer", 0, Some(&hash("aa")), 1000)]);
+    assert_eq!(b["invoices"][0]["checks"][0]["status"], "NOT_PRESENT");
+    assert_eq!(settled(&b), "INCONCLUSIVE");
 }
 
 /// A host from before `role` and `tokens` emitted neither; its records
@@ -270,40 +350,74 @@ fn an_older_payer_only_host_event_recomputes() {
     obj.remove("role");
     obj.remove("tokens");
     let obs = Observation::from_lifecycle_record(&seal(event)).unwrap();
-    assert_eq!(obs.held.outcome, Outcome::Pass);
+    assert_eq!(obs.held.status, Status::Pass);
     assert_eq!(obs.side, Side::Payer);
 }
 
 #[test]
-fn the_report_counts_every_settlement_record_and_filters_by_exchange() {
+fn the_report_counts_distinct_settlements_and_never_checks_a_public_ledger() {
     let mut other = host_event(
         "payer",
-        "input_invoice_issued",
+        "input_settlement_observed",
         Some(0),
         Some(&hash("dd")),
         7,
     );
     other["exchange_id"] = json!("ex-other");
+    let mut hashless = host_event("payer", "output_settlement_observed", Some(1), None, 9);
+    hashless["exchange_id"] = json!("ex-other");
     let records = vec![
         json!({"capsule_id": "not-a-settlement"}),
         invoice("payer", 0, &hash("aa"), 1000),
-        settled("payer", 0, Some(&hash("aa")), 1000),
+        paid("payer", 0, Some(&hash("aa")), 1000),
         seal(other),
+        seal(hashless),
     ];
     let all = report(records.clone(), None);
-    assert_eq!(all["settlement_records"], 3);
+    assert_eq!(all["settlement_records"], 4);
     assert_eq!(all["settlement_records_unread"], 0);
-    assert_eq!(all["exchanges_with_settlement_records"], 2);
+    assert_eq!(all["disclosed_count"]["settlements"], 3);
+    assert_eq!(
+        all["disclosed_count"]["settlements_without_payment_hash"],
+        1
+    );
+    assert_eq!(
+        all["public_ledger_count"],
+        json!({"status": "NOT_CHECKED", "reason": "no_public_ledger"})
+    );
     assert_eq!(all["exchanges"].as_array().unwrap().len(), 2);
     assert_eq!(all["exchanges"][0]["exchange_id"], EX);
+    assert!(all["exchanges"][0].get("result").is_none());
 
     let one = report(records, Some("ex-other"));
-    assert_eq!(one["settlement_records"], 3);
+    assert_eq!(
+        one["disclosed_count"]["settlements"], 3,
+        "the count is the book's, not the filter's"
+    );
     assert_eq!(one["exchanges"].as_array().unwrap().len(), 1);
-    assert_eq!(one["exchanges"][0]["result"], "INCONCLUSIVE");
 
     let none = report(Vec::<Value>::new(), Some("missing"));
     assert_eq!(none["exchanges"], json!([]));
+    assert_eq!(none["disclosed_count"]["settlements"], 0);
+}
+
+/// The same payment observed twice (two records under one hash) is one
+/// settlement, in the count and in the band.
+#[test]
+fn one_payment_is_counted_once() {
+    let first = paid("payer", 0, Some(&hash("aa")), 1000);
+    let mut again = host_event(
+        "payer",
+        "input_settlement_observed",
+        Some(0),
+        Some(&hash("aa")),
+        1000,
+    );
+    again["fee_msat"] = json!(1);
+    let records = vec![invoice("payer", 0, &hash("aa"), 1000), first, seal(again)];
+    let r = report(records.clone(), None);
+    assert_eq!(r["disclosed_count"]["settlements"], 1);
+    assert_eq!(book(records)["band"], "sat:e0");
 }
 
 #[test]

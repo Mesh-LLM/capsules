@@ -610,21 +610,31 @@ fn the_settlement_adapter_counts_every_settlement_record() {
             .ledger_lines()
             .iter()
             .filter(|line| {
-                line.pointer("/model_attestation/compute_attestation/x-mesh-settlement-v1")
+                line.pointer(crate::producer::capsule::SETTLEMENT_BLOCK_POINTER)
                     .is_some()
             })
             .count();
         let report = crate::settlement_adapter::report(records, None);
         assert_eq!(report["settlement_records"], json!(on_disk), "{report:#}");
-        let exchanges = report["exchanges"].as_array().unwrap();
         assert_eq!(
-            report["exchanges_with_settlement_records"],
-            json!(exchanges.len())
+            report["public_ledger_count"]["status"],
+            json!("NOT_CHECKED"),
+            "Lightning has no public ledger"
         );
-        for exchange in exchanges {
+        assert!(
+            report["disclosed_count"]["settlements"].as_u64().unwrap() <= on_disk as u64,
+            "{report:#}"
+        );
+        for book in report["exchanges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|e| e["books"].as_array().unwrap())
+        {
             assert!(
-                ["PASS", "FAIL", "INCONCLUSIVE"].contains(&exchange["result"].as_str().unwrap()),
-                "{exchange:#}"
+                ["PASS", "FAIL", "INCONCLUSIVE"]
+                    .contains(&book["settled"]["status"].as_str().unwrap()),
+                "{book:#}"
             );
         }
     }

@@ -803,6 +803,12 @@ pub const SETTLEMENT_CHANNEL: &str = "payment.lifecycle.v1";
 /// this key's presence; `Ledger` keys its event_ref dedup set on it.
 pub const SETTLEMENT_EXTENSION_KEY: &str = "x-mesh-settlement-v1";
 
+/// The JSON pointer to a settlement record's observation: the one path every
+/// reader of settlement records uses, so a rename cannot leave one reading
+/// nothing. A test holds it to [`SETTLEMENT_EXTENSION_KEY`].
+pub const SETTLEMENT_BLOCK_POINTER: &str =
+    "/model_attestation/compute_attestation/x-mesh-settlement-v1";
+
 /// One observed payment lifecycle event, borrowed from the caller's parsed
 /// event. Every value is copied verbatim into the sealed record by
 /// [`seal_settlement_record`]; none is computed, summed or normalized here.
@@ -2878,6 +2884,18 @@ mod tests {
     // -------------------------------------------------------------------
     // seal_settlement_record
     // -------------------------------------------------------------------
+
+    #[test]
+    fn the_settlement_block_pointer_names_the_extension_key() {
+        assert_eq!(
+            SETTLEMENT_BLOCK_POINTER,
+            format!("/model_attestation/compute_attestation/{SETTLEMENT_EXTENSION_KEY}")
+        );
+        let key = crate::producer::keys::KeyPair::generate();
+        let record =
+            seal_settlement_record(&sample_settlement(None), None, &key.signing_key).unwrap();
+        assert!(record.pointer(SETTLEMENT_BLOCK_POINTER).is_some());
+    }
 
     fn sample_settlement<'a>(payment_hash: Option<&'a str>) -> SettlementObservation<'a> {
         SettlementObservation {

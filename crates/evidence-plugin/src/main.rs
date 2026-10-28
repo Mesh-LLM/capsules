@@ -1094,11 +1094,13 @@ fn with_evidence_operations(
         mcp::tool(settlement_adapter::SETTLEMENT_CHECK_OPERATION)
             .description(
                 "Check the Lightning settlement objects this node holds for a paid exchange, under \
-                 the lightning-v0 adapter declaration: per property (object held, invoice join, \
-                 amount, finality as the wallet reported it, preimage, payee credit) PASS, FAIL, \
-                 INCONCLUSIVE or NOT_CHECKED, and each settled payment's value band. Also counts \
-                 every settlement record the book holds. Never a score. Seals nothing and \
-                 contacts nobody.",
+                 the lightning-v0 adapter declaration: each check (object held, invoice join, \
+                 amount, finality as the wallet reported it, preimage, payee credit) as PASS, \
+                 FAIL, NOT_PRESENT, NOT_CHECKED or INCONCLUSIVE with its method, the declared \
+                 predicate settled, and each exchange's value band. Also reports the disclosed \
+                 count (distinct settlements by payment hash); the public-ledger count is \
+                 NOT_CHECKED, as Lightning has none. Never a score. Seals nothing and contacts \
+                 nobody.",
             )
             .input::<settlement_adapter::SettlementCheckArgs>()
             .handle({

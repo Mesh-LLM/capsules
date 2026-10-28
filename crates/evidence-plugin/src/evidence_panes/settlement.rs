@@ -42,7 +42,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
 
 /// Where the plugin records the observed event.
-const SETTLEMENT_BLOCK: &str = "/model_attestation/compute_attestation/x-mesh-settlement-v1";
+use crate::producer::capsule::SETTLEMENT_BLOCK_POINTER as SETTLEMENT_BLOCK;
 
 /// The provider's book of a payer's exchange is kept on the provider's node,
 /// so it is never available to this reader.
