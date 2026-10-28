@@ -7,11 +7,13 @@
 //! `envelope::parse_reply`, `Envelope::verify_for`), and so is the profile's
 //! check of a record's Checkpointed Local Log material
 //! (`cll_material::check_anchor_inclusion`). Building the artifact is the
-//! responder's business, not that crate's. evidencebook has a builder, but
-//! over its own `CllSubstrate`, which opens the durable node store this
-//! plugin's checkpointer owns: so the builder is here, over the read-only
-//! index (`evidence_log`), in evidencebook's (and the Go responder's)
-//! artifact forms:
+//! responder's business, not that crate's: evidencebook's `answer::build`
+//! builds it, over this node's read-only index (`evidence_log`, which is an
+//! evidencebook store), so it never opens the durable node store this
+//! plugin's checkpointer owns (evidencebook#35). Exchange corroboration's
+//! entries are still built here until evidencebook carries a holder's own
+//! digest derivation. The artifact forms, evidencebook's (and the Go
+//! responder's):
 //!
 //! - `record`, no derivation: the record's line in the ledger, proven by the
 //!   anchor's `cll-checkpoint`, its `cll-inclusion-proof` and, when the
@@ -61,8 +63,8 @@ use cll::checkpoint::{verify_checkpoint_cose_offline, DecodedCheckpointCose, Wit
 use cll::mmr::{leaf_count, Hash};
 use ed25519_dalek::VerifyingKey;
 use evidence_request::cll_material::{
-    self, encode_consistency_proof, encode_inclusion_proof, KeyDecision, LogKeyPolicy,
-    KIND_CHECKPOINT, KIND_CONSISTENCY, KIND_INCLUSION,
+    self, encode_inclusion_proof, KeyDecision, LogKeyPolicy, KIND_CHECKPOINT, KIND_CONSISTENCY,
+    KIND_INCLUSION,
 };
 use evidence_request::envelope::{
     self, subject_value, Anchor, AnchorFreshness, Binding, Envelope, EnvelopeParts, Reply,
@@ -74,7 +76,7 @@ use evidence_request::time::parse_utc;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::evidence_log::{ChainCheckpoint, LogView, Record};
+use crate::evidence_log::{ChainCheckpoint, LogView};
 
 pub(crate) mod cll_proofs;
 
@@ -199,163 +201,27 @@ fn served_summary(
 pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
     let index = view.index;
     let served = index.chain.get(b.at).ok_or(Reason::CoverageUnsatisfiable)?;
-    let statement = &served.statement;
-    let anchor_digest = served.anchor_digest();
-    // The checkpoints up to the serving one: a checkpoint list and a history
-    // card.
-    let listed: Vec<&ChainCheckpoint> = index.chain[..=b.at].iter().collect();
-
-    let mut head = Map::new();
-    head.insert("anchor".into(), json!(anchor_digest));
-    head.insert("evidence_stream".into(), json!(served.record.log_id));
-    head.insert("subject".into(), subject_value(&b.request.subject));
-    let mut material: Vec<(String, Vec<u8>)> = Vec::new();
-    // The checkpoints whose receipts go with the answer.
-    let mut carried: Vec<&ChainCheckpoint> = vec![served];
-
-    let artifact = match (&b.request.derivation, &b.request.subject) {
-        (Some(Derivation::Token(t)), _) if t == DERIVATION_HISTORY_CARD => {
-            let mut history = Vec::with_capacity(listed.len());
-            for (i, cp) in listed.iter().enumerate() {
-                // The chain grows strictly, so every checkpoint after the
-                // first extends the one before it by a proof.
-                let consistency = match i.checked_sub(1).map(|p| listed[p]) {
-                    Some(prev) => json!(hex::encode(consistency(
-                        view,
-                        prev.record.mmr_size,
-                        cp.record.mmr_size
-                    )?)),
-                    None => Value::Null,
-                };
-                history.push(json!({
-                    "checkpoint": hex::encode(&cp.statement),
-                    "consistency_from_previous": consistency,
-                }));
-            }
-            head.insert("derivation".into(), json!(DERIVATION_HISTORY_CARD));
-            head.insert("history".into(), Value::Array(history));
-            carried = listed.clone();
-            jcs(head)?
-        }
-        (Some(Derivation::Token(t)), Subject::FullHistory)
-            if t == SERVED_SUMMARY_DERIVATION_TOKEN =>
-        {
-            let covered =
-                leaf_count(served.record.mmr_size).map_err(|_| Reason::CoverageUnsatisfiable)?;
-            let summary = served_summary(
-                index,
-                served,
-                covered,
-                &crate::checkpoint_cadence::active_witness_keys(),
-            );
-            head.insert("derivation".into(), json!(SERVED_SUMMARY_DERIVATION_TOKEN));
-            head.insert("served_summary".into(), summary);
-            material.push((KIND_CHECKPOINT.into(), statement.clone()));
-            jcs(head)?
-        }
-        (Some(Derivation::Digest(d)), Subject::Correlation(id))
-            if d == crate::exchange_corroboration::DEFINITION_DIGEST =>
-        {
-            let entries =
-                crate::exchange_corroboration::entries(id, &served.record, b.records, view)?;
-            head.insert("derivation".into(), json!(d));
-            head.insert("entries".into(), entries);
-            material.push((KIND_CHECKPOINT.into(), statement.clone()));
-            jcs(head)?
-        }
-        (Some(_), _) => return Err(Reason::DerivationUnsupported),
-        (None, Subject::Checkpoints) => {
-            let list = listed
-                .iter()
-                .map(|cp| json!(hex::encode(&cp.statement)))
-                .collect();
-            head.insert("checkpoints".into(), Value::Array(list));
-            carried = listed.clone();
-            jcs(head)?
-        }
-        (None, Subject::Record(digest)) => {
-            let [leaf] = b.records else {
-                return Err(Reason::NoSuchSubject);
-            };
-            let record = view
-                .record_at(*leaf)
-                .filter(|r| r.digest == *digest)
-                .ok_or(Reason::NoSuchSubject)?;
-            material.push((KIND_CHECKPOINT.into(), statement.clone()));
-            material.push((
-                KIND_INCLUSION.into(),
-                inclusion(view, record.leaf_index, served.record.mmr_size)?,
-            ));
-            if served.record.prev_size > 0 {
-                material.push((
-                    KIND_CONSISTENCY.into(),
-                    consistency(view, served.record.prev_size, served.record.mmr_size)?,
-                ));
-            }
-            record.body
-        }
-        (None, _) => {
-            if b.records.is_empty() {
-                return Err(Reason::NoSuchSubject);
-            }
-            let records = b
-                .records
-                .iter()
-                .map(|&i| view.record_at(i).ok_or(Reason::NoSuchSubject))
-                .collect::<Result<Vec<Record>, _>>()?;
-            material.push((KIND_CHECKPOINT.into(), statement.clone()));
-            for r in &records {
-                material.push((
-                    KIND_INCLUSION.into(),
-                    inclusion(view, r.leaf_index, served.record.mmr_size)?,
-                ));
-            }
-            head.insert(
-                "records".into(),
-                Value::Array(
-                    records
-                        .iter()
-                        .map(|r| json!({"body": hex::encode(&r.body), "digest": r.digest, "leaf_index": r.leaf_index}))
-                        .collect(),
-                ),
-            );
-            jcs(head)?
-        }
+    let signed = if crate::exchange_corroboration::is_derivation(b.request.derivation.as_ref()) {
+        build_corroboration(b, view, served)?
+    } else {
+        build_with_book(b, view, served)?
     };
-
-    let freshness = match &b.request.coverage {
-        Coverage::MinFreshness(Freshness::Size(_)) => {
-            Some(AnchorFreshness::Size(served.record.mmr_size))
-        }
-        Coverage::MinFreshness(Freshness::Time(_)) => Some(AnchorFreshness::Time(profile_time(
-            &served.record.timestamp,
-        ))),
-        Coverage::ExpectedPin(_) => None,
-    };
-    let signed = envelope::sign(
-        b.request_bytes,
-        EnvelopeParts {
-            subject: b.request.subject.clone(),
-            derivation: b.request.derivation.clone(),
-            // Under a half pin the envelope names the pin, the requester's
-            // own half (profile §7.1 anchor_match), as evidencebook and the
-            // Go responder do; the artifact names the serving checkpoint.
-            anchor: Anchor {
-                digest: b.resolved.digest().to_string(),
-                freshness,
-            },
-            artifact,
-            verification: material,
-            issued_at: b.issued_at.to_string(),
-        },
-        b.signing_key,
-    )
-    .map_err(|e| {
-        tracing::warn!(error = %e, "an evidence answer could not be signed -- declining");
-        Reason::PolicyDeclined
-    })?;
     let mut reply: Value = serde_json::from_slice(&signed.encode(Binding::Json))
         .map_err(|_| Reason::PolicyDeclined)?;
+    // The checkpoints whose receipts go with the answer: every one listed
+    // for a checkpoint list and a history card, else the serving one.
+    let lists_checkpoints = matches!(
+        (&b.request.derivation, &b.request.subject),
+        (Some(Derivation::Token(t)), _) if t == DERIVATION_HISTORY_CARD
+    ) || matches!(
+        (&b.request.derivation, &b.request.subject),
+        (None, Subject::Checkpoints)
+    );
+    let carried: &[ChainCheckpoint] = if lists_checkpoints {
+        &index.chain[..=b.at]
+    } else {
+        std::slice::from_ref(served)
+    };
     let receipts: Vec<Value> = carried
         .iter()
         .flat_map(|cp| {
@@ -370,6 +236,125 @@ pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
         reply[WITNESS_RECEIPTS] = Value::Array(receipts);
     }
     Ok(reply)
+}
+
+/// Every answer but exchange corroboration's, built and signed by
+/// evidencebook's `answer::build` over this node's index
+/// (evidencebook#35), with material beyond the profile (P-13) as this node
+/// has always sent it, and `served_summary/1` derived here. Each crate error
+/// is the reason this node has always refused it with.
+fn build_with_book(
+    b: &Build<'_>,
+    view: &LogView<'_>,
+    served: &ChainCheckpoint,
+) -> Result<Envelope, Reason> {
+    use evidencebook::answer::{self, AnswerError, Options, Selection};
+    let summary = match (&b.request.derivation, &b.request.subject) {
+        (Some(Derivation::Token(t)), Subject::FullHistory)
+            if t == SERVED_SUMMARY_DERIVATION_TOKEN =>
+        {
+            let covered =
+                leaf_count(served.record.mmr_size).map_err(|_| Reason::CoverageUnsatisfiable)?;
+            Some(served_summary(
+                view.index,
+                served,
+                covered,
+                &crate::checkpoint_cadence::active_witness_keys(),
+            ))
+        }
+        _ => None,
+    };
+    let derive = |token: &str, _: &Subject, _: &evidencebook::substrate::StatedCheckpoint| {
+        (token == SERVED_SUMMARY_DERIVATION_TOKEN)
+            .then(|| summary.clone())
+            .flatten()
+            .map(|v| ("served_summary".to_string(), v))
+    };
+    answer::build(
+        view,
+        view,
+        b.request,
+        b.request_bytes,
+        b.resolved,
+        &Selection {
+            at: b.at,
+            records: b.records.to_vec(),
+        },
+        Options {
+            prove_beyond_profile: true,
+            derive: Some(&derive),
+            derivations: None,
+            requester: None,
+        },
+        b.signing_key,
+        b.issued_at,
+    )
+    .map_err(|e| match e {
+        AnswerError::RecordNotFound | AnswerError::NoRecords | AnswerError::RecordDigest => {
+            Reason::NoSuchSubject
+        }
+        AnswerError::AnchorNotFound | AnswerError::CitingNotAnchored => {
+            Reason::CoverageUnsatisfiable
+        }
+        AnswerError::DerivationUnsupported => Reason::DerivationUnsupported,
+        AnswerError::Sign(e) => {
+            tracing::warn!(error = %e, "an evidence answer could not be signed -- declining");
+            Reason::PolicyDeclined
+        }
+        _ => Reason::PolicyDeclined,
+    })
+}
+
+/// `exchange_corroboration/1`'s answer, its entries built here: the one
+/// derivation of this node's own that evidencebook 0.0.8's `answer::build`
+/// cannot carry (a definition digest it does not register).
+fn build_corroboration(
+    b: &Build<'_>,
+    view: &LogView<'_>,
+    served: &ChainCheckpoint,
+) -> Result<Envelope, Reason> {
+    let Subject::Correlation(id) = &b.request.subject else {
+        return Err(Reason::DerivationUnsupported);
+    };
+    let mut head = Map::new();
+    head.insert("anchor".into(), json!(served.anchor_digest()));
+    head.insert("evidence_stream".into(), json!(served.record.log_id));
+    head.insert("subject".into(), subject_value(&b.request.subject));
+    let entries = crate::exchange_corroboration::entries(id, &served.record, b.records, view)?;
+    head.insert(
+        "derivation".into(),
+        json!(crate::exchange_corroboration::DEFINITION_DIGEST),
+    );
+    head.insert("entries".into(), entries);
+    let artifact = jcs(head)?;
+    let freshness = match &b.request.coverage {
+        Coverage::MinFreshness(Freshness::Size(_)) => {
+            Some(AnchorFreshness::Size(served.record.mmr_size))
+        }
+        Coverage::MinFreshness(Freshness::Time(_)) => Some(AnchorFreshness::Time(profile_time(
+            &served.record.timestamp,
+        ))),
+        Coverage::ExpectedPin(_) => None,
+    };
+    envelope::sign(
+        b.request_bytes,
+        EnvelopeParts {
+            subject: b.request.subject.clone(),
+            derivation: b.request.derivation.clone(),
+            anchor: Anchor {
+                digest: b.resolved.digest().to_string(),
+                freshness,
+            },
+            artifact,
+            verification: vec![(KIND_CHECKPOINT.into(), served.statement.clone())],
+            issued_at: b.issued_at.to_string(),
+        },
+        b.signing_key,
+    )
+    .map_err(|e| {
+        tracing::warn!(error = %e, "an evidence answer could not be signed -- declining");
+        Reason::PolicyDeclined
+    })
 }
 
 /// A checkpoint time in the profile's form: UTC, any fraction dropped
@@ -392,14 +377,6 @@ pub(crate) fn inclusion(view: &LogView<'_>, leaf: u64, size: u64) -> Result<Vec<
         .inclusion_path(leaf, size)
         .and_then(|path| encode_inclusion_proof(leaf, &path))
         .ok_or(Reason::PolicyDeclined)
-}
-
-fn consistency(view: &LogView<'_>, from: u64, to: u64) -> Result<Vec<u8>, Reason> {
-    let (old, paths, new) = view
-        .index
-        .consistency_parts(from, to)
-        .ok_or(Reason::PolicyDeclined)?;
-    encode_consistency_proof(from, to, &old, &paths, &new).ok_or(Reason::PolicyDeclined)
 }
 
 // ---------------------------------------------------------------------------
@@ -2485,5 +2462,54 @@ mod tests {
             anchor, anchors[0],
             "a citing record past the latest checkpoint moves nothing"
         );
+    }
+
+    /// What `build` refuses with where only the builder can refuse: a line
+    /// rewritten after it was indexed is `no_such_subject`, and a record
+    /// the serving checkpoint cannot prove is `policy_declined`, as before
+    /// the answers moved onto evidencebook.
+    #[test]
+    fn the_builders_own_refusals_keep_their_reasons() {
+        use evidence_request::resolve::{self, Resolution};
+        let node = node();
+        let ledger = corpus_ledger();
+        let key_id = hex::encode(key().verifying_key().to_bytes());
+        let ask = |leaf: u64, at: usize, rewrite: bool| {
+            let wire = json!({"subject": {"record": ledger[leaf as usize]["capsule_id"]},
+                              "coverage": node.pin(at)});
+            let bytes = serde_json::to_vec(&wire).unwrap();
+            let req = request::parse_json(&bytes).unwrap();
+            crate::evidence_log::with_index(&node.ledger, &key_id, |index| {
+                if rewrite {
+                    // Same length, another capsule_id: no longer the line indexed.
+                    let path = node.ledger.join(crate::evidence_log::CAPSULES_FILE);
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let id = ledger[leaf as usize]["capsule_id"].as_str().unwrap();
+                    let other: String = id.chars().rev().collect();
+                    std::fs::write(&path, text.replacen(id, &other, 1)).unwrap();
+                }
+                let view = index.view().unwrap();
+                let Resolution::Artifact(resolved) = resolve::resolve(&req, &view) else {
+                    panic!("resolved");
+                };
+                build(
+                    &Build {
+                        request: &req,
+                        request_bytes: &bytes,
+                        resolved: &resolved,
+                        at,
+                        records: &[leaf],
+                        signing_key: &key(),
+                        issued_at: NOW,
+                    },
+                    &view,
+                )
+            })
+            .unwrap()
+        };
+        assert!(ask(2, 0, false).is_ok());
+        // Leaf 20 is under the last checkpoint only.
+        assert_eq!(ask(20, 0, false).unwrap_err(), Reason::PolicyDeclined);
+        assert_eq!(ask(2, 0, true).unwrap_err(), Reason::NoSuchSubject);
     }
 }
