@@ -690,9 +690,9 @@ dependencies = [
 
 [[package]]
 name = "evidencebook"
-version = "0.0.8"
+version = "0.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d03a71d1295e789c1d9a577b0d264c7464565690e91c557ff13786185b48b896"
+checksum = "f96fa471e5ab874a0b852ef558beb5c92d9d4843f4abc57fb357554ae63d5267"
 dependencies = [
  "agent-action-capsule 0.4.1",
  "checkpointed-local-log",

@@ -10,10 +10,10 @@
 //! responder's business, not that crate's: evidencebook's `answer::build`
 //! builds it, over this node's read-only index (`evidence_log`, which is an
 //! evidencebook store), so it never opens the durable node store this
-//! plugin's checkpointer owns (evidencebook#35). Exchange corroboration's
-//! entries are still built here until evidencebook carries a holder's own
-//! digest derivation. The artifact forms, evidencebook's (and the Go
-//! responder's):
+//! plugin's checkpointer owns (evidencebook#35). This node's own
+//! derivations' values (`served_summary/1`, exchange corroboration's
+//! entries) are computed here and carried through its `Derive`. The
+//! artifact forms, evidencebook's (and the Go responder's):
 //!
 //! - `record`, no derivation: the record's line in the ledger, proven by the
 //!   anchor's `cll-checkpoint`, its `cll-inclusion-proof` and, when the
@@ -66,9 +66,7 @@ use evidence_request::cll_material::{
     self, encode_inclusion_proof, KeyDecision, LogKeyPolicy, KIND_CHECKPOINT, KIND_CONSISTENCY,
     KIND_INCLUSION,
 };
-use evidence_request::envelope::{
-    self, subject_value, Anchor, AnchorFreshness, Binding, Envelope, EnvelopeParts, Reply,
-};
+use evidence_request::envelope::{self, subject_value, AnchorFreshness, Binding, Envelope, Reply};
 use evidence_request::registry::{Reason, DERIVATION_HISTORY_CARD};
 use evidence_request::request::{Coverage, Derivation, Freshness, Request, Subject};
 use evidence_request::resolve::ResolvedAnchor;
@@ -201,11 +199,7 @@ fn served_summary(
 pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
     let index = view.index;
     let served = index.chain.get(b.at).ok_or(Reason::CoverageUnsatisfiable)?;
-    let signed = if crate::exchange_corroboration::is_derivation(b.request.derivation.as_ref()) {
-        build_corroboration(b, view, served)?
-    } else {
-        build_with_book(b, view, served)?
-    };
+    let signed = signed_envelope(b, view, served)?;
     let mut reply: Value = serde_json::from_slice(&signed.encode(Binding::Json))
         .map_err(|_| Reason::PolicyDeclined)?;
     // The checkpoints whose receipts go with the answer: every one listed
@@ -238,17 +232,31 @@ pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
     Ok(reply)
 }
 
-/// Every answer but exchange corroboration's, built and signed by
-/// evidencebook's `answer::build` over this node's index
-/// (evidencebook#35), with material beyond the profile (P-13) as this node
-/// has always sent it, and `served_summary/1` derived here. Each crate error
-/// is the reason this node has always refused it with.
-fn build_with_book(
+/// The envelope `answer::build` signs over this node's index, with
+/// material beyond the profile (P-13) as this node has always sent it, this
+/// node's own derivations carried through its `Derive`, and each crate
+/// error the reason this node has always refused it with.
+fn signed_envelope(
     b: &Build<'_>,
     view: &LogView<'_>,
     served: &ChainCheckpoint,
 ) -> Result<Envelope, Reason> {
     use evidencebook::answer::{self, AnswerError, Options, Selection};
+    // This node's own derivations, computed before the crate builds the
+    // answer so each can still refuse with its own reason.
+    let corroboration = match (&b.request.derivation, &b.request.subject) {
+        (Some(Derivation::Digest(d)), Subject::Correlation(id))
+            if d == crate::exchange_corroboration::DEFINITION_DIGEST =>
+        {
+            Some(crate::exchange_corroboration::entries(
+                id,
+                &served.record,
+                b.records,
+                view,
+            )?)
+        }
+        _ => None,
+    };
     let summary = match (&b.request.derivation, &b.request.subject) {
         (Some(Derivation::Token(t)), Subject::FullHistory)
             if t == SERVED_SUMMARY_DERIVATION_TOKEN =>
@@ -264,11 +272,14 @@ fn build_with_book(
         }
         _ => None,
     };
-    let derive = |token: &str, _: &Subject, _: &evidencebook::substrate::StatedCheckpoint| {
-        (token == SERVED_SUMMARY_DERIVATION_TOKEN)
-            .then(|| summary.clone())
-            .flatten()
-            .map(|v| ("served_summary".to_string(), v))
+    let derive = |name: &str, _: &Subject, _: &evidencebook::substrate::StatedCheckpoint| {
+        if name == SERVED_SUMMARY_DERIVATION_TOKEN {
+            summary.clone().map(|v| ("served_summary".to_string(), v))
+        } else if name == crate::exchange_corroboration::DEFINITION_DIGEST {
+            corroboration.clone().map(|v| ("entries".to_string(), v))
+        } else {
+            None
+        }
     };
     answer::build(
         view,
@@ -278,7 +289,13 @@ fn build_with_book(
         b.resolved,
         &Selection {
             at: b.at,
-            records: b.records.to_vec(),
+            // A derivation of this node's own carries no records of the
+            // crate's selection: the entries are its own.
+            records: if corroboration.is_some() {
+                Vec::new()
+            } else {
+                b.records.to_vec()
+            },
         },
         Options {
             prove_beyond_profile: true,
@@ -305,58 +322,6 @@ fn build_with_book(
     })
 }
 
-/// `exchange_corroboration/1`'s answer, its entries built here: the one
-/// derivation of this node's own that evidencebook 0.0.8's `answer::build`
-/// cannot carry (a definition digest it does not register).
-fn build_corroboration(
-    b: &Build<'_>,
-    view: &LogView<'_>,
-    served: &ChainCheckpoint,
-) -> Result<Envelope, Reason> {
-    let Subject::Correlation(id) = &b.request.subject else {
-        return Err(Reason::DerivationUnsupported);
-    };
-    let mut head = Map::new();
-    head.insert("anchor".into(), json!(served.anchor_digest()));
-    head.insert("evidence_stream".into(), json!(served.record.log_id));
-    head.insert("subject".into(), subject_value(&b.request.subject));
-    let entries = crate::exchange_corroboration::entries(id, &served.record, b.records, view)?;
-    head.insert(
-        "derivation".into(),
-        json!(crate::exchange_corroboration::DEFINITION_DIGEST),
-    );
-    head.insert("entries".into(), entries);
-    let artifact = jcs(head)?;
-    let freshness = match &b.request.coverage {
-        Coverage::MinFreshness(Freshness::Size(_)) => {
-            Some(AnchorFreshness::Size(served.record.mmr_size))
-        }
-        Coverage::MinFreshness(Freshness::Time(_)) => Some(AnchorFreshness::Time(profile_time(
-            &served.record.timestamp,
-        ))),
-        Coverage::ExpectedPin(_) => None,
-    };
-    envelope::sign(
-        b.request_bytes,
-        EnvelopeParts {
-            subject: b.request.subject.clone(),
-            derivation: b.request.derivation.clone(),
-            anchor: Anchor {
-                digest: b.resolved.digest().to_string(),
-                freshness,
-            },
-            artifact,
-            verification: vec![(KIND_CHECKPOINT.into(), served.statement.clone())],
-            issued_at: b.issued_at.to_string(),
-        },
-        b.signing_key,
-    )
-    .map_err(|e| {
-        tracing::warn!(error = %e, "an evidence answer could not be signed -- declining");
-        Reason::PolicyDeclined
-    })
-}
-
 /// A checkpoint time in the profile's form: UTC, any fraction dropped
 /// (profile §5.2).
 fn profile_time(timestamp: &str) -> String {
@@ -364,12 +329,6 @@ fn profile_time(timestamp: &str) -> String {
         Some((seconds, _)) => format!("{seconds}Z"),
         None => timestamp.to_string(),
     }
-}
-
-fn jcs(object: Map<String, Value>) -> Result<Vec<u8>, Reason> {
-    evidence_request::jcs::to_string(&Value::Object(object))
-        .map(String::into_bytes)
-        .map_err(|_| Reason::PolicyDeclined)
 }
 
 pub(crate) fn inclusion(view: &LogView<'_>, leaf: u64, size: u64) -> Result<Vec<u8>, Reason> {
@@ -1067,6 +1026,7 @@ mod tests {
         announced_keys, asker_key, corpus_ledger, corpus_ledger_dir, NODE_KEY_SEED, RESPONDER_NODE,
     };
     use ed25519_dalek::SigningKey;
+    use evidence_request::envelope::EnvelopeParts;
     use evidence_request::request;
 
     const NOW: &str = "2026-09-29T00:00:00Z";
