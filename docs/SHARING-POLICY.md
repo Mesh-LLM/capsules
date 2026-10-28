@@ -280,7 +280,9 @@ requests. It still answers a node that asks, under the switches above. This
 version advertises nothing, so nothing reads the switch yet: the plugin's
 `evidence-request/1` channel is declared only to its own host, so that a
 request can reach it, and mesh-llm does not pass a plugin's channels on to
-other nodes.
+other nodes. Giving the commitment to a peer that asks for it, and the
+operator publishing it, are not advertising either; the signed policy states
+this switch's value (below).
 
 ## Verdicts (`share_adjudications`)
 
@@ -341,6 +343,63 @@ capsule-emit library's client, reads at most 1 MiB.
 
 A witness holding a checkpoint means one thing: a later rewrite of this log is
 detectable by someone other than this node. It does not make the records true.
+
+## The signed policy and the commitment
+
+The seven switches above, all but `witness`, are this node's
+disclosure policy. The node signs it as a `disclosure-policy/0` document and
+publishes it with its **commitment**, an `evidence-commitment/0` document
+signed by the same key. The commitment says how the node can be asked and
+what it can answer, never what it has done, and it carries no counts. Both
+shapes are the ones evidence-network/loop's step 3 checks
+(`steps/03-advertise.md` there).
+
+With the defaults, the policy is exactly
+[`policies/disclosure-default.json`](../policies/disclosure-default.json):
+
+```json
+{
+  "advertise_evidence_requests": "off",
+  "share_adjudications": "off",
+  "share_exchange_corroboration": "off",
+  "share_history_segments": "counterparties",
+  "share_record_at_completion": "off",
+  "share_standard_history": "off",
+  "stranger_safe": ["checkpoints", "history_card/1"]
+}
+```
+
+Each switch appears as the plugin reads it, so an unknown value appears as
+`off`. A test requires the default settings to give this file, so the file
+and the code cannot differ. Change a switch and the policy, and its digest,
+change with it.
+
+- **The digest.** The commitment's `lcap.policy_digest` is the SHA-256 of the
+  signed policy file's bytes (its RFC 8785 form). The plugin computes it from
+  the switches it is answering under; nobody writes it down.
+- **What else the commitment says.** The ask goes to `mesh:<node_id>` over
+  this plugin's evidence-request channel. The node answers `checkpoints`,
+  `history_card/1`, `served_summary/1` and `exchange_corroboration/1` (by
+  its definition digest), each to a counterparty under every setting; the
+  policy says who else gets them. It answers the subjects `checkpoints` and
+  `full_history` (`full_history` only through a derivation), plus `record`,
+  `exchange` and `correlation` unless `share_history_segments` is `off`.
+  It answers without a person in the loop (`human_gated: false`), within a
+  minute (`answers_within: PT1M`). Its predicate class is
+  `performed:counterparty_half`.
+- **What it carries.** The node's latest signed checkpoint, whole, and the
+  `history_card/1` answer this node gives any stranger at that checkpoint
+  (the staple). A node with no checkpoint yet has no commitment.
+- **A refusal names the policy.** Every signed refusal to an evidence
+  request carries a `policy_digest` member: the digest of the policy it was
+  refused under, so it can be checked against the commitment. The member is
+  **not signed**: the refusal's signature covers `issued_at`, `reason` and
+  `request_digest` only, as the evidence-request profile defines it.
+- **Where it is served.** A peer fetches the pair over the `commitment/1`
+  mesh channel (`mesh_commitment_fetch` checks it). The `commitment`
+  operation gives it to the operator, who publishes it to loop's
+  `nodes/commitments/<node_id>.json`, with the policy bytes as
+  `nodes/commitments/policies/<node_id>.json`, by pull request.
 
 ## The two mesh streams are plugin-internal
 

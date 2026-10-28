@@ -74,7 +74,7 @@ fn record_at_completion_is_off_from(read: Result<String, std::env::VarError>) ->
     }
 }
 
-fn record_at_completion_is_off_for(raw: Option<&str>) -> bool {
+pub(crate) fn record_at_completion_is_off_for(raw: Option<&str>) -> bool {
     !matches!(normalized(raw).as_deref(), None | Some("counterparty"))
 }
 
@@ -126,11 +126,8 @@ pub const ENV_STANDARD_HISTORY: &str = "CAPSULES_SHARE_STANDARD_HISTORY";
 /// Whether the rest of Standard Service History (not checkpoints or
 /// `history_card/1`, which go to anyone) goes to a requester that is not
 /// this node's counterparty: only when the operator turned it on. Off by
-/// default; a counterparty is answered either way.
-pub fn shares_standard_history() -> bool {
-    shares_standard_history_for(crate::settings::var(ENV_STANDARD_HISTORY).ok().as_deref())
-}
-
+/// default; a counterparty is answered either way. This process's value is
+/// `commitment::Policy::current`'s.
 pub(crate) fn shares_standard_history_for(raw: Option<&str>) -> bool {
     switched_on(raw)
 }
@@ -140,22 +137,23 @@ pub(crate) fn shares_standard_history_for(raw: Option<&str>) -> bool {
 /// advertises evidence requests, so nothing reads it yet: the plugin's
 /// `evidence-request/1` channel is declared only to its own host, so that a
 /// request can reach it, and mesh-llm does not pass a plugin's channels on to
-/// other nodes.
+/// other nodes. The signed disclosure policy states its value.
 pub const ENV_ADVERTISE_EVIDENCE_REQUESTS: &str = "CAPSULES_ADVERTISE_EVIDENCE_REQUESTS";
 
-/// This process's own env var for `share_exchange_corroboration`.
-pub const ENV_EXCHANGE_CORROBORATION: &str = "CAPSULES_SHARE_EXCHANGE_CORROBORATION";
+/// Whether this node advertises that it answers evidence requests.
+pub(crate) fn advertises_evidence_requests_for(raw: Option<&str>) -> bool {
+    switched_on(raw)
+}
 
 /// Whether `exchange_corroboration/1` goes to a requester that is not this
 /// node's counterparty: only when the operator turned it on. Off by default.
 /// A setting of its own: `share_standard_history` never releases it.
-pub fn shares_exchange_corroboration() -> bool {
-    switched_on(
-        crate::settings::var(ENV_EXCHANGE_CORROBORATION)
-            .ok()
-            .as_deref(),
-    )
+pub(crate) fn shares_exchange_corroboration_for(raw: Option<&str>) -> bool {
+    switched_on(raw)
 }
+
+/// This process's own env var for `share_exchange_corroboration`.
+pub const ENV_EXCHANGE_CORROBORATION: &str = "CAPSULES_SHARE_EXCHANGE_CORROBORATION";
 
 /// An on/off switch: on only for `on` (or `1`, `true`, `yes`); unset and
 /// anything else is off.
@@ -209,7 +207,7 @@ pub fn adjudications_delivered() -> bool {
     adjudications_delivered_for(crate::settings::var(ENV_ADJUDICATIONS).ok().as_deref())
 }
 
-fn adjudications_delivered_for(raw: Option<&str>) -> bool {
+pub(crate) fn adjudications_delivered_for(raw: Option<&str>) -> bool {
     normalized(raw).as_deref() == Some("deliver_to_subjects")
 }
 

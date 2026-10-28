@@ -147,11 +147,11 @@ pub struct Responder<'a> {
     pub signing_key: &'a SigningKey,
     /// Now, RFC 3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`): every `issued_at`.
     pub now: &'a str,
-    /// `share_policy::history_segments()`.
+    /// `share_history_segments` (`commitment::Policy`).
     pub history_segments: &'a str,
-    /// `share_policy::shares_standard_history()`.
+    /// `share_standard_history` (`commitment::Policy`).
     pub share_standard_history: bool,
-    /// `share_policy::shares_exchange_corroboration()`.
+    /// `share_exchange_corroboration` (`commitment::Policy`).
     pub share_exchange_corroboration: bool,
     /// The keys a requester's signature is bound through
     /// (`requester_auth::bound_node`).
@@ -163,6 +163,10 @@ pub struct Responder<'a> {
     /// must name. `None` until the host has reported it: then no signed
     /// request is addressed to this node.
     pub node_id: Option<&'a str>,
+    /// The digest of the signed disclosure policy these switches are
+    /// (`commitment::Policy::digest`), which every refusal names as its
+    /// `policy_digest` member. `None` names none.
+    pub policy_digest: Option<&'a str>,
 }
 
 /// The one outcome of a request.
@@ -242,8 +246,7 @@ pub struct Asker {
     pub replay: Option<&'static str>,
 }
 
-/// Answer `request_bytes`, exactly as received.
-#[cfg(test)]
+/// Answer `request_bytes`, exactly as received, without logging it.
 pub fn answer(request_bytes: &[u8], responder: &Responder<'_>) -> Outcome {
     answer_as(request_bytes, responder).0
 }
@@ -264,7 +267,7 @@ fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Ask
         responder.signing_key,
     ) {
         Ok(r) => Outcome::Refused {
-            wire: r.to_json(),
+            wire: refusal_wire(&r, responder),
             reason,
             subject_kind,
         },
@@ -806,6 +809,20 @@ pub fn answer_and_log(
     outcome
 }
 
+/// A refusal on the wire: the crate's signed object, plus the digest of the
+/// disclosure policy that applied as `policy_digest`. That member is NOT
+/// signed: evidence-request 0.2.0 signs exactly `issued_at`, `reason` and
+/// `request_digest` (`refusal::SIGNED_MEMBERS`), and its checks ignore any
+/// other member. A requester checks it against the `lcap.policy_digest` of
+/// this node's signed commitment (`crate::commitment`).
+fn refusal_wire(refusal: &refusal::Refusal, responder: &Responder<'_>) -> Value {
+    let mut wire = refusal.to_json();
+    if let (Some(digest), Some(map)) = (responder.policy_digest, wire.as_object_mut()) {
+        map.insert("policy_digest".into(), json!(digest));
+    }
+    wire
+}
+
 /// Now, as every `issued_at` is written.
 pub fn now_utc() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
@@ -823,7 +840,7 @@ pub fn decline_busy(request_bytes: &[u8], responder: &Responder<'_>) -> Outcome 
         responder.signing_key,
     ) {
         Ok(r) => Outcome::Refused {
-            wire: r.to_json(),
+            wire: refusal_wire(&r, responder),
             reason: Reason::PolicyDeclined,
             subject_kind: None,
         },
@@ -1036,6 +1053,7 @@ pub(crate) mod tests {
                 },
                 replay,
                 node_id: Some(RESPONDER),
+                policy_digest: None,
             },
         )
     }
@@ -1255,6 +1273,7 @@ pub(crate) mod tests {
             },
             replay: &replay,
             node_id: Some(RESPONDER),
+            policy_digest: None,
         };
         let bytes = br#"{"subject":{"checkpoints":null},"coverage":{"min_freshness":1}}"#;
         let Outcome::Refused { wire, reason, .. } = decline_busy(bytes, &responder) else {
@@ -1283,6 +1302,7 @@ pub(crate) mod tests {
             },
             replay: &replay,
             node_id: Some(RESPONDER),
+            policy_digest: None,
         };
         assert!(matches!(
             answer(b"{}", &responder),
@@ -1736,6 +1756,7 @@ pub(crate) mod tests {
             },
             replay: &replay,
             node_id: Some(RESPONDER),
+            policy_digest: None,
         };
         let stranger = SigningKey::from_bytes(&[0x77; 32]);
         for request in stranger_safe_requests() {
@@ -1886,6 +1907,7 @@ pub(crate) mod tests {
                 },
                 replay: &ReplayCache::default(),
                 node_id: Some(RESPONDER),
+                policy_digest: None,
             },
         )
     }
@@ -2080,6 +2102,7 @@ pub(crate) mod tests {
                     },
                     replay: &ReplayCache::default(),
                     node_id: Some(RESPONDER),
+                    policy_digest: None,
                 },
             )
         };
@@ -2290,6 +2313,7 @@ pub(crate) mod tests {
             },
             replay: &replay,
             node_id: Some(RESPONDER),
+            policy_digest: None,
         };
         let summary = signed_with(&stranger, &standard_history_requests()[2]);
         let outcome = answer_and_log(&summary, false, &responder, Some(log.path()));
@@ -2336,6 +2360,7 @@ pub(crate) mod tests {
                 },
                 replay: &replay,
                 node_id: Some(RESPONDER),
+                policy_digest: None,
             };
             answer_and_log(bytes, false, &responder, log)
         };
@@ -2527,6 +2552,7 @@ pub(crate) mod tests {
             },
             replay: &replay,
             node_id: None,
+            policy_digest: None,
         };
         assert_eq!(
             refused(&answer(&signed_by("node-a", &record), &responder)),
@@ -2652,6 +2678,7 @@ pub(crate) mod tests {
                     },
                     replay: &replay,
                     node_id: Some(RESPONDER),
+                    policy_digest: None,
                 },
             )
         };
@@ -3081,6 +3108,7 @@ pub(crate) mod tests {
             },
             replay: &replay,
             node_id: Some(RESPONDER),
+            policy_digest: None,
         };
         let request = node_a_record(&ledger);
         let mut claims_a = request.clone();
