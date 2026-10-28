@@ -140,7 +140,7 @@ fn a_payer_deposit_and_final_settle() {
         .unwrap();
     assert_eq!(finality["method"], FINALITY_METHOD);
     // One band for the exchange: deposit and final together.
-    assert_eq!(b["band"], "sat:e+2");
+    assert_eq!(b["band"], json!({"currency": "BTC", "decade": -6}));
     assert_eq!(b["invoices_without_settlement"], json!([]));
     assert_eq!(b["invoices"][0]["checks"][0]["status"], "PASS");
 }
@@ -243,7 +243,7 @@ fn a_retried_segment_joins_by_hash() {
     assert_eq!(chk(&b, 0, "amount"), "PASS");
     assert_eq!(chk(&b, 1, "amount"), "PASS");
     assert_eq!(settled(&b), "PASS");
-    assert_eq!(b["band"], "sat:e0");
+    assert_eq!(b["band"], json!({"currency": "BTC", "decade": -8}));
 
     // A hashless settlement cannot say which of two invoices it paid.
     let b = book(vec![
@@ -417,7 +417,10 @@ fn one_payment_is_counted_once() {
     let records = vec![invoice("payer", 0, &hash("aa"), 1000), first, seal(again)];
     let r = report(records.clone(), None);
     assert_eq!(r["disclosed_count"]["settlements"], 1);
-    assert_eq!(book(records)["band"], "sat:e0");
+    assert_eq!(
+        book(records)["band"],
+        json!({"currency": "BTC", "decade": -8})
+    );
 }
 
 /// A node that holds both sides of one payment counts it once; each side's
@@ -436,7 +439,7 @@ fn both_sides_of_one_payment_count_once() {
     assert_eq!(books.len(), 2);
     for b in &books {
         assert_eq!(settled(b), "PASS", "{b:#}");
-        assert_eq!(b["band"], "sat:e0");
+        assert_eq!(b["band"], json!({"currency": "BTC", "decade": -8}));
     }
 }
 
@@ -451,18 +454,24 @@ fn an_unreadable_settlement_record_is_counted_not_dropped() {
     assert_eq!(r["exchanges"], json!([]));
 }
 
+fn btc(decade: i64) -> Option<Value> {
+    Some(json!({"currency": "BTC", "decade": decade}))
+}
+
+/// `decade` = floor(log10(msat / 10^11)): digits(msat) - 12.
 #[test]
-fn bands_are_decades_of_the_amount_in_sats() {
+fn bands_are_signed_decades_of_the_amount_in_btc() {
     assert_eq!(band(0), None);
-    assert_eq!(band(1).as_deref(), Some("sat:e-3"));
-    assert_eq!(band(9).as_deref(), Some("sat:e-3"));
-    assert_eq!(band(10).as_deref(), Some("sat:e-2"));
-    assert_eq!(band(999).as_deref(), Some("sat:e-1"));
-    assert_eq!(band(1000).as_deref(), Some("sat:e0"));
-    assert_eq!(band(9999).as_deref(), Some("sat:e0"));
-    assert_eq!(band(10_000).as_deref(), Some("sat:e+1"));
-    assert_eq!(band(250_000).as_deref(), Some("sat:e+2"));
-    // The largest amount a record can carry (JCS's 2^53-1).
-    assert_eq!(band((1u64 << 53) - 1).as_deref(), Some("sat:e+12"));
-    assert_eq!(band(u64::MAX).as_deref(), Some("sat:e+16"));
+    assert_eq!(band(1), btc(-11));
+    assert_eq!(band(9), btc(-11));
+    assert_eq!(band(10), btc(-10));
+    assert_eq!(band(1000), btc(-8)); // 1 sat
+    assert_eq!(band(250_000), btc(-6)); // 250 sats
+    assert_eq!(band(99_999_999_999), btc(-1));
+    assert_eq!(band(100_000_000_000), btc(0)); // 1 BTC
+    assert_eq!(band(999_999_999_999), btc(0));
+    assert_eq!(band(1_000_000_000_000), btc(1));
+    // The largest amount a record can carry (JCS's 2^53-1), and u64::MAX.
+    assert_eq!(band((1u64 << 53) - 1), btc(4));
+    assert_eq!(band(u64::MAX), btc(8));
 }

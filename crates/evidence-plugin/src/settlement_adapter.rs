@@ -25,9 +25,10 @@
 //!
 //! **Band** (`(currency, decade)`): per exchange and side, from the sum of
 //! that side's distinct terminal settlements (deposit and final together,
-//! never per payment), with no conversion. The currency is part of the band:
-//! 250 sats is `sat:e+2`, and a `sat` band is never compared with another
-//! currency's.
+//! never per payment), with no conversion: `currency` is the amount's
+//! `assetCode` (`BTC`) and `decade` the signed power of ten of the amount in
+//! that currency, so 250 sats is `BTC` decade -6. The currency is part of the
+//! band, and a band is never compared with another currency's.
 //!
 //! **Counts.** The disclosed count is this node's distinct terminal
 //! settlements, by `payment_hash`. Lightning has no public ledger to check it
@@ -48,9 +49,13 @@ pub const SETTLEMENT_CHECK_OPERATION: &str = "settlement_check";
 /// The adapter declaration these results are produced under.
 pub const LIGHTNING_ADAPTER: &str = "lightning-v0";
 
-/// The band's currency: the decade is of the amount in this unit
-/// (1 sat = 1000 msat = 1e-8 BTC).
-pub const BAND_CURRENCY: &str = "sat";
+/// The band's currency: the settlement-records `assetCode` a Lightning
+/// amount is written in.
+pub const BAND_CURRENCY: &str = "BTC";
+
+/// The settlement-records `assetScale` of a Lightning amount: the value is
+/// in msat, 1e-11 BTC.
+pub const BAND_ASSET_SCALE: i64 = 11;
 
 /// The finality method: the wallet's report, which the declaration names.
 pub const FINALITY_METHOD: &str = "wallet_reported";
@@ -224,15 +229,18 @@ fn lifecycle_event_ref(block: &Map<String, Value>) -> Check {
     )
 }
 
-/// The `(currency, decade)` band of an amount, as `sat:e<sign><n>`. `None`
-/// for zero, which has no decade.
-pub fn band(amount_msat: u64) -> Option<String> {
+/// The `(currency, decade)` band of an amount, the rule the standard
+/// history card uses: `currency` is the `assetCode`, and `decade` is
+/// `floor(log10(value / 10^assetScale))`, signed, which in exact integer
+/// arithmetic is the digits of `value` minus `assetScale` minus one. So
+/// 250 sats is `BTC` decade -6 and 1 msat is decade -11. `None` for zero,
+/// which has no decade.
+pub fn band(amount_msat: u64) -> Option<Value> {
     if amount_msat == 0 {
         return None;
     }
-    let decade = amount_msat.ilog10() as i64 - 3;
-    let sign = if decade > 0 { "+" } else { "" };
-    Some(format!("{BAND_CURRENCY}:e{sign}{decade}"))
+    let decade = amount_msat.ilog10() as i64 - BAND_ASSET_SCALE;
+    Some(json!({"currency": BAND_CURRENCY, "decade": decade}))
 }
 
 /// The invoice a settlement is compared with: the one of the same side and

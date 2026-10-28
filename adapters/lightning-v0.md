@@ -21,6 +21,7 @@ node's own book. The tool seals nothing and contacts nobody.
 | mesh-llm, `mesh/crates/mesh-llm-host-runtime/src/network/payments/lifecycle.rs` | `main` at `3947de0cb` | the `payment.lifecycle.v1` event: its members, which side emits which phase, and the `event_ref` digest |
 | mesh-llm, `mesh/crates/mesh-llm-wallet/src/invoice.rs` | same | the invoice's `payment_hash`, and `sha256(preimage) == payment_hash` |
 | Agent Action Capsule, `spec/interop-profile-v0.md` and `spec/adapters/x402-v0.md` | `main` at `40549d239` | the five statuses (§7.1), the `native_check` report (§7.2), and the shape of x402's per-check results (§7) |
+| Agent Action Capsule, `vectors/settlement/cases.json`, and pull request #440 (`spec/standard-history-v0.md` §5.3) | `main` at `40549d239`; #440 open at `a3d1fc08` | a Lightning amount as `assetCode` `BTC`, `assetScale` 11; the card's value band, with the signed decade this declaration uses |
 | mesh-llm#2654 | draft, head `3899080b` | the `pay.ln.v1` channel and `Message::Settlement { id, bill }` (see [Sources](#sources)) |
 
 ## (a) The native object
@@ -117,18 +118,21 @@ method `wallet_reported`, and `preimage` is `NOT_PRESENT`.
 
 ## Band
 
-Each exchange carries one value band per side, `(currency, decade)`. It is never one band per
-payment. It is computed as follows:
+Each exchange carries one value band per side, `{"currency", "decade"}`. It is never one band per
+payment. The rule is the one the standard history card uses, so a card can count these exchanges
+by band.
 
 - The adapter sums that side's distinct terminal settlements, deposit and final together, so a job
   split into several payments still has one band.
-- The currency is `sat` (1 sat = 1000 msat = 1e-8 BTC). Nothing is converted.
-- The decade is that of the sum in sats: 1 msat is `sat:e-3`, 1 sat is `sat:e0`, and 250 sats is
-  `sat:e+2`.
-- A zero or missing amount has no band.
+- `currency` is the amount's settlement-records `assetCode`. A Lightning amount is written as
+  `assetCode` `BTC` with `assetScale` 11, its value in msat. Nothing is converted.
+- `decade` is `floor(log10(value / 10^assetScale))`, signed. In exact integer arithmetic it is the
+  number of digits of `value`, minus `assetScale`, minus one. So 1 msat is `BTC` decade -11, 1 sat
+  is -8, 250 sats is -6, and 1 BTC is 0.
+- A zero amount has no decade, so it has no band.
 
-The currency is part of the band. A `sat` band is never compared with, or converted to, another
-currency's band: a `sat` band and a `USDC` band of the same decade are not comparable. A relying
+The currency is part of the band. A band is never compared with, or converted to, another
+currency's band: a `BTC` band and a `USDC` band of the same decade are not comparable. A relying
 party that maps currencies does so with its own pinned table.
 
 ## The count

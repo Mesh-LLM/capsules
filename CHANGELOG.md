@@ -4,6 +4,16 @@
 
 ### Added
 
+- **`settlement_check` and the Lightning adapter declaration (loop step 6).** The new read-only tool
+  checks the Lightning settlement records this node holds for a paid exchange, under
+  `adapters/lightning-v0.md`. Each check (object held, invoice join, amount, finality, preimage,
+  payee credit) reports `PASS`, `FAIL`, `NOT_PRESENT`, `NOT_CHECKED` or `INCONCLUSIVE` with its
+  method. A `finality` `PASS` is the wallet's own report (`wallet_reported`), not a proof, and
+  `preimage` is `NOT_PRESENT` because the host never passes one. Each side of an exchange also gets
+  the declared predicate `settled` and one value band, `BTC` with a signed decade. The tool reports
+  the disclosed count (distinct settlements by payment hash), and the public-ledger count reads
+  `NOT_CHECKED`, since Lightning has none. `adapters/x402-v0.md` re-declares x402 under the same
+  five items. The tool seals nothing and contacts nobody. Mesh-LLM/capsules-plugin#57.
 - **`doctor` and `join` (loop step 12).** `doctor` lists what this node's evidence is: what is
   self-attested, unwitnessed, unchecked, unbound or not shared, one finding each with
   evidencebook's check names and states (`Book.Doctor`), never a score. With `probe`, it asks the
