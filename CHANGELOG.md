@@ -8,8 +8,8 @@
   self-attested, unwitnessed, unchecked, unbound or not shared, one finding each with
   evidencebook's check names and states (`Book.Doctor`), never a score. With `probe`, it asks the
   node's own responder `checkpoints`, then `history_card/1`, as a stranger, in process, and checks
-  that each answer verifies under the key the node's commitment advertises and that the node
-  answers under the policy that commitment signs. `join` checks that the node is ready to join:
+  that each answer verifies under the key the node's commitment advertises (its own key when it
+  serves no commitment yet) and that the node answers under the policy that commitment signs. `join` checks that the node is ready to join:
   the key, the book, the first checkpoint, the commitment served on `commitment/1` and both
   probes, listing what is in place and what is not; it is idempotent. Listing the node is still a
   pull request to the evidence network's commitment list. Neither seals, writes or contacts anything; a fresh node's

@@ -730,7 +730,8 @@ pub fn quickstart(plugin_id: &str) -> String {
          not shared, one finding per line, never a score. With `probe`, it also asks the\n\
          node's own responder `{cp}`, then `{hc}`, as a stranger, in process (no\n\
          network), and checks that each answer verifies under the key the commitment\n\
-         advertises and that the node answers under the policy the commitment signs:\n\
+         advertises (the node's own key when it serves no commitment yet) and that the node\n\
+         answers under the policy the commitment signs:\n\
          \n\
          ```bash\n\
          curl -s -X POST -H 'content-type: application/json' -d '{{\"probe\": true}}' {doctor}\n\

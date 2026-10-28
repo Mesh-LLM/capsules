@@ -1076,7 +1076,8 @@ fn with_evidence_operations(
                  unwitnessed, unchecked, unbound or not shared), never a score. With probe, also ask \
                  this node's own responder checkpoints, then history_card/1, as a stranger, in \
                  process, and check that each answer verifies under the key the node's commitment \
-                 advertises and that the node answers under the policy that commitment signs. \
+                 advertises (its own key when it serves no commitment yet) and that the node \
+                 answers under the policy that commitment signs. \
                  Seals nothing.",
             )
             .input::<doctor::DoctorArgs>()

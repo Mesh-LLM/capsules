@@ -283,7 +283,8 @@ Running it again changes nothing.
 not shared, one finding per line, never a score. With `probe`, it also asks the
 node's own responder `checkpoints`, then `history_card/1`, as a stranger, in process (no
 network), and checks that each answer verifies under the key the commitment
-advertises and that the node answers under the policy the commitment signs:
+advertises (the node's own key when it serves no commitment yet) and that the node
+answers under the policy the commitment signs:
 
 ```bash
 curl -s -X POST -H 'content-type: application/json' -d '{"probe": true}' $CONSOLE/api/plugins/capsules/tools/doctor
