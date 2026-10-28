@@ -117,6 +117,7 @@ use evidence_request::registry::{Reason, DERIVATION_HISTORY_CARD};
 use evidence_request::request::{self, Coverage, Derivation, Request, Subject};
 use evidence_request::resolve::{self, Resolution, ResolvedAnchor};
 use evidence_request::time::parse_utc;
+use evidencebook::received::{self, Appended, ReceivedLog, MAX_RECEIVED_LOG_BYTES};
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
@@ -190,7 +191,7 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    /// The `received_log` status and reason.
+    /// The received-log status and reason.
     pub fn log_status(&self) -> (&'static str, Option<&'static str>) {
         match self {
             Outcome::Answered { .. } => ("answered", None),
@@ -789,9 +790,9 @@ pub fn answer_and_log(
     };
     let (status, reason) = outcome.log_status();
     let digest = request_digest(request_bytes);
-    crate::received_log::append(
+    log_received(
         log_dir,
-        &crate::received_log::Entry {
+        &received::Entry {
             ts: responder.now,
             path: "evidence-request",
             requester_id: requester_id.as_deref(),
@@ -821,6 +822,30 @@ fn refusal_wire(refusal: &refusal::Refusal, responder: &Responder<'_>) -> Value 
         map.insert("policy_digest".into(), json!(digest));
     }
     wire
+}
+
+/// The "asked of you" log for this run (evidencebook's `received`), capped at
+/// [`MAX_RECEIVED_LOG_BYTES`].
+static RECEIVED_LOG: ReceivedLog = ReceivedLog::new(MAX_RECEIVED_LOG_BYTES);
+
+/// Append `entry` to the "asked of you" log in `dir` when `dir` is the
+/// directory locked for it at start (`data_dir::received_log_writable`).
+/// Best-effort: an answer is decided before it is logged, so a failure is
+/// reported in this node's own log and never changes it. A full log is
+/// reported on its first drop, then every 1000th.
+pub(crate) fn log_received(dir: Option<&Path>, entry: &received::Entry<'_>) {
+    let dir = dir.filter(|d| crate::data_dir::received_log_writable(d));
+    match RECEIVED_LOG.append(dir, entry) {
+        Ok(Appended::Full { dropped }) if dropped == 1 || dropped.is_multiple_of(1000) => {
+            tracing::warn!(
+                dropped,
+                max_bytes = MAX_RECEIVED_LOG_BYTES,
+                "the received log is full; requests are no longer logged"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "could not append to the received log"),
+    }
 }
 
 /// Now, as every `issued_at` is written.
@@ -2318,8 +2343,7 @@ pub(crate) mod tests {
         let summary = signed_with(&stranger, &standard_history_requests()[2]);
         let outcome = answer_and_log(&summary, false, &responder, Some(log.path()));
         assert!(matches!(outcome, Outcome::Answered { .. }));
-        let text = std::fs::read_to_string(log.path().join(crate::received_log::RECEIVED_LOG_FILE))
-            .unwrap();
+        let text = std::fs::read_to_string(log.path().join(received::RECEIVED_LOG_FILE)).unwrap();
         let line: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
         assert_eq!(line["principal_key_id"], json!(key_id_of(&stranger)));
         assert_eq!(line["principal_binding"], json!("unbound"));
@@ -2386,8 +2410,7 @@ pub(crate) mod tests {
             expected,
             "answered as unsigned, not refused"
         );
-        let text = std::fs::read_to_string(log.path().join(crate::received_log::RECEIVED_LOG_FILE))
-            .unwrap();
+        let text = std::fs::read_to_string(log.path().join(received::RECEIVED_LOG_FILE)).unwrap();
         let line: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
         assert_eq!(line["principal_key_id"], json!(key_id_of(&stranger)));
         assert_eq!(line["principal_binding"], json!("unbound"));
@@ -3122,7 +3145,7 @@ pub(crate) mod tests {
             answer_and_log(bytes, false, &responder, Some(log.path()));
         }
         let lines: Vec<Value> =
-            std::fs::read_to_string(log.path().join(crate::received_log::RECEIVED_LOG_FILE))
+            std::fs::read_to_string(log.path().join(received::RECEIVED_LOG_FILE))
                 .unwrap()
                 .lines()
                 .map(|l| serde_json::from_str(l).unwrap())
@@ -3144,5 +3167,39 @@ pub(crate) mod tests {
             assert_eq!(line["status"], json!(status), "{line}");
         }
         assert_eq!(lines.len(), 3);
+    }
+
+    fn received_entry() -> received::Entry<'static> {
+        received::Entry {
+            ts: "2026-09-29T00:00:00Z",
+            path: "evidence-request",
+            requester_id: Some("node-a"),
+            subject_kind: Some("record"),
+            status: "refused",
+            reason: Some("no_such_subject"),
+            request_digest: Some("ab"),
+            principal_key_id: Some("cd"),
+            principal_node_id: Some("node-a"),
+            principal_binding: Some("bound"),
+            audience: Some("node-r"),
+            replay: Some("checked"),
+        }
+    }
+
+    #[test]
+    fn a_received_line_is_what_the_evidence_page_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        log_received(Some(dir.path()), &received_entry());
+        let read = crate::evidence_panes::read_received_log(dir.path());
+        assert_eq!(read, vec![received_entry().to_json()]);
+    }
+
+    #[test]
+    fn nothing_is_received_without_the_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("received-log");
+        log_received(Some(&missing), &received_entry());
+        log_received(None, &received_entry());
+        assert!(!missing.exists());
     }
 }

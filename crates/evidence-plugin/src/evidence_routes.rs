@@ -33,7 +33,7 @@ use crate::evidence_panes::{
 use crate::peer_keys::announced_key_in;
 
 /// The directory this node's log of requests made of it
-/// (`received_log.jsonl`, written by `received_log`) lives in: the drill's
+/// (`received_log.jsonl`, written by `evidence_answer::log_received`) lives in: the drill's
 /// "Asked of you".
 pub const ENV_RECEIVED_LOG_DIR: &str = "CAPSULES_RECEIVED_LOG_DIR";
 /// Where that log is read from when [`ENV_RECEIVED_LOG_DIR`] is unset:

@@ -355,9 +355,38 @@ pub fn lock(dir: &Path) -> anyhow::Result<DataDirLock> {
             }
         },
     };
-    crate::received_log::set_writable(writable);
+    set_received_log_writable(writable);
     check_no_other_writer(dir)?;
     Ok(DataDirLock { _files: files })
+}
+
+/// The one directory this run may write the received log to, decided when
+/// the data directory is locked ([`lock`]): `None` when the log is off for
+/// this run (no directory at start, or one this process could not lock).
+static RECEIVED_LOG_WRITABLE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// Set once, at start, by [`lock`]. Not in unit tests, which take many locks
+/// in one process; they check [`writable_under`] directly.
+fn set_received_log_writable(dir: Option<PathBuf>) {
+    if !cfg!(test) {
+        let _ = RECEIVED_LOG_WRITABLE.set(dir);
+    }
+}
+
+/// Whether the received log may be written to `dir` this run.
+pub(crate) fn received_log_writable(dir: &Path) -> bool {
+    writable_under(RECEIVED_LOG_WRITABLE.get(), dir)
+}
+
+/// Whether `dir` is the directory this run locked for the log (`decided`).
+/// A directory made after start, or any other, is never written. Undecided
+/// (no lock taken in this process: a unit test), any existing directory is.
+fn writable_under(decided: Option<&Option<PathBuf>>, dir: &Path) -> bool {
+    match decided {
+        Some(Some(locked)) => std::fs::canonicalize(dir).is_ok_and(|real| &real == locked),
+        Some(None) => false,
+        None => cfg!(test),
+    }
 }
 
 /// Where the received-request log may be written this run.
@@ -667,5 +696,21 @@ mod tests {
         assert!(check_no_second_key(&fresh, true, &cwd).is_ok());
         // A fresh node with nothing anywhere starts.
         assert!(check_no_second_key(&fresh, false, &tmp("empty-cwd")).is_ok());
+    }
+
+    #[test]
+    fn only_the_directory_locked_at_start_is_written() {
+        let base = std::env::temp_dir().join(format!("received-writable-{}", std::process::id()));
+        let (locked, other) = (base.join("locked"), base.join("made-later"));
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let decided = Some(std::fs::canonicalize(&locked).unwrap());
+        assert!(writable_under(Some(&decided), &locked));
+        assert!(
+            !writable_under(Some(&decided), &other),
+            "a directory made after start"
+        );
+        assert!(!writable_under(Some(&None), &locked), "off for this run");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

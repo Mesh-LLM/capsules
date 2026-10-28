@@ -174,7 +174,7 @@ fn records_among_first_leaves(ledger_dir: &Path, leaves: u64) -> u64 {
 const MAX_ASKED_OF_YOU_ENTRIES: usize = 500;
 
 /// This node's log of requests made of it (`<dir>/received_log.jsonl`,
-/// written by the plugin's `received_log`): one line per request it
+/// written by `evidence_answer::log_received`): one line per request it
 /// answered, refused or received. Newest [`MAX_ASKED_OF_YOU_ENTRIES`] lines, oldest first; a line
 /// that is not an object with string `ts`, `path` and `status` is dropped.
 pub(crate) fn read_received_log(dir: &Path) -> Vec<Value> {

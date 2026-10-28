@@ -2226,7 +2226,7 @@ mod tests {
         };
         got.insert("exchange_corroboration".into(), wire);
         let lines: Vec<Value> =
-            std::fs::read_to_string(log.path().join(crate::received_log::RECEIVED_LOG_FILE))
+            std::fs::read_to_string(log.path().join(evidencebook::received::RECEIVED_LOG_FILE))
                 .unwrap()
                 .lines()
                 .map(|line| Value::String(line.into()))

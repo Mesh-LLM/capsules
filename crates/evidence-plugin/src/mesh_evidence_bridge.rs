@@ -23,7 +23,7 @@
 //! key no host binds) are answered at once, each from its own pool, so
 //! strangers cannot crowd a counterparty out. One more is declined with a
 //! signed `policy_declined` before the ledger is read. Every answer is logged to
-//! the "asked of you" log (`received_log`).
+//! the "asked of you" log (`evidence_answer::log_received`).
 //!
 //! An `adjudicate` request (a requester asking this node to referee two
 //! twins) is not a -00 subject: it is plugin-internal, carried on the same
