@@ -1046,6 +1046,20 @@ mod tests {
 
     impl Node {
         fn ask(&self, request: &Value) -> (Vec<u8>, Value) {
+            let (bytes, outcome) = self.outcome(request, None);
+            let Outcome::Answered { wire, .. } = outcome else {
+                panic!("{request}: {outcome:?}");
+            };
+            (bytes, wire)
+        }
+
+        /// What the node does with `request`, logging it to the received log
+        /// in `log_dir` when one is given.
+        fn outcome(
+            &self,
+            request: &Value,
+            log_dir: Option<&std::path::Path>,
+        ) -> (Vec<u8>, Outcome) {
             let bytes = serde_json::to_vec(request).unwrap();
             let announced = announced_keys();
             let replay = crate::requester_auth::ReplayCache::default();
@@ -1070,13 +1084,10 @@ mod tests {
                         node_id: Some(RESPONDER_NODE),
                         policy_digest: None,
                     },
-                    None,
+                    log_dir,
                 )
             });
-            let Outcome::Answered { wire, .. } = outcome else {
-                panic!("{request}: {outcome:?}");
-            };
-            (bytes, wire)
+            (bytes, outcome)
         }
 
         fn pin(&self, i: usize) -> Value {
@@ -1906,5 +1917,169 @@ mod tests {
             ),
             "{outcome:?}"
         );
+    }
+
+    /// Every answer form this node gives, refusals included, and the
+    /// received-log line each one writes, byte for byte as Mesh-LLM/capsules-plugin 5d2d102 gave
+    /// them: the baseline the move onto the evidencebook crate
+    /// (evidencebook#35) is held to. Artifact octets, material kinds and
+    /// order, witness receipts and signed refusals all sit in the wire.
+    /// `CAPSULES_WRITE_ANSWER_FIXTURE=1` rewrites the fixture instead (only
+    /// ever from that commit); its SHA-256 is pinned below, so a rewrite
+    /// shows in review.
+    #[test]
+    fn every_answer_form_is_byte_for_byte_the_baseline() {
+        const FIXTURE: &str = "tests/fixtures/evidence_answers_5d2d102.json";
+        const FIXTURE_SHA256: &str =
+            "57b3ebb022b27e2497a6255ef3f4234133809742bd775c930ff1c88ef91ba792";
+        let node = node();
+        let last = node.anchors.len() - 1;
+        let half = hex::encode(Sha256::digest(b"the counterparty's own half"));
+        let leaves = leaf_count(node_size(&node, last)).unwrap();
+        let mut cases: Vec<(String, Value)> = vec![
+            (
+                "range_last".into(),
+                json!({"subject": {"range": [leaves.saturating_sub(10), leaves - 1]}, "coverage": node.pin(last)}),
+            ),
+            (
+                "full_history_first".into(),
+                json!({"subject": {"full_history": null}, "coverage": node.pin(0)}),
+            ),
+            (
+                "full_history_last".into(),
+                json!({"subject": {"full_history": null}, "coverage": node.pin(last)}),
+            ),
+            (
+                "range_fresh".into(),
+                json!({"subject": {"range": [1, 3]}, "coverage": {"min_freshness": 1}}),
+            ),
+            (
+                "range".into(),
+                json!({"subject": {"range": [0, 2]}, "coverage": node.pin(1)}),
+            ),
+            (
+                "correlation".into(),
+                json!({"subject": {"correlation": "n-1"}, "coverage": node.pin(1)}),
+            ),
+            (
+                "exchange".into(),
+                json!({"subject": {"exchange": half}, "coverage": {"expected_pin": half}}),
+            ),
+            (
+                "checkpoints".into(),
+                json!({"subject": {"checkpoints": null}, "coverage": node.pin(last)}),
+            ),
+            (
+                "checkpoints_time".into(),
+                json!({"subject": {"checkpoints": null}, "coverage": {"min_freshness": "2026-01-01T00:00:00Z"}}),
+            ),
+            (
+                "history_card".into(),
+                json!({"subject": {"full_history": null}, "coverage": node.pin(last), "derivation": "history_card/1"}),
+            ),
+            (
+                "history_card_checkpoints".into(),
+                json!({"subject": {"checkpoints": null}, "coverage": node.pin(1), "derivation": "history_card/1"}),
+            ),
+            (
+                "served_summary".into(),
+                json!({"subject": {"full_history": null}, "coverage": node.pin(last), "derivation": "served_summary/1"}),
+            ),
+            (
+                "served_summary_first".into(),
+                json!({"subject": {"full_history": null}, "coverage": node.pin(0), "derivation": "served_summary/1"}),
+            ),
+            (
+                "refused_unknown_pin".into(),
+                json!({"subject": {"full_history": null}, "coverage": {"expected_pin": "00".repeat(32)}}),
+            ),
+            (
+                "refused_unknown_derivation".into(),
+                json!({"subject": {"full_history": null}, "coverage": node.pin(last), "derivation": "no_such/1"}),
+            ),
+            (
+                "refused_range_past_the_log".into(),
+                json!({"subject": {"range": [leaves, leaves + 2]}, "coverage": node.pin(last)}),
+            ),
+            (
+                "refused_unknown_record".into(),
+                json!({"subject": {"record": "00".repeat(32)}, "coverage": node.pin(last)}),
+            ),
+        ];
+        // Both sides of the first checkpoint, padding and the never-served
+        // record included: a refusal is a baseline answer too.
+        for (i, record) in corpus_ledger().iter().enumerate().take(24) {
+            for anchor in [0, last] {
+                cases.push((
+                    format!("record_{i}_at_{anchor}"),
+                    json!({"subject": {"record": record["capsule_id"]}, "coverage": node.pin(anchor)}),
+                ));
+            }
+        }
+        let log = tempfile::tempdir().unwrap();
+        let mut got = serde_json::Map::new();
+        for (name, request) in &cases {
+            let (_, outcome) = node.outcome(request, Some(log.path()));
+            let wire = match outcome {
+                Outcome::Answered { wire, .. } | Outcome::Refused { wire, .. } => wire,
+                Outcome::Unanswerable(why) => panic!("{name}: {why}"),
+            };
+            got.insert(name.clone(), wire);
+        }
+        let lines: Vec<Value> =
+            std::fs::read_to_string(log.path().join(crate::received_log::RECEIVED_LOG_FILE))
+                .unwrap()
+                .lines()
+                .map(|line| Value::String(line.into()))
+                .collect();
+        assert_eq!(
+            lines.len(),
+            cases.len(),
+            "one received-log line per request"
+        );
+        got.insert("received_log".into(), Value::Array(lines));
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
+        if std::env::var_os("CAPSULES_WRITE_ANSWER_FIXTURE").is_some() {
+            std::fs::write(
+                &path,
+                serde_json::to_string_pretty(&Value::Object(got)).unwrap() + "\n",
+            )
+            .unwrap();
+            return;
+        }
+        let text = std::fs::read(&path).unwrap();
+        assert_eq!(
+            hex::encode(Sha256::digest(&text)),
+            FIXTURE_SHA256,
+            "the fixture was rewritten"
+        );
+        let want: serde_json::Map<String, Value> = serde_json::from_slice(&text).unwrap();
+        assert_eq!(
+            got.keys().collect::<Vec<_>>(),
+            want.keys().collect::<Vec<_>>()
+        );
+        for (name, wire) in &want {
+            assert_eq!(
+                serde_json::to_string(&got[name]).unwrap(),
+                serde_json::to_string(wire).unwrap(),
+                "{name}"
+            );
+        }
+    }
+
+    /// The MMR size of the node's checkpoint `i`, from its pinned answer.
+    fn node_size(node: &Node, i: usize) -> u64 {
+        let (_, reply) =
+            node.ask(&json!({"subject": {"checkpoints": null}, "coverage": node.pin(i)}));
+        let list = serde_json::from_slice::<Value>(&envelope_of(&reply).artifact).unwrap()
+            ["checkpoints"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let statement = hex::decode(list.last().unwrap().as_str().unwrap()).unwrap();
+        verify_checkpoint_cose_offline(&statement)
+            .decoded
+            .unwrap()
+            .mmr_size
     }
 }
