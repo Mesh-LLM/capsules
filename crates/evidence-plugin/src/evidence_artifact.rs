@@ -2463,4 +2463,53 @@ mod tests {
             "a citing record past the latest checkpoint moves nothing"
         );
     }
+
+    /// What `build` refuses with where only the builder can refuse: a line
+    /// rewritten after it was indexed is `no_such_subject`, and a record
+    /// the serving checkpoint cannot prove is `policy_declined`, as before
+    /// the answers moved onto evidencebook.
+    #[test]
+    fn the_builders_own_refusals_keep_their_reasons() {
+        use evidence_request::resolve::{self, Resolution};
+        let node = node();
+        let ledger = corpus_ledger();
+        let key_id = hex::encode(key().verifying_key().to_bytes());
+        let ask = |leaf: u64, at: usize, rewrite: bool| {
+            let wire = json!({"subject": {"record": ledger[leaf as usize]["capsule_id"]},
+                              "coverage": node.pin(at)});
+            let bytes = serde_json::to_vec(&wire).unwrap();
+            let req = request::parse_json(&bytes).unwrap();
+            crate::evidence_log::with_index(&node.ledger, &key_id, |index| {
+                if rewrite {
+                    // Same length, another capsule_id: no longer the line indexed.
+                    let path = node.ledger.join(crate::evidence_log::CAPSULES_FILE);
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let id = ledger[leaf as usize]["capsule_id"].as_str().unwrap();
+                    let other: String = id.chars().rev().collect();
+                    std::fs::write(&path, text.replacen(id, &other, 1)).unwrap();
+                }
+                let view = index.view().unwrap();
+                let Resolution::Artifact(resolved) = resolve::resolve(&req, &view) else {
+                    panic!("resolved");
+                };
+                build(
+                    &Build {
+                        request: &req,
+                        request_bytes: &bytes,
+                        resolved: &resolved,
+                        at,
+                        records: &[leaf],
+                        signing_key: &key(),
+                        issued_at: NOW,
+                    },
+                    &view,
+                )
+            })
+            .unwrap()
+        };
+        assert!(ask(2, 0, false).is_ok());
+        // Leaf 20 is under the last checkpoint only.
+        assert_eq!(ask(20, 0, false).unwrap_err(), Reason::PolicyDeclined);
+        assert_eq!(ask(2, 0, true).unwrap_err(), Reason::NoSuchSubject);
+    }
 }
