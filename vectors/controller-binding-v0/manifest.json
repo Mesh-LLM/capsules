@@ -1,0 +1,13 @@
+{
+  "set": "aac-controller-binding-v0",
+  "status": "Conformance vectors for the informational Controller Binding v0 (spec/controller-binding-v0.md) and its use in issuer independence (evidence-interop/0, §6.7.4). Every key is a test key derived from a public seed; never use one for anything else.",
+  "spec": "spec/controller-binding-v0.md",
+  "generator": "python/scripts/generate_controller_binding_v0_vectors.py",
+  "files": [
+    {
+      "path": "vectors.json",
+      "sha256": "6cfec11e4fc782046c50e33990cf998c12b9b60fc8055ec06c6eb42088cbf943",
+      "count": 14
+    }
+  ]
+}

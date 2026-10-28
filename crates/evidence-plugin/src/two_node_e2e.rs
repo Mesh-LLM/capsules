@@ -174,6 +174,7 @@ fn push_to_requester(
         peer_keys: Some(peer_keys),
         record_at_completion_off: false,
         rejected_log_limit: MAX_REJECTED_LOG_BYTES,
+        announced: crate::peer_keys::NONE_ANNOUNCED,
     };
     let reply = receive(&node, body.to_string().as_bytes(), Some(sender), NOW)
         .expect("the receiver's own writes succeed");

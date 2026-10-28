@@ -10,6 +10,24 @@
   other side of that exchange; the public checkpoint list shows when exchanges ended.
   `share_adjudications`, `adjudicate_differing_twins`, `share_standard_history` and
   `share_history_segments` keep their defaults. Mesh-LLM/capsules-plugin#68.
+- **Pushes and evidence requests are accepted on the sender's evidence key, not the peer id they
+  arrive under (D-34).** A half signed by a key this node knows is held whatever peer id the push
+  declares, and a push under a known peer id signed by an unknown key is refused
+  `signature_unverified`; that refusal now names the refused key (`refused_key_id`) under the
+  node's signature. A signed request's asker is every node its key is bound to, so a counterparty
+  whose transport id rotated still gets its records. A key is known when a host announced it for
+  some peer, when `CAPSULES_PEER_KEYS` lists it under any name (a stopgap for a node with no stable
+  peer id, such as a client-only node; it now authenticates requests too), or when the sender
+  carries a controller declaration: a `controller-binding/0` record (Controller Binding v0,
+  `same_controller_asserted` under `dual_signature/0`, inside its window) binding its key to a key
+  known one of the other two ways, in a push bundle's or a signed request's `controller_binding`
+  member. A key that a carried declaration binds to the receiving node's own key is refused,
+  however else it is known. A served half's named server must be a peer its key is bound to.
+  The `counterparty_half` citing record names the sender's key and how it was accepted
+  (`sender_key_id`, `accepted_via`: `host_announced`, `operator_stopgap` or
+  `controller_declaration`, with the binding's digest); nothing decides on it. A receiver on an
+  earlier release refuses a bundle that carries a declaration `bundle_malformed`. Fixtures for each
+  case are in `vectors/evidence-key-acceptance/`. Mesh-LLM/capsules-plugin#69.
 
 ## 0.1.5
 

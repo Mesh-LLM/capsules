@@ -38,7 +38,8 @@ repository, for macOS arm64 and Linux x86_64/arm64.
 - By default (set `share_record_at_completion = off` to stop it), when mesh-llm identifies the other
   side of an exchange, the node sends it its own record at completion.
 - A record pushed by the other side is received and checked in-process: the
-  sender's announced key, the signature, the claims, and a bundle's proof and
+  key that signed it (known to this node whatever peer id it arrives under),
+  the signature, the claims, and a bundle's proof and
   checkpoint. It is held only if every check passes; anything else gets a
   signed refusal. Record requests are answered in-process too, under the
   sharing policy (see [docs/SHARING-POLICY.md](docs/SHARING-POLICY.md)).

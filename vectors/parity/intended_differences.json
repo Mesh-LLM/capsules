@@ -65,6 +65,65 @@
    ],
    "why": "The same sender's record, already held, is not stored again: a resent push (a retry or a replay) is acknowledged as before, but appends nothing to received-capsules.jsonl or received-provenance.jsonl. The Python door appends both lines on every resend, so a peer resending one genuine record could grow the held stores without bound. A bundle's proof is still judged and held on its own terms."
   },
+  "bare_unknown_sender": {
+   "answers": [
+    {
+     "reply": {
+      "status": "received"
+     },
+     "appended": {
+      "received-capsules.jsonl": [
+       {
+        "action_id": "serve_exchange/c79b9e3c-75b1-4ddf-b917-d38da457a94b",
+        "action_type": "decide",
+        "assurance": {
+         "attestation_mode": "self_attested",
+         "effect_mode": "confirmed",
+         "ledger_mode": "standalone"
+        },
+        "canonicalization_id": "jcs",
+        "capsule_id": "d804c0bfc4df59def6edce207cefea1d6e4656792da7a1aeb3586017f2c977d5",
+        "developer": "mesh-node@v1",
+        "disposition": {
+         "approver": "policy",
+         "decision": "accept",
+         "human_disposed": false,
+         "verdict_class": "confirmed"
+        },
+        "effect": {
+         "effect_attestation": "runtime_claimed",
+         "request_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+         "response_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+         "status": "confirmed",
+         "type": "inference_completion"
+        },
+        "format_version": "4",
+        "key_id": "1d2ffc84c4a0bbeee8bae343e01feff0419e9f9f989cc5dc6ed3bdac3e40cbb9",
+        "model_attestation": {
+         "compute_attestation": {
+          "note": "half"
+         }
+        },
+        "operator": "op",
+        "signature": "d284584ca30378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d69640458201d2ffc84c4a0bbeee8bae343e01feff0419e9f9f989cc5dc6ed3bdac3e40cbb90127a05820d804c0bfc4df59def6edce207cefea1d6e4656792da7a1aeb3586017f2c977d558404b1c6168643add502ffdbe7568016acbad69bf6b478705347cb8aaf516e5bea9d8a1e13c93c7f026b4c4238709550645678e06990b1fa6f2979ba5fb0d68ae01",
+        "spec_version": "draft-mih-scitt-agent-action-capsule-05",
+        "timestamp": "2026-09-29T21:29:03.254362Z"
+       }
+      ],
+      "received-provenance.jsonl": [
+       {
+        "capsule_id": "d804c0bfc4df59def6edce207cefea1d6e4656792da7a1aeb3586017f2c977d5",
+        "received_from": "m9",
+        "via": "push",
+        "received_at": "2026-09-29T00:00:00Z",
+        "signature_ok": true
+       }
+      ]
+     }
+    }
+   ],
+   "why": "The identity a receiver accepts is the half's evidence key, not the sender id the push declares (D-34, Mesh-LLM/capsules-plugin#69): a half signed by a key the registry gives one peer is held whatever id it arrives under, so a node whose transport id rotates is not refused. The Python door looks the key up by the declared id and refuses an id absent from the registry. A known id with an unknown key is still refused (bare_key_mismatch)."
+  },
   "bundle_version_bool": {
    "answers": [
     {

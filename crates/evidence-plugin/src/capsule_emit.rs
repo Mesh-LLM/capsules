@@ -2077,6 +2077,8 @@ mod tests {
             digest_match: None,
             foreign_agent_input_digest: Some("a".repeat(64).leak()),
             foreign_agent_output_digest: None,
+            sender_key_id: None,
+            accepted_via: None,
         };
         let citing = state
             .emit_citing_record(&prov)
@@ -2160,6 +2162,8 @@ mod tests {
             digest_match: None,
             foreign_agent_input_digest: None,
             foreign_agent_output_digest: None,
+            sender_key_id: None,
+            accepted_via: None,
         };
         let half_citation = state.emit_citing_record(&prov).unwrap().unwrap();
         let citation = InclusionCitation {

@@ -21,9 +21,9 @@
 //! the transport level. On the stream, never inside the body, one line comes
 //! before it: the pusher's self-declared mesh peer id, then `\n`, then the
 //! body unchanged. The responder splits on the first `\n`. The receiver
-//! checks the record's signature against the key announced for that id
-//! before it holds anything; this module never itself authenticates
-//! anything, it only carries the claim and the bytes.
+//! checks the record's signature under a key it accepts, whatever id was
+//! declared (D-34), before it holds anything; this module never itself
+//! authenticates anything, it only carries the claim and the bytes.
 //!
 //! **Why a self-declared id, not a mesh-authenticated one.** `mesh-llm-plugin
 //! 0.76.2`'s `OpenStreamRequest` (verified against the vendored crate
@@ -314,7 +314,7 @@ async fn bridge_inbound_record_push(
     // same door (`crate::referee::hold`); when it is held, this node's
     // `adjudication_received` record is sealed before the courier is told.
     if is_verdict_delivery(&capsule_bytes) {
-        let reply = receive_pushed_record(&capsules, &sender_peer_id, &capsule_bytes).await?;
+        let (reply, _) = receive_pushed_record(&capsules, &sender_peer_id, &capsule_bytes).await?;
         let reply_bytes = match reply.get("adjudication") {
             Some(held) if reply.get("status").and_then(|s| s.as_str()) == Some("received") => {
                 match seal_received_verdict(&capsules, held) {
@@ -334,7 +334,8 @@ async fn bridge_inbound_record_push(
         write_half.shutdown().await?;
         return Ok(());
     }
-    let reply = receive_pushed_record(&capsules, &sender_peer_id, &capsule_bytes).await?;
+    let (reply, accepted_key) =
+        receive_pushed_record(&capsules, &sender_peer_id, &capsule_bytes).await?;
     let response_bytes = serde_json::to_vec(&reply)?;
 
     // SEAL BEFORE ACK (the ack-before-seal window fix): the receiver is the
@@ -347,7 +348,14 @@ async fn bridge_inbound_record_push(
     // trusting an ack for a half our chain never cited. Awaited inline (no
     // detached task), so a failure is handled before any reply exists.
     let reply_bytes = if accepted(&reply) {
-        match seal_citing_records_for_push(&capsules, &sender_peer_id, &capsule_bytes, &reply).await
+        match seal_citing_records_for_push(
+            &capsules,
+            &sender_peer_id,
+            &capsule_bytes,
+            &reply,
+            accepted_key.as_ref(),
+        )
+        .await
         {
             Ok(()) => {
                 collect_stage_record(&splits, &sender_peer_id, &capsule_bytes);
@@ -419,9 +427,12 @@ async fn receive_pushed_record(
     capsules: &Arc<CapsuleState>,
     sender_peer_id: &str,
     body: &[u8],
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<Received> {
     receive_record_via(capsules, sender_peer_id, body, "push").await
 }
+
+/// The receiver's reply, and how the half's key was accepted when it was.
+type Received = (serde_json::Value, Option<crate::peer_keys::Accepted>);
 
 /// [`receive_pushed_record`] for a record that came by `via`.
 async fn receive_record_via(
@@ -429,11 +440,14 @@ async fn receive_record_via(
     sender_peer_id: &str,
     body: &[u8],
     via: &'static str,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<Received> {
     let capsules = capsules.clone();
     let sender_peer_id = sender_peer_id.to_string();
     let body = body.to_vec();
-    let peer_keys = crate::peer_keys::registry();
+    // One read of each source: the receiver merges them, so a host answer
+    // landing between two reads cannot pose as an operator entry.
+    let peer_keys = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
+    let announced = crate::peer_keys::announced::snapshot();
     // `share_record_at_completion` governs records pushed at completion; a
     // record this node asked for is held because its operator asked.
     let record_at_completion_off =
@@ -443,6 +457,7 @@ async fn receive_record_via(
             ledger_dir: capsules.ledger_dir(),
             signing_key: capsules.signing_key(),
             peer_keys: peer_keys.as_deref(),
+            announced: &announced,
             record_at_completion_off,
             rejected_log_limit: crate::record_push_receive::MAX_REJECTED_LOG_BYTES,
         };
@@ -501,12 +516,13 @@ async fn seal_citing_records_for_push(
     sender_peer_id: &str,
     body_bytes: &[u8],
     reply: &serde_json::Value,
+    accepted_key: Option<&crate::peer_keys::Accepted>,
 ) -> anyhow::Result<()> {
     let body: serde_json::Value = serde_json::from_slice(body_bytes)
         .map_err(|e| anyhow::anyhow!("an unparseable body was received: {e}"))?;
     let half = pushed_half(&body);
     let half_bytes = serde_json::to_vec(half)?;
-    seal_citing_record(capsules, sender_peer_id, &half_bytes, "push").await?;
+    seal_citing_record(capsules, sender_peer_id, &half_bytes, "push", accepted_key).await?;
     if let Some(inclusion) = received_inclusion(reply)? {
         let half_id = half
             .get("capsule_id")
@@ -534,6 +550,7 @@ async fn seal_citing_record(
     sender_peer_id: &str,
     capsule_bytes: &[u8],
     via: &'static str,
+    accepted_key: Option<&crate::peer_keys::Accepted>,
 ) -> anyhow::Result<()> {
     let foreign: serde_json::Value = serde_json::from_slice(capsule_bytes)
         // A received body that does not parse? The receiver refuses
@@ -548,6 +565,11 @@ async fn seal_citing_record(
     let received_at = crate::producer::timestamp::utc_now_minute();
     let foreign_input = foreign_digest(&foreign, "agent_input_digest").map(str::to_string);
     let foreign_output = foreign_digest(&foreign, "agent_output_digest").map(str::to_string);
+    let sender_key_id = accepted_key
+        .and_then(|_| foreign.get("key_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let accepted_via = accepted_key.map(|a| a.via.clone());
     let capsules = capsules.clone();
 
     let sealed = tokio::task::spawn_blocking(move || {
@@ -565,6 +587,8 @@ async fn seal_citing_record(
             digest_match: None,
             foreign_agent_input_digest: foreign_input.as_deref(),
             foreign_agent_output_digest: foreign_output.as_deref(),
+            sender_key_id: sender_key_id.as_deref(),
+            accepted_via: accepted_via.as_ref(),
         };
         capsules
             .emit_citing_record(&prov)
@@ -598,11 +622,18 @@ pub(crate) async fn hold_asked_record(
     peer_id: &str,
     record_bytes: &[u8],
 ) -> anyhow::Result<bool> {
-    let reply = receive_record_via(capsules, peer_id, record_bytes, "ask").await?;
+    let (reply, accepted_key) = receive_record_via(capsules, peer_id, record_bytes, "ask").await?;
     if !accepted(&reply) {
         return Ok(false);
     }
-    seal_citing_record(capsules, peer_id, record_bytes, "ask").await?;
+    seal_citing_record(
+        capsules,
+        peer_id,
+        record_bytes,
+        "ask",
+        accepted_key.as_ref(),
+    )
+    .await?;
     Ok(true)
 }
 
@@ -836,7 +867,7 @@ pub(crate) async fn send_push(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -1113,7 +1144,7 @@ mod tests {
     /// `CapsuleState`, cover it with a push-time checkpoint over the same
     /// ledger, build the bundle -- and the bundle's proof verifies against its
     /// checkpoint, which is signed by the half's own key.
-    fn real_bundle(dir: &std::path::Path) -> serde_json::Value {
+    pub(crate) fn real_bundle(dir: &std::path::Path) -> serde_json::Value {
         use crate::producer::anchor::AnchorClient;
         use crate::producer::checkpoint::{CheckpointCadenceConfig, CheckpointState};
         let capsules = CapsuleState::open(dir, "rust-node").expect("open capsule state");

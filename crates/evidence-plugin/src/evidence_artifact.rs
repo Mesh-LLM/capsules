@@ -1064,6 +1064,7 @@ mod tests {
                         keys: crate::requester_auth::Keys {
                             announced: &announced,
                             configured: None,
+                            own_key: None,
                         },
                         replay: &replay,
                         node_id: Some(RESPONDER_NODE),
@@ -1785,6 +1786,7 @@ mod tests {
                     keys: crate::requester_auth::Keys {
                         announced: &announced,
                         configured: None,
+                        own_key: None,
                     },
                     replay: &replay,
                     node_id: Some(RESPONDER_NODE),
@@ -1884,6 +1886,7 @@ mod tests {
                 keys: crate::requester_auth::Keys {
                     announced: &announced,
                     configured: None,
+                    own_key: None,
                 },
                 replay: &replay,
                 node_id: Some(RESPONDER_NODE),

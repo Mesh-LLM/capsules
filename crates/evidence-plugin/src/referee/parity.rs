@@ -252,6 +252,7 @@ fn run_hold(case: &Value) -> Vec<Value> {
         peer_keys: node.peer_keys.as_deref(),
         record_at_completion_off: node.record_at_completion_off,
         rejected_log_limit: crate::record_push_receive::MAX_REJECTED_LOG_BYTES,
+        announced: crate::peer_keys::NONE_ANNOUNCED,
     };
     case["pushes"]
         .as_array()

@@ -123,7 +123,12 @@ pub(crate) fn normalize_reply(
             return Some(false);
         }
         let sig: [u8; 64] = hex::decode(text("sig")).ok()?.try_into().ok()?;
-        let body = json!({"issued_at": text("issued_at"), "reason": reason, "request_digest": text("request_digest")});
+        let mut body = json!({"issued_at": text("issued_at"), "reason": reason, "request_digest": text("request_digest")});
+        // A `signature_unverified` refusal also names the refused half's key
+        // under the signature (D-34): checked, not compared.
+        if let Some(refused) = reply.get("refused_key_id") {
+            body["refused_key_id"] = refused.clone();
+        }
         Some(
             node_key
                 .verify_strict(canonical(&body).as_bytes(), &Signature::from_bytes(&sig))
@@ -159,6 +164,7 @@ fn run_case(case: &Value, now: &str, seed: u8) -> Vec<Value> {
         peer_keys: node["peer_keys_env"].as_str(),
         record_at_completion_off: node["record_at_completion"].as_str() == Some("off"),
         rejected_log_limit: crate::record_push_receive::MAX_REJECTED_LOG_BYTES,
+        announced: crate::peer_keys::NONE_ANNOUNCED,
     };
     case["pushes"]
         .as_array()

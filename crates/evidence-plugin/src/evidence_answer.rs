@@ -315,7 +315,7 @@ fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Ask
         Ok(principal) => principal,
         Err(reason) => return refuse(reason, kind),
     };
-    let principal_node = principal.as_ref().map(|p| p.node_id.as_str());
+    let principal_nodes = principal.as_ref().map_or(&[][..], |p| &p.node_ids[..]);
 
     let key_id = hex::encode(responder.signing_key.verifying_key().to_bytes());
     let built = evidence_log::with_index(responder.ledger_dir, &key_id, |index| {
@@ -323,7 +323,7 @@ fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Ask
         Ok::<_, std::io::Error>(answer_from(
             &req,
             request_bytes,
-            principal_node,
+            principal_nodes,
             responder,
             &view,
         ))
@@ -529,7 +529,7 @@ pub(crate) fn ungated<T>(f: impl FnOnce() -> T) -> T {
 fn answer_from(
     req: &Request,
     request_bytes: &[u8],
-    principal: Option<&str>,
+    principal: &[String],
     responder: &Responder<'_>,
     view: &LogView<'_>,
 ) -> Result<Value, Reason> {
@@ -645,7 +645,7 @@ fn answer_from(
 fn corroboration_answer(
     req: &Request,
     request_bytes: &[u8],
-    principal: Option<&str>,
+    principal: &[String],
     responder: &Responder<'_>,
     view: &LogView<'_>,
 ) -> Result<Value, Reason> {
@@ -668,12 +668,11 @@ fn corroboration_answer(
     }
     if needs_requester(req, responder) && policy_gate_applies() {
         if cfg!(feature = "mutant-corroboration-filters-per-asker") {
-            let asker = principal.map(str::trim);
             records.retain(|&i| {
                 index
                     .leaves
                     .get(i as usize)
-                    .is_some_and(|l| l.counterparty.as_deref() == asker)
+                    .is_some_and(|l| names(principal, l.counterparty.as_deref()))
             });
         } else if !may_serve_all(index, &records, principal, "counterparties") {
             return Err(Reason::NotAuthorized);
@@ -721,16 +720,26 @@ fn serving_position(index: &LedgerIndex, anchor: &ResolvedAnchor) -> Result<usiz
     .ok_or(Reason::CoverageUnsatisfiable)
 }
 
-/// Whether some record of this node names `principal`, the node a signed
-/// request proved it came from, as the other side of its exchange (a local
-/// block or an owner-maintenance record names no counterparty it was
-/// exchanged with, and padding names none).
-fn is_counterparty(index: &LedgerIndex, principal: Option<&str>) -> bool {
-    let Some(asker) = principal.map(str::trim).filter(|id| !id.is_empty()) else {
-        return false;
-    };
+/// Whether `counterparty` is one of `principal`, the nodes a signed
+/// request's key is bound to (`requester_auth::Principal::node_ids`): the
+/// key is the asker's identity, and each node it is bound to is the asker
+/// (D-34).
+fn names(principal: &[String], counterparty: Option<&str>) -> bool {
+    counterparty.is_some_and(|named| {
+        principal.iter().any(|node| {
+            let node = node.trim();
+            !node.is_empty() && node == named
+        })
+    })
+}
+
+/// Whether some record of this node names one of `principal`, the nodes a
+/// signed request proved it came from, as the other side of its exchange
+/// (a local block or an owner-maintenance record names no counterparty it
+/// was exchanged with, and padding names none).
+fn is_counterparty(index: &LedgerIndex, principal: &[String]) -> bool {
     index.leaves.iter().any(|leaf| {
-        !leaf.padding && !leaf.never_leaves && leaf.counterparty.as_deref() == Some(asker)
+        !leaf.padding && !leaf.never_leaves && names(principal, leaf.counterparty.as_deref())
     })
 }
 
@@ -739,7 +748,7 @@ fn is_counterparty(index: &LedgerIndex, principal: Option<&str>) -> bool {
 fn may_serve_all(
     index: &LedgerIndex,
     records: &[u64],
-    principal: Option<&str>,
+    principal: &[String],
     history_segments: &str,
 ) -> bool {
     if records.is_empty() {
@@ -748,15 +757,15 @@ fn may_serve_all(
     if history_segments == "off" {
         return false;
     }
-    let asker = principal.map(str::trim).filter(|id| !id.is_empty());
+    let proven = principal.iter().any(|node| !node.trim().is_empty());
     records.iter().all(|&i| {
         let Some(leaf) = index.leaves.get(i as usize) else {
             return false;
         };
         !leaf.never_leaves
-            && asker.is_some()
+            && proven
             && (history_segments == "peers"
-                || (!leaf.padding && leaf.counterparty.as_deref() == asker))
+                || (!leaf.padding && names(principal, leaf.counterparty.as_deref())))
     })
 }
 
@@ -1023,6 +1032,7 @@ pub(crate) mod tests {
                 keys: Keys {
                     announced: &announced,
                     configured: None,
+                    own_key: None,
                 },
                 replay,
                 node_id: Some(RESPONDER),
@@ -1241,6 +1251,7 @@ pub(crate) mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: Some(RESPONDER),
@@ -1268,6 +1279,7 @@ pub(crate) mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: Some(RESPONDER),
@@ -1720,6 +1732,7 @@ pub(crate) mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: Some(RESPONDER),
@@ -1750,12 +1763,17 @@ pub(crate) mod tests {
         let dir = node(&corpus_ledger());
         let key_id = hex::encode(key().verifying_key().to_bytes());
         evidence_log::with_index(dir.path(), &key_id, |index| {
-            assert!(is_counterparty(index, Some("node-a")));
-            assert!(is_counterparty(index, Some(" node-b ")));
-            assert!(!is_counterparty(index, Some("node")));
-            assert!(!is_counterparty(index, Some("node-z")));
-            assert!(!is_counterparty(index, Some(" ")));
-            assert!(!is_counterparty(index, None));
+            let one = |id: &str| vec![id.to_string()];
+            assert!(is_counterparty(index, &one("node-a")));
+            assert!(is_counterparty(index, &one(" node-b ")));
+            assert!(!is_counterparty(index, &one("node")));
+            assert!(!is_counterparty(index, &one("node-z")));
+            assert!(!is_counterparty(index, &one(" ")));
+            assert!(!is_counterparty(index, &[]));
+            assert!(
+                is_counterparty(index, &["node-z".into(), "node-a".into()]),
+                "a key bound to several nodes is each of them"
+            );
             Ok::<_, std::io::Error>(())
         })
         .unwrap()
@@ -1843,6 +1861,142 @@ pub(crate) mod tests {
         assert_eq!(verified["state"], json!("artifact"), "{verified}");
     }
 
+    /// `request` for node-a's record, asked of a node whose registry is
+    /// `announced` and `configured`, under the default sharing settings.
+    fn ask_keyed(
+        dir: &Path,
+        bytes: &[u8],
+        announced: &std::collections::BTreeMap<String, String>,
+        configured: Option<&str>,
+    ) -> Outcome {
+        let key = key();
+        answer(
+            bytes,
+            &Responder {
+                ledger_dir: dir,
+                signing_key: &key,
+                now: NOW,
+                history_segments: crate::share_policy::history_segments_for(None),
+                share_standard_history: crate::share_policy::shares_standard_history_for(None),
+                share_exchange_corroboration: false,
+                keys: Keys {
+                    announced,
+                    configured,
+                    own_key: None,
+                },
+                replay: &ReplayCache::default(),
+                node_id: Some(RESPONDER),
+            },
+        )
+    }
+
+    /// D-34: a request is accepted on the asker's evidence key, not on the
+    /// peer id it asks under. node-a's key, announced again under a new id
+    /// (its transport id rotated) and stating that id, is still the
+    /// counterparty the record names.
+    #[test]
+    fn a_counterpartys_key_asking_under_a_new_transport_id_is_answered() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let ka = key_id_of(&asker_key("node-a"));
+        let rotated = std::collections::BTreeMap::from([
+            ("node-a".to_string(), ka.clone()),
+            ("node-a-restarted".to_string(), ka),
+        ]);
+        let mut request = node_a_record(&ledger);
+        request["requester_id"] = json!("node-a-restarted");
+        let bytes = signed_by("node-a", &request);
+        assert!(
+            matches!(
+                ask_keyed(dir.path(), &bytes, &rotated, None),
+                Outcome::Answered { .. }
+            ),
+            "the key's every node is the asker"
+        );
+        let only_new = std::collections::BTreeMap::from([(
+            "node-a-restarted".to_string(),
+            key_id_of(&asker_key("node-a")),
+        )]);
+        assert_eq!(
+            refused(&ask_keyed(dir.path(), &bytes, &only_new, None)),
+            Some(Reason::NotAuthorized),
+            "a key bound to no node a record names is no counterparty"
+        );
+    }
+
+    /// The `CAPSULES_PEER_KEYS` stopgap: a key the operator lists, with no
+    /// host announcing it, authenticates a request as the node its entry
+    /// names (the Muse VM, which has no stable transport id).
+    #[test]
+    fn an_operator_listed_key_is_the_counterparty_its_entry_names() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let bytes = signed_by("node-a", &node_a_record(&ledger));
+        let none = std::collections::BTreeMap::new();
+        assert_eq!(
+            refused(&ask_keyed(dir.path(), &bytes, &none, None)),
+            Some(Reason::NotAuthorized),
+            "no registry: no counterparty"
+        );
+        let configured = format!(r#"{{"node-a": "{}"}}"#, key_id_of(&asker_key("node-a")));
+        assert!(matches!(
+            ask_keyed(dir.path(), &bytes, &none, Some(&configured)),
+            Outcome::Answered { .. }
+        ));
+    }
+
+    /// A key no host announced and no operator listed is accepted when the
+    /// request carries a controller declaration binding it to an accepted
+    /// key: it asks as that key's nodes. A declaration anchored on this
+    /// node's own key binds nothing (Sherlock2's door condition: a binding
+    /// never makes a different counterparty).
+    #[test]
+    fn a_controller_declaration_carries_acceptance_to_the_key_it_binds() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let new_key = SigningKey::from_bytes(&[0x7c; 32]);
+        let announced = announced();
+        let declared = |anchor: &SigningKey, until: &str| {
+            let mut request = node_a_record(&ledger);
+            request[crate::controller_binding::MEMBER] = crate::controller_binding::bind_for_test(
+                anchor,
+                &new_key,
+                "2026-01-01T00:00:00Z",
+                until,
+            );
+            signed_with(&new_key, &request)
+        };
+        assert_eq!(
+            refused(&ask_keyed(
+                dir.path(),
+                &signed_with(&new_key, &node_a_record(&ledger)),
+                &announced,
+                None
+            )),
+            Some(Reason::NotAuthorized),
+            "no declaration: an unknown key"
+        );
+        let bound = declared(&asker_key("node-a"), "2030-01-01T00:00:00Z");
+        assert!(matches!(
+            ask_keyed(dir.path(), &bound, &announced, None),
+            Outcome::Answered { .. }
+        ));
+        let expired = declared(&asker_key("node-a"), "2026-02-01T00:00:00Z");
+        assert_eq!(
+            refused(&ask_keyed(dir.path(), &expired, &announced, None)),
+            Some(Reason::NotAuthorized),
+            "a declaration out of its window is not used"
+        );
+        let mut with_self = announced.clone();
+        with_self.insert(RESPONDER.to_string(), key_id_of(&key()));
+        let on_own = declared(&key(), "2030-01-01T00:00:00Z");
+        assert_eq!(
+            refused(&ask_keyed(dir.path(), &on_own, &with_self, None)),
+            Some(Reason::NotAuthorized),
+            "a declaration anchored on this node's own key is not used"
+        );
+    }
+
     /// evidencebook#69 finding 1, end to end: this node seals a host-served
     /// exchange node-a asked for (the host names node-a as
     /// `requested_by_node_id`), and under the default settings node-a's
@@ -1922,6 +2076,7 @@ pub(crate) mod tests {
                     keys: Keys {
                         announced: &announced,
                         configured: None,
+                        own_key: None,
                     },
                     replay: &ReplayCache::default(),
                     node_id: Some(RESPONDER),
@@ -2131,6 +2286,7 @@ pub(crate) mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: Some(RESPONDER),
@@ -2176,6 +2332,7 @@ pub(crate) mod tests {
                 keys: Keys {
                     announced: &announced,
                     configured: None,
+                    own_key: None,
                 },
                 replay: &replay,
                 node_id: Some(RESPONDER),
@@ -2366,6 +2523,7 @@ pub(crate) mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: None,
@@ -2490,6 +2648,7 @@ pub(crate) mod tests {
                     keys: Keys {
                         announced: &announced,
                         configured: None,
+                        own_key: None,
                     },
                     replay: &replay,
                     node_id: Some(RESPONDER),
@@ -2918,6 +3077,7 @@ pub(crate) mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: Some(RESPONDER),

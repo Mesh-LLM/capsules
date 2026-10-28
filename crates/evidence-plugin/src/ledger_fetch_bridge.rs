@@ -192,11 +192,13 @@ async fn bridge_inbound_ledger_fetch_stream(
     let now = crate::evidence_answer::now_utc();
     let announced = crate::peer_keys::announced::snapshot();
     let configured = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
+    let own_key = hex::encode(capsules.public_key());
     let door = Door {
         now: &now,
         keys: crate::requester_auth::Keys {
             announced: &announced,
             configured: configured.as_deref(),
+            own_key: Some(&own_key),
         },
         replay: crate::requester_auth::replay_cache(),
         own_node: own_node.as_deref(),
@@ -223,7 +225,7 @@ async fn bridge_inbound_ledger_fetch_stream(
 /// proven node; otherwise a record goes only to the node it names as the other side
 /// of its exchange, so a record that names no other side is not served.
 /// `requester_id` is the node the request's signature proved ([`answer`]).
-fn may_serve(record: &Value, requester_id: Option<&str>, history_segments: &str) -> bool {
+fn may_serve(record: &Value, requester: &[String], history_segments: &str) -> bool {
     if history_segments == "off"
         || crate::evidence_panes::is_local_routing_choice(record)
         || record
@@ -234,10 +236,10 @@ fn may_serve(record: &Value, requester_id: Option<&str>, history_segments: &str)
         return false;
     }
     if history_segments == "peers" {
-        return requester_id.is_some();
+        return !requester.is_empty();
     }
     crate::evidence_panes::full_counterparty_node_id(record)
-        .is_some_and(|other_side| requester_id == Some(other_side.as_str()))
+        .is_some_and(|other_side| requester.contains(&other_side))
 }
 
 /// What a request is checked against before the ledger is read.
@@ -314,12 +316,13 @@ fn answer(
         }
         Err(crate::requester_auth::Refused::NotAuthorized) => return not_authorized,
     };
-    let requester_id = principal.as_ref().map(|p| p.node_id.as_str());
+    // Every node the asker's key is bound to (D-34).
+    let requester = principal.as_ref().map_or(&[][..], |p| &p.node_ids[..]);
 
     #[cfg(test)]
     LOOKUPS.with(|n| n.set(n.get() + 1));
     match capsules.lookup(&parsed.capsule_id) {
-        Ok(Some(entry)) if !may_serve(&entry.capsule, requester_id, history_segments) => {
+        Ok(Some(entry)) if !may_serve(&entry.capsule, requester, history_segments) => {
             LedgerFetchResponse::NotAuthorized {
                 capsule_id: parsed.capsule_id,
             }
@@ -501,6 +504,7 @@ mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay,
             own_node: Some(RESPONDER_NODE),

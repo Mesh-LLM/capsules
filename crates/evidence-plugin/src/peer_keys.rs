@@ -3,8 +3,10 @@
 //! A record's own `key_id` and `signature` prove that the holder of that key
 //! signed that exact `capsule_id`. They do not prove who holds the key. This
 //! registry is the other half: a map from a mesh peer id (its full endpoint
-//! id) to the `key_id` that peer is known to sign with, so a push that
-//! declares one peer but is signed with some other key is refused.
+//! id) to the `key_id` that peer is known to sign with. The key is the
+//! identity a node accepts, and the peer id a push or request arrives under
+//! is a hint (D-34): [`accepted_via`] accepts a key any entry gives, or one a
+//! carried controller declaration binds to such a key, and says which.
 //!
 //! It has two sources, merged by [`registry`]:
 //!
@@ -16,7 +18,8 @@
 //! - **The operator's map,** `CAPSULES_PEER_KEYS`: a JSON object mapping peer
 //!   id to that peer's `key_id` (the raw Ed25519 public key, lowercase hex),
 //!   e.g. `{"node-a": "3a1f…", "node-b": "9c02…"}`. It still works alone,
-//!   and is the fallback for a peer whose host announces nothing.
+//!   and is the fallback for a peer whose host announces nothing. The name
+//!   may be any label: the stopgap for a node with no stable peer id.
 //!
 //! A peer absent from both is unknown. A peer the two sources give different
 //! keys is "cannot verify" until the operator removes the stale entry: never
@@ -26,6 +29,12 @@
 
 /// The environment variable the registry is read from.
 pub const ENV_PEER_KEYS: &str = "CAPSULES_PEER_KEYS";
+
+/// No announced keys: for a receiver whose registry is the operator's map
+/// alone.
+#[cfg(test)]
+pub const NONE_ANNOUNCED: &std::collections::BTreeMap<String, String> =
+    &std::collections::BTreeMap::new();
 
 /// The registry every check reads: the operator's map ([`ENV_PEER_KEYS`])
 /// merged with the keys the host announced ([`announced::snapshot`]), as the
@@ -261,6 +270,146 @@ pub fn announced_key_in(registry: Option<&str>, peer_id: &str) -> Option<String>
     }
 }
 
+/// Every peer `registry` gives exactly `key_id`, in the registry's order.
+/// Empty for an empty key, an unusable registry, or a key no entry gives.
+pub fn peers_for_key_in(registry: Option<&str>, key_id: &str) -> Vec<String> {
+    if key_id.is_empty() {
+        return Vec::new();
+    }
+    let parsed = registry
+        .filter(|raw| !raw.is_empty())
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
+    let Some(serde_json::Value::Object(map)) = parsed else {
+        return Vec::new();
+    };
+    map.into_iter()
+        .filter(|(_, key)| key.as_str() == Some(key_id))
+        .map(|(peer, _)| peer)
+        .collect()
+}
+
+/// How a sender's evidence key came to be accepted (D-34): the identity a
+/// node accepts is the key, and the peer id it arrived under is a hint.
+/// Recorded beside what was accepted as provenance (`accepted_via`); nothing
+/// gates on it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AcceptedVia {
+    /// A host announced the key for some peer (`plugin_keys.v1`), and the
+    /// operator's map gives that peer no other key.
+    HostAnnounced,
+    /// Only the operator's [`ENV_PEER_KEYS`] lists it: the stopgap for a
+    /// node with no stable peer id, never a binding.
+    OperatorStopgap,
+    /// A carried controller declaration (`controller_binding`) binds it to
+    /// `anchor_key`, a key accepted one of the other two ways.
+    ControllerDeclaration {
+        binding_digest: String,
+        anchor_key: String,
+    },
+}
+
+impl AcceptedVia {
+    /// The recorded token.
+    pub fn token(&self) -> &'static str {
+        match self {
+            AcceptedVia::HostAnnounced => "host_announced",
+            AcceptedVia::OperatorStopgap => "operator_stopgap",
+            AcceptedVia::ControllerDeclaration { .. } => "controller_declaration",
+        }
+    }
+}
+
+/// A key this node accepts, how, and the peers it is bound to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Accepted {
+    pub via: AcceptedVia,
+    /// The peers the key (or, for a declaration, its anchor key) is bound to
+    /// in the registry: the host's peers when a host announced it, else the
+    /// operator's names for it. Never empty.
+    pub peers: Vec<String>,
+}
+
+/// Whether this node accepts `key_id`, from the operator's map
+/// (`configured`, raw) and the host's announced keys, or through
+/// `declaration`, a carried `controller-binding/0` record that applies at
+/// `now` (no time: no declaration is used) and binds `key_id` to a key
+/// accepted those ways. `own_key` (this node's) is never accepted, nor used
+/// as a declaration's anchor, and a key
+/// a carried declaration binds to it is not accepted however else it is
+/// known ([`binds_to_own`]): it is this node's side, never a counterparty.
+pub fn accepted_via(
+    configured: Option<&str>,
+    announced: &std::collections::BTreeMap<String, String>,
+    key_id: &str,
+    own_key: &str,
+    declaration: Option<&serde_json::Value>,
+    now: Option<evidence_request::time::UtcTime>,
+) -> Option<Accepted> {
+    let registry = merged(configured, announced);
+    let direct = |key: &str| -> Option<Accepted> {
+        if key == own_key {
+            return None;
+        }
+        let peers = peers_for_key_in(registry.as_deref(), key);
+        if peers.is_empty() {
+            return None;
+        }
+        // A key a host announced is bound to the host's peers only: an
+        // operator label never adds a second name to it.
+        let hosted: Vec<String> = peers
+            .iter()
+            .filter(|p| announced.get(*p).map(String::as_str) == Some(key))
+            .cloned()
+            .collect();
+        Some(if hosted.is_empty() {
+            Accepted {
+                via: AcceptedVia::OperatorStopgap,
+                peers,
+            }
+        } else {
+            Accepted {
+                via: AcceptedVia::HostAnnounced,
+                peers: hosted,
+            }
+        })
+    };
+    if key_id == own_key || binds_to_own(declaration, key_id, own_key, now) {
+        return None;
+    }
+    if let Some(accepted) = direct(key_id) {
+        return Some(accepted);
+    }
+    let applied = crate::controller_binding::applies(declaration?, now?)?;
+    let anchor = applied.other(key_id)?;
+    let anchored = direct(anchor)?;
+    Some(Accepted {
+        via: AcceptedVia::ControllerDeclaration {
+            binding_digest: applied.digest.clone(),
+            anchor_key: anchor.to_string(),
+        },
+        peers: anchored.peers,
+    })
+}
+
+/// Whether `declaration` is a controller declaration that applies at `now`
+/// and binds `key_id` to `own_key`, this node's own key. Its holders signed
+/// that the two keys have one controller (CB v0 §6.2): a key so bound is
+/// this node's side, so it is accepted from no one, however else it is
+/// known.
+pub fn binds_to_own(
+    declaration: Option<&serde_json::Value>,
+    key_id: &str,
+    own_key: &str,
+    now: Option<evidence_request::time::UtcTime>,
+) -> bool {
+    let (Some(declaration), Some(now)) = (declaration, now) else {
+        return false;
+    };
+    !own_key.is_empty()
+        && crate::controller_binding::applies(declaration, now)
+            .is_some_and(|applied| applied.other(key_id) == Some(own_key))
+}
+
 /// The one announced peer whose key is `key_id` in `registry`: this node's
 /// own id from its own key. `None` when no peer, or more than one, announces
 /// it: never a guess.
@@ -315,6 +464,127 @@ mod tests {
             announced_key_in(Some(r#"["ab"]"#), "node-a"),
             None,
             "not an object"
+        );
+    }
+
+    /// D-34: a key is accepted by what it is, under any peer id, and the
+    /// way it was accepted is said. A disagreeing operator entry vetoes,
+    /// and this node's own key is never a sender's.
+    #[test]
+    fn a_key_is_accepted_by_value_and_says_how() {
+        let now = evidence_request::time::parse_utc("2026-10-28T00:00:00Z");
+        let own = "ee".repeat(32);
+        let accept = |configured: Option<&str>, announced: &[(&str, &str)], key: &str| {
+            accepted_via(configured, &keys_of(announced), key, &own, None, now)
+        };
+        let host = accept(None, &[("node-a", KA)], KA).unwrap();
+        assert_eq!(host.via, AcceptedVia::HostAnnounced);
+        assert_eq!(host.peers, ["node-a"]);
+        let stopgap = accept(Some(&format!(r#"{{"muse-vm": "{KA}"}}"#)), &[], KA).unwrap();
+        assert_eq!(stopgap.via, AcceptedVia::OperatorStopgap);
+        assert_eq!(stopgap.peers, ["muse-vm"]);
+        let both = accept(
+            Some(&format!(r#"{{"node-a": "{KA}"}}"#)),
+            &[("node-a", KA), ("node-a-2", KA)],
+            KA,
+        )
+        .unwrap();
+        assert_eq!(
+            both.via,
+            AcceptedVia::HostAnnounced,
+            "a host binding wins the label"
+        );
+        assert_eq!(both.peers, ["node-a", "node-a-2"]);
+        let labelled = accept(
+            Some(&format!(r#"{{"my-label": "{KA}"}}"#)),
+            &[("node-a", KA)],
+            KA,
+        )
+        .unwrap();
+        assert_eq!(
+            labelled.peers,
+            ["node-a"],
+            "a label adds no name to a hosted key"
+        );
+        assert_eq!(accept(None, &[("node-a", KA)], KB), None, "unknown key");
+        assert_eq!(
+            accept(
+                Some(&format!(r#"{{"node-a": "{KB}"}}"#)),
+                &[("node-a", KA)],
+                KA
+            ),
+            None,
+            "a disagreeing entry vetoes"
+        );
+        assert_eq!(
+            accept(Some("{node-a:"), &[("node-a", KA)], KA),
+            None,
+            "unusable map"
+        );
+        assert_eq!(accept(None, &[("self", &own)], &own), None, "own key");
+        assert_eq!(accept(None, &[("node-a", KA)], ""), None, "no key");
+    }
+
+    /// A declaration carries acceptance from an accepted key to the other
+    /// key it binds, never from this node's own key, and only with a time.
+    #[test]
+    fn a_declaration_extends_acceptance_from_an_accepted_key_only() {
+        use ed25519_dalek::SigningKey;
+        let now = evidence_request::time::parse_utc("2026-10-28T00:00:00Z");
+        let (anchor, member, own) = (
+            SigningKey::from_bytes(&[1; 32]),
+            SigningKey::from_bytes(&[2; 32]),
+            SigningKey::from_bytes(&[3; 32]),
+        );
+        let hex_of = |k: &SigningKey| hex::encode(k.verifying_key().to_bytes());
+        let (ka, km, ko) = (hex_of(&anchor), hex_of(&member), hex_of(&own));
+        let binding = crate::controller_binding::bind_for_test(
+            &anchor,
+            &member,
+            "2026-10-01T00:00:00Z",
+            "2027-10-01T00:00:00Z",
+        );
+        let configured = format!(r#"{{"muse-controller": "{ka}"}}"#);
+        let none = keys_of(&[]);
+        let got = accepted_via(Some(&configured), &none, &km, &ko, Some(&binding), now).unwrap();
+        assert_eq!(got.peers, ["muse-controller"]);
+        let AcceptedVia::ControllerDeclaration {
+            binding_digest,
+            anchor_key,
+        } = got.via
+        else {
+            panic!("a declaration");
+        };
+        assert_eq!(anchor_key, ka);
+        assert_eq!(binding_digest.len(), 64);
+        assert_eq!(
+            accepted_via(Some(&configured), &none, &km, &ko, Some(&binding), None),
+            None,
+            "no time, no declaration"
+        );
+        assert_eq!(
+            accepted_via(None, &none, &km, &ko, Some(&binding), now),
+            None,
+            "an anchor nobody accepts"
+        );
+        let on_own = crate::controller_binding::bind_for_test(
+            &own,
+            &member,
+            "2026-10-01T00:00:00Z",
+            "2027-10-01T00:00:00Z",
+        );
+        let with_self = keys_of(&[("self", ko.as_str())]);
+        assert_eq!(
+            accepted_via(None, &with_self, &km, &ko, Some(&on_own), now),
+            None,
+            "anchored on this node's own key"
+        );
+        let member_announced = keys_of(&[("self", ko.as_str()), ("node-m", km.as_str())]);
+        assert!(accepted_via(None, &member_announced, &km, &ko, None, now).is_some());
+        assert_eq!(
+            accepted_via(None, &member_announced, &km, &ko, Some(&on_own), now),
+            None,
+            "a known key declared one controller with this node is refused"
         );
     }
 
@@ -497,6 +767,7 @@ mod tests {
             peer_keys: registry,
             record_at_completion_off: false,
             rejected_log_limit: MAX_REJECTED_LOG_BYTES,
+            announced: crate::peer_keys::NONE_ANNOUNCED,
         };
         let reply = receive(&receiver, body, Some(peer_id), "2026-10-12T00:00:00Z").unwrap();
         match reply["reason"].as_str() {
