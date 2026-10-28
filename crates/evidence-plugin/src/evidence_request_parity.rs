@@ -137,7 +137,7 @@ fn padding(i: usize) -> Value {
 }
 
 /// The half another node holds, which leaf 6 cites.
-fn foreign_half() -> String {
+pub(crate) fn foreign_half() -> String {
     hex::encode(Sha256::digest(b"the counterparty's own half"))
 }
 

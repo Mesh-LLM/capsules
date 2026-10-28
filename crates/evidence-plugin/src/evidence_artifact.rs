@@ -164,30 +164,7 @@ fn served_summary(
 ) -> Value {
     let facts: Vec<_> = index.leaves.iter().map(|l| &l.facts).collect();
     let cp = &served.record;
-    let checkpoint = evidencebook::substrate::Checkpoint {
-        v: cp.v,
-        kind: cp.kind.clone(),
-        log_id: cp.log_id.clone(),
-        mmr_size: cp.mmr_size,
-        root: cp.root.clone(),
-        prev_size: cp.prev_size,
-        prev_root: cp.prev_root.clone(),
-        key_id: cp.key_id.clone(),
-        timestamp: cp.timestamp.clone(),
-        signature: cp.signature.clone(),
-        witnesses: cp
-            .witnesses
-            .iter()
-            .map(|w| evidencebook::substrate::WitnessEntry {
-                ts_url: w.ts_url.clone(),
-                entry_hash: w.entry_hash.clone(),
-                receipt_b64: w.receipt_b64.clone(),
-                leaf_index: w.leaf_index,
-                tree_size: w.tree_size,
-                is_stub: w.is_stub,
-            })
-            .collect(),
-    };
+    let checkpoint = crate::evidence_log::book_checkpoint(cp);
     // One directory row per carried witness this node has a key for, its
     // endpoint the receipt's own URL, so the verifier's row lookup finds it.
     let rows: Vec<Value> = cp
