@@ -749,9 +749,13 @@ pub fn intake(
     std::fs::create_dir_all(dir).map_err(|e| format!("could not keep it: {e}"))?;
     let join_path = dir.join(format!("{node_id}.join.json"));
     let leave_path = dir.join(format!("{node_id}.leave.json"));
-    // A leave that arrived before any join here: kept apart from the list, so
-    // a join it ends that arrives later, late or replayed, is refused.
-    let ended_path = data_dir.join(ENDED_DIR).join(format!("{node_id}.json"));
+    // A leave that arrived before any join here: kept apart from the list, one
+    // per node and key (another key's leave never replaces it), so a join it
+    // ends that arrives later, late or replayed, is refused.
+    let key_id = doc["key_id"].as_str().unwrap_or_default();
+    let ended_path = data_dir
+        .join(ENDED_DIR)
+        .join(format!("{node_id}.{key_id}.json"));
     let held =
         |path: &Path| -> Option<Value> { serde_json::from_slice(&std::fs::read(path).ok()?).ok() };
     let at = at_of(&doc);

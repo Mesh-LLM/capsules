@@ -710,11 +710,9 @@ fn a_leave_before_any_join_refuses_the_join_it_ends_and_is_never_listed() {
     assert_eq!(reporter.take(&leave), Ok(()));
     assert_eq!(reporter.take(&leave), Ok(()));
     assert!(reporter.files().is_empty());
-    assert!(reporter
-        .dir
-        .path()
-        .join(ENDED_DIR)
-        .join(format!("{n}.json"))
+    let ended = reporter.dir.path().join(ENDED_DIR);
+    assert!(ended
+        .join(format!("{n}.{}.json", commitment::key_id(&key(1))))
         .is_file());
     // The join it ends, late or replayed, is refused; another key's is not
     // ended by it.
@@ -730,4 +728,21 @@ fn a_leave_before_any_join_refuses_the_join_it_ends_and_is_never_listed() {
     let rejoin = signed(KIND_JOIN, &key(1), "2026-10-28T14:00:00Z");
     assert_eq!(reporter.take(&rejoin), Ok(()));
     assert_eq!(reporter.files(), [format!("{n}.join.json")]);
+}
+
+#[test]
+fn another_keys_leave_never_replaces_an_early_leave() {
+    // leave(K1, t2), then leave(K2, t3), then the join(K1, t1) the first ends.
+    let reporter = Reporter::new();
+    reporter
+        .take(&signed(KIND_LEAVE, &key(1), "2026-10-28T13:00:00Z"))
+        .unwrap();
+    reporter
+        .take(&signed(KIND_LEAVE, &key(2), "2026-10-28T14:00:00Z"))
+        .unwrap();
+    assert_eq!(
+        reporter.take(&signed(KIND_JOIN, &key(1), "2026-10-28T12:00:00Z")),
+        Err("a later leave of this node is held".into())
+    );
+    assert!(reporter.files().is_empty());
 }
