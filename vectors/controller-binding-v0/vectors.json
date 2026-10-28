@@ -1,0 +1,1363 @@
+{
+  "set": "aac-controller-binding-v0",
+  "status": "Conformance vectors for the informational Controller Binding v0 (spec/controller-binding-v0.md) and its use in issuer independence (evidence-interop/0, §6.7.4). Every key is a test key derived from a public seed; never use one for anything else.",
+  "profile": "evidence-interop/0",
+  "spec": "spec/controller-binding-v0.md",
+  "test_keys": {
+    "note": "TEST-ONLY. Each private key is the 32-byte Ed25519 seed SHA-256(seed_label).",
+    "keys": {
+      "producer-a": {
+        "seed_label": "interop-profile-v0 coverage declaration vectors: first producer key",
+        "public": "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f"
+      },
+      "producer-b": {
+        "seed_label": "interop-profile-v0 coverage declaration vectors: second producer key",
+        "public": "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+      },
+      "producer-c": {
+        "seed_label": "controller-binding-v0 vectors: a third producer key",
+        "public": "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a"
+      },
+      "credential-issuer": {
+        "seed_label": "controller-binding-v0 vectors: credential issuer key",
+        "public": "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+      },
+      "other-issuer": {
+        "seed_label": "controller-binding-v0 vectors: key that is not the credential issuer",
+        "public": "47185433fcb70e8a71e03de37c8e8dbd8bb128668ebd5d772d37431dd495830c"
+      }
+    }
+  },
+  "contract": {
+    "document": {
+      "id": "C",
+      "version": "1",
+      "requirements": [
+        {
+          "id": "r-deal-steps",
+          "profile": "outcome",
+          "statement": "The recorded steps of each selected deal are served under a verified envelope.",
+          "evidence_requirements": {
+            "accepted_epistemic_types": [
+              "producer_claim"
+            ]
+          }
+        },
+        {
+          "id": "r-complete",
+          "profile": "outcome",
+          "statement": "The deals shown are every deal of the holder's in the period.",
+          "evidence_requirements": {
+            "coverage": "every deal in the period"
+          }
+        },
+        {
+          "id": "r-corroborated",
+          "profile": "outcome",
+          "statement": "The step is stated by two parties.",
+          "evidence_requirements": {
+            "independence": "two distinct issuers"
+          }
+        }
+      ]
+    },
+    "document_jcs": "{\"id\":\"C\",\"requirements\":[{\"evidence_requirements\":{\"accepted_epistemic_types\":[\"producer_claim\"]},\"id\":\"r-deal-steps\",\"profile\":\"outcome\",\"statement\":\"The recorded steps of each selected deal are served under a verified envelope.\"},{\"evidence_requirements\":{\"coverage\":\"every deal in the period\"},\"id\":\"r-complete\",\"profile\":\"outcome\",\"statement\":\"The deals shown are every deal of the holder's in the period.\"},{\"evidence_requirements\":{\"independence\":\"two distinct issuers\"},\"id\":\"r-corroborated\",\"profile\":\"outcome\",\"statement\":\"The step is stated by two parties.\"}],\"version\":\"1\"}",
+    "contract_ref": "C@1",
+    "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+    "schema": {
+      "name": "evidence-contract-v0.json",
+      "sha256": "6b969610e6f120a9f5b98555aa5045644c62665f14075bb83fb9e78bab21b770"
+    }
+  },
+  "credential_method": "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)",
+  "binding_properties": [
+    "controller_binding_form",
+    "controller_binding_signatures",
+    "controller_binding_window",
+    "controller_binding_revocation",
+    "controller_binding_credential"
+  ],
+  "count": 14,
+  "cases": [
+    {
+      "id": "valid-same-controller",
+      "title": "Both keys bind themselves as one controller's",
+      "cites": [
+        "CB §3",
+        "CB §4",
+        "CB §6",
+        "CB §7",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"ae0e5d303da94b884f4dff1be4f07a3b3478ef88b6f92f4cddcae4d851bdd805a00c0a8469a981c8e663ad06fa8d801b77ef8b157bc1bef8520989e3e24a7e0b\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"same_controller_asserted\",\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"method\":\"dual_signature/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2027-10-01T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"97c55701487873ee125a548b8b745406ca2757858e80ccd5394166521e442fab0cf04e0fc9fa460f2de8bc2d1926b319d52316c0b04dbaf64ff16864bcd8040f\"},{\"key_id\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"5734793e2d6624fb893b0d1a01aeff23ad3a861b99fe6082e088f483c4ee9c5c2f533be102777c7051ebb5a2fe8c0b244eae066ec12856ec5f6c2fbe7bd10604\"}]}"
+        }
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "same_controller_asserted",
+          "binding_digest": "7c32632350a8bdf8793dffa50726967520afcf55007af3aa194dac7c8973474d",
+          "properties": {
+            "controller_binding_form": "PASS",
+            "controller_binding_signatures": "PASS",
+            "controller_binding_window": "PASS",
+            "controller_binding_revocation": "NOT_CHECKED"
+          },
+          "binds_pair": true,
+          "applies": true,
+          "proves": [
+            "control of both keys at the ceremony",
+            "both key holders state that one controller holds both keys"
+          ]
+        },
+        "issuer_independence": {
+          "status": "FAIL",
+          "shown_as": "redundant, not corroborating",
+          "reason": "controller binding same_controller_asserted 7c32632350a8bdf8793dffa50726967520afcf55007af3aa194dac7c8973474d",
+          "satisfied_becomes": {
+            "r-corroborated": "INSUFFICIENT"
+          }
+        },
+        "fails": []
+      }
+    },
+    {
+      "id": "valid-delegated-by",
+      "title": "The first key delegated to the second, and both signed",
+      "cites": [
+        "CB §3.2",
+        "CB §6",
+        "CB §7",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"ae0e5d303da94b884f4dff1be4f07a3b3478ef88b6f92f4cddcae4d851bdd805a00c0a8469a981c8e663ad06fa8d801b77ef8b157bc1bef8520989e3e24a7e0b\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"delegated_by\",\"delegator\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"method\":\"dual_signature/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2027-10-01T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"c0fcc57dc8e0f1c7c0383bd60da373f48e9f6d87d515aa800c420ecd13dfa73a0074ae2d08a6a8f3e8cd6a26e2a01f8f7a0e83a18d12e5128b6d52879a7e950c\"},{\"key_id\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"fb0fcc6c612541ebd8a7e910208cef09c40cc5236ae69041426946b9434826c17eeb5fa1b88d9d5c42ec1f5bf3304e36e1e3c367f6484737fe4c26b4ce4de202\"}]}"
+        }
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "delegated_by",
+          "binding_digest": "05d6649bcaf46c0cc5d7456c30b4bb2bb8d552862561a2eedc1f058f9faa0925",
+          "properties": {
+            "controller_binding_form": "PASS",
+            "controller_binding_signatures": "PASS",
+            "controller_binding_window": "PASS",
+            "controller_binding_revocation": "NOT_CHECKED"
+          },
+          "binds_pair": true,
+          "applies": true,
+          "proves": [
+            "control of both keys at the ceremony",
+            "both key holders state that the delegator delegated to the other key"
+          ]
+        },
+        "issuer_independence": {
+          "status": "FAIL",
+          "shown_as": "redundant, not corroborating",
+          "reason": "controller binding delegated_by 05d6649bcaf46c0cc5d7456c30b4bb2bb8d552862561a2eedc1f058f9faa0925",
+          "satisfied_becomes": {
+            "r-corroborated": "INSUFFICIENT"
+          }
+        },
+        "fails": []
+      }
+    },
+    {
+      "id": "valid-same-organization-credentialed",
+      "title": "Both keys bind themselves as one organization's, with a credential from a trusted issuer",
+      "cites": [
+        "CB §3.2",
+        "CB §6",
+        "CB §7",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"ae0e5d303da94b884f4dff1be4f07a3b3478ef88b6f92f4cddcae4d851bdd805a00c0a8469a981c8e663ad06fa8d801b77ef8b157bc1bef8520989e3e24a7e0b\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"same_organization_credentialed\",\"credential\":{\"digest\":\"1aba57f20c60f98012bd88d06b8deb372e96f2251c3a278badd6d2781393eab9\",\"issuer\":\"41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d\",\"method\":\"Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)\"},\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"method\":\"dual_signature_credential/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2027-10-01T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"a289d8fe76ba28275b7801148358484849d33d3c1229cea92fc1f7bf0d5d6fd3008abc4fefa20692da88d022b9c1c33568c225d4923d6e41327544578852d10e\"},{\"key_id\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"86c96f602c1c92a8556b072af69354bd721d89cee4719236e442a9da4fcb7ad7cd41449fdf51a8231737b7c3c039143b13e3bb564c0ba781460e87d793e4190d\"}]}"
+        },
+        "credential": {
+          "media_type": "application/json",
+          "octets_text": "{\"issued_at\":\"2026-10-01T00:00:00Z\",\"issuer\":\"41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"organization\":\"40e362e9371e4dcb82cd63e70a9d3bd90b40c2df0b6348ff7adfdd91f7733016\",\"sig\":\"f29144c65d51f87a4aba464f0de19c116eac963ffde9cb38898c89f133ef668457f42faffb6712afd5fc226de4acd1ef6c2aeeb82bd1ef82b567c8870623e806\"}"
+        }
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "same_organization_credentialed",
+          "binding_digest": "37a6f02a9c72fb5b105738523148204677f003832131b41c3b37e529a8a37db3",
+          "properties": {
+            "controller_binding_form": "PASS",
+            "controller_binding_signatures": "PASS",
+            "controller_binding_window": "PASS",
+            "controller_binding_revocation": "NOT_CHECKED",
+            "controller_binding_credential": "PASS"
+          },
+          "binds_pair": true,
+          "applies": true,
+          "proves": [
+            "control of both keys at the ceremony",
+            "both key holders state that both keys are held within one organization",
+            "a trusted issuer key states that both keys are held within one organization"
+          ]
+        },
+        "issuer_independence": {
+          "status": "FAIL",
+          "shown_as": "redundant, not corroborating",
+          "reason": "controller binding same_organization_credentialed 37a6f02a9c72fb5b105738523148204677f003832131b41c3b37e529a8a37db3",
+          "satisfied_becomes": {
+            "r-corroborated": "INSUFFICIENT"
+          }
+        },
+        "fails": []
+      }
+    },
+    {
+      "id": "credential-method-unimplemented",
+      "title": "A same-organization binding whose credential method the verifier does not implement",
+      "cites": [
+        "CB §6.1",
+        "CB §6.2",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"ae0e5d303da94b884f4dff1be4f07a3b3478ef88b6f92f4cddcae4d851bdd805a00c0a8469a981c8e663ad06fa8d801b77ef8b157bc1bef8520989e3e24a7e0b\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"same_organization_credentialed\",\"credential\":{\"digest\":\"1aba57f20c60f98012bd88d06b8deb372e96f2251c3a278badd6d2781393eab9\",\"issuer\":\"41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d\",\"method\":\"org.example.credential-method-not-implemented\"},\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"method\":\"dual_signature_credential/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2027-10-01T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"ab42152102892f77e48d3e433a9220db1b7de012009838a210334e4a6b87c5ce316abdb3264f348c8b34143ca6daa0cf3f33360c3f8d7c14986c7ff8051a460f\"},{\"key_id\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"20cf1802ab24933e94572a4cb22010aad0012c90470ee70b2e271eb22899329b4dbe84bf103bc4724626f00a3bee8dd85fb906654de8f811e0a6b3c3bad7c306\"}]}"
+        },
+        "credential": {
+          "media_type": "application/json",
+          "octets_text": "{\"issued_at\":\"2026-10-01T00:00:00Z\",\"issuer\":\"41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"organization\":\"40e362e9371e4dcb82cd63e70a9d3bd90b40c2df0b6348ff7adfdd91f7733016\",\"sig\":\"f29144c65d51f87a4aba464f0de19c116eac963ffde9cb38898c89f133ef668457f42faffb6712afd5fc226de4acd1ef6c2aeeb82bd1ef82b567c8870623e806\"}"
+        }
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "same_organization_credentialed",
+          "binding_digest": "18f24a2539636ff334ea8a7499790e45a6874360ae72c7cd1074cdf508c1d6eb",
+          "properties": {
+            "controller_binding_form": "PASS",
+            "controller_binding_signatures": "PASS",
+            "controller_binding_window": "PASS",
+            "controller_binding_revocation": "NOT_CHECKED",
+            "controller_binding_credential": "NOT_CHECKED"
+          },
+          "binds_pair": true,
+          "applies": true,
+          "proves": [
+            "control of both keys at the ceremony",
+            "both key holders state that both keys are held within one organization"
+          ]
+        },
+        "issuer_independence": {
+          "status": "FAIL",
+          "shown_as": "redundant, not corroborating",
+          "reason": "controller binding same_organization_credentialed 18f24a2539636ff334ea8a7499790e45a6874360ae72c7cd1074cdf508c1d6eb",
+          "satisfied_becomes": {
+            "r-corroborated": "INSUFFICIENT"
+          }
+        },
+        "fails": []
+      }
+    },
+    {
+      "id": "revoked-after-the-pair",
+      "title": "A binding revoked by one key after both halves were signed",
+      "cites": [
+        "CB §5",
+        "CB §6.1",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"ae0e5d303da94b884f4dff1be4f07a3b3478ef88b6f92f4cddcae4d851bdd805a00c0a8469a981c8e663ad06fa8d801b77ef8b157bc1bef8520989e3e24a7e0b\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"same_controller_asserted\",\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"method\":\"dual_signature/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2027-10-01T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"97c55701487873ee125a548b8b745406ca2757858e80ccd5394166521e442fab0cf04e0fc9fa460f2de8bc2d1926b319d52316c0b04dbaf64ff16864bcd8040f\"},{\"key_id\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"5734793e2d6624fb893b0d1a01aeff23ad3a861b99fe6082e088f483c4ee9c5c2f533be102777c7051ebb5a2fe8c0b244eae066ec12856ec5f6c2fbe7bd10604\"}]}"
+        },
+        "revocations": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"binding\":\"7c32632350a8bdf8793dffa50726967520afcf55007af3aa194dac7c8973474d\",\"key_id\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"revocation_version\":\"controller-binding-revocation/0\",\"revoked_at\":\"2026-10-18T00:00:00Z\",\"sig\":\"bea3030290ab6081caaa3f5e7150e2d258859468cbf6733ba1824edfd1d88c1949965805587b4e1b1d74d644c64040c3380d01c986ed1ced9d500de8b1f04109\"}"
+          }
+        ]
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "same_controller_asserted",
+          "binding_digest": "7c32632350a8bdf8793dffa50726967520afcf55007af3aa194dac7c8973474d",
+          "properties": {
+            "controller_binding_form": "PASS",
+            "controller_binding_signatures": "PASS",
+            "controller_binding_window": "PASS",
+            "controller_binding_revocation": "NOT_CHECKED"
+          },
+          "binds_pair": true,
+          "applies": true,
+          "proves": [
+            "control of both keys at the ceremony",
+            "both key holders state that one controller holds both keys"
+          ]
+        },
+        "issuer_independence": {
+          "status": "FAIL",
+          "shown_as": "redundant, not corroborating",
+          "reason": "controller binding same_controller_asserted 7c32632350a8bdf8793dffa50726967520afcf55007af3aa194dac7c8973474d",
+          "satisfied_becomes": {
+            "r-corroborated": "INSUFFICIENT"
+          }
+        },
+        "fails": []
+      }
+    },
+    {
+      "id": "expired",
+      "title": "A binding whose window ended before the halves were signed",
+      "cites": [
+        "CB §6.1",
+        "CB §6.2",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"ae0e5d303da94b884f4dff1be4f07a3b3478ef88b6f92f4cddcae4d851bdd805a00c0a8469a981c8e663ad06fa8d801b77ef8b157bc1bef8520989e3e24a7e0b\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"same_controller_asserted\",\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"method\":\"dual_signature/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2026-10-10T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"fea3463bd5fe9badce6f8f5b37bc83ffc48cae195b89e6de40cb4dc9f7ead650d8d0aca40aa58b21a28614cd0548b5172921b8da443f915387a5640ef36c8f02\"},{\"key_id\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"5eeb04dde68aa3c3b5dfbdc088781b5aafe35b32f523508c5e370071535e33741fe3e44ffa6caebf1600f4a47b940f077876e8d5a2b8a652904caf7f6a93ab0e\"}]}"
+        }
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "same_controller_asserted",
+          "binding_digest": "2bfa4b71189fbe7f2a3c299e07886b24ae9e117a5c7089ce553127ba9a9d38a6",
+          "properties": {
+            "controller_binding_form": "PASS",
+            "controller_binding_signatures": "PASS",
+            "controller_binding_window": "FAIL",
+            "controller_binding_revocation": "NOT_CHECKED"
+          },
+          "binds_pair": true,
+          "applies": false,
+          "proves": [
+            "control of both keys at the ceremony",
+            "both key holders state that one controller holds both keys"
+          ]
+        },
+        "issuer_independence": {
+          "status": "NOT_CHECKED",
+          "shown_as": "not corroborating",
+          "reason": null,
+          "satisfied_becomes": {
+            "r-corroborated": "UNKNOWN"
+          }
+        },
+        "fails": [
+          "controller_binding_window"
+        ]
+      }
+    },
+    {
+      "id": "revoked",
+      "title": "A binding revoked by one key before the halves were signed",
+      "cites": [
+        "CB §5",
+        "CB §6.1",
+        "CB §6.2",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"ae0e5d303da94b884f4dff1be4f07a3b3478ef88b6f92f4cddcae4d851bdd805a00c0a8469a981c8e663ad06fa8d801b77ef8b157bc1bef8520989e3e24a7e0b\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"same_controller_asserted\",\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"method\":\"dual_signature/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2027-10-01T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"97c55701487873ee125a548b8b745406ca2757858e80ccd5394166521e442fab0cf04e0fc9fa460f2de8bc2d1926b319d52316c0b04dbaf64ff16864bcd8040f\"},{\"key_id\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"5734793e2d6624fb893b0d1a01aeff23ad3a861b99fe6082e088f483c4ee9c5c2f533be102777c7051ebb5a2fe8c0b244eae066ec12856ec5f6c2fbe7bd10604\"}]}"
+        },
+        "revocations": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"binding\":\"7c32632350a8bdf8793dffa50726967520afcf55007af3aa194dac7c8973474d\",\"key_id\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"revocation_version\":\"controller-binding-revocation/0\",\"revoked_at\":\"2026-10-12T00:00:00Z\",\"sig\":\"8b3a6fc4d5a404ba4cf12fe9e6635dcb8532a56bf3c94e1c7c7423a0ef7d9f7406524649f60d467984c7abf6e9a3953d07e25e7db062910f6961451d4e17b70f\"}"
+          }
+        ]
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "same_controller_asserted",
+          "binding_digest": "7c32632350a8bdf8793dffa50726967520afcf55007af3aa194dac7c8973474d",
+          "properties": {
+            "controller_binding_form": "PASS",
+            "controller_binding_signatures": "PASS",
+            "controller_binding_window": "PASS",
+            "controller_binding_revocation": "FAIL"
+          },
+          "binds_pair": true,
+          "applies": false,
+          "proves": [
+            "control of both keys at the ceremony",
+            "both key holders state that one controller holds both keys"
+          ]
+        },
+        "issuer_independence": {
+          "status": "NOT_CHECKED",
+          "shown_as": "not corroborating",
+          "reason": null,
+          "satisfied_becomes": {
+            "r-corroborated": "UNKNOWN"
+          }
+        },
+        "fails": [
+          "controller_binding_revocation"
+        ]
+      }
+    },
+    {
+      "id": "one-key-signed",
+      "title": "A binding record signed by one of its two keys only",
+      "cites": [
+        "CB §4",
+        "CB §6.1",
+        "CB §6.2",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"ae0e5d303da94b884f4dff1be4f07a3b3478ef88b6f92f4cddcae4d851bdd805a00c0a8469a981c8e663ad06fa8d801b77ef8b157bc1bef8520989e3e24a7e0b\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"same_controller_asserted\",\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"method\":\"dual_signature/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2027-10-01T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"97c55701487873ee125a548b8b745406ca2757858e80ccd5394166521e442fab0cf04e0fc9fa460f2de8bc2d1926b319d52316c0b04dbaf64ff16864bcd8040f\"}]}"
+        }
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "same_controller_asserted",
+          "binding_digest": "7c32632350a8bdf8793dffa50726967520afcf55007af3aa194dac7c8973474d",
+          "properties": {
+            "controller_binding_form": "PASS",
+            "controller_binding_signatures": "FAIL",
+            "controller_binding_window": "PASS",
+            "controller_binding_revocation": "NOT_CHECKED"
+          },
+          "binds_pair": true,
+          "applies": false,
+          "proves": []
+        },
+        "issuer_independence": {
+          "status": "NOT_CHECKED",
+          "shown_as": "not corroborating",
+          "reason": null,
+          "satisfied_becomes": {
+            "r-corroborated": "UNKNOWN"
+          }
+        },
+        "fails": [
+          "controller_binding_signatures"
+        ]
+      }
+    },
+    {
+      "id": "same-key-halves",
+      "title": "Two halves under one key, and a binding of that key to itself",
+      "cites": [
+        "CB §3.1",
+        "CB §6.1",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"083b67b6b3574c364567537bd3e97d375557fbf95c210be07718f7d56135910d1e7eeb21925afa41f207617415ef8bdefbb16ae94105531c56b3abf4f2633109\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"same_controller_asserted\",\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\"],\"method\":\"dual_signature/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2027-10-01T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"ad15f4ce8903705328fa84bd23e376f8110c6c6cf7e6eb28b6cf181484cd16d533a7b77d61820c2127cdf694ddd64825c9b3101f02a987bfbdc12e200a46c209\"},{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"ad15f4ce8903705328fa84bd23e376f8110c6c6cf7e6eb28b6cf181484cd16d533a7b77d61820c2127cdf694ddd64825c9b3101f02a987bfbdc12e200a46c209\"}]}"
+        }
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "same_controller_asserted",
+          "binding_digest": "4bb1b4cbd4b88415b7dd9ea6f782cf81cddaca17291bfbf857e387729f3e0a41",
+          "properties": {
+            "controller_binding_form": "FAIL"
+          },
+          "binds_pair": true,
+          "applies": false,
+          "proves": []
+        },
+        "issuer_independence": {
+          "status": "FAIL",
+          "shown_as": "redundant, not corroborating",
+          "reason": "same key",
+          "satisfied_becomes": {
+            "r-corroborated": "INSUFFICIENT"
+          }
+        },
+        "fails": [
+          "controller_binding_form"
+        ]
+      }
+    },
+    {
+      "id": "other-keys",
+      "title": "A valid binding of the first half's key to a third key",
+      "cites": [
+        "CB §6.2",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"ae0e5d303da94b884f4dff1be4f07a3b3478ef88b6f92f4cddcae4d851bdd805a00c0a8469a981c8e663ad06fa8d801b77ef8b157bc1bef8520989e3e24a7e0b\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"same_controller_asserted\",\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a\"],\"method\":\"dual_signature/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2027-10-01T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"e84ed3b15488cdac85cb90f9cd3c6c441ac900eba9347bc02c3825cd9e8815e4bd4c1c09b4039fd23326530dd1eecaec971b5564d39fd221d13d43c70d695100\"},{\"key_id\":\"c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a\",\"sig\":\"9a71ca001b8c8a4ff2343d0973ab3c7df1b5a8e9776252078f284b59d7d3f9e27b2c87d988c04fa8f05750e66b0908d58616b57905b02240962909cd41205108\"}]}"
+        }
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "same_controller_asserted",
+          "binding_digest": "0aea16d8aad1b1fd58b96d62eb232ddc55a1604f40c02440f6714f5c9f48da5a",
+          "properties": {
+            "controller_binding_form": "PASS",
+            "controller_binding_signatures": "PASS",
+            "controller_binding_window": "PASS",
+            "controller_binding_revocation": "NOT_CHECKED"
+          },
+          "binds_pair": false,
+          "applies": false,
+          "proves": [
+            "control of both keys at the ceremony",
+            "both key holders state that one controller holds both keys"
+          ]
+        },
+        "issuer_independence": {
+          "status": "NOT_CHECKED",
+          "shown_as": "not corroborating",
+          "reason": null,
+          "satisfied_becomes": {
+            "r-corroborated": "UNKNOWN"
+          }
+        },
+        "fails": []
+      }
+    },
+    {
+      "id": "credential-forged",
+      "title": "A credential that names the issuer and is signed by another key",
+      "cites": [
+        "CB §6.1",
+        "CB §6.2",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"ae0e5d303da94b884f4dff1be4f07a3b3478ef88b6f92f4cddcae4d851bdd805a00c0a8469a981c8e663ad06fa8d801b77ef8b157bc1bef8520989e3e24a7e0b\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"same_organization_credentialed\",\"credential\":{\"digest\":\"d0de5069831768a56e6ec2a03c80f80a5efb9426b2c4c51624f748a69de5835d\",\"issuer\":\"41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d\",\"method\":\"Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)\"},\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"method\":\"dual_signature_credential/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2027-10-01T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"44148f6192205ae4af02d75175fb019547a34daed2ce46a13496a679f2c9fe77c85a31112a8579b4b1569a58b40d04ad68affc847419a617162cf865caa69d04\"},{\"key_id\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"344e0e544bf7fee869737b37f9761d784fb8cd16b4dd29144dfc00d65f39675b492ad027534902217c0385607c0cef9adb5463532b3ac221fa242108d81abd0d\"}]}"
+        },
+        "credential": {
+          "media_type": "application/json",
+          "octets_text": "{\"issued_at\":\"2026-10-01T00:00:00Z\",\"issuer\":\"41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"organization\":\"40e362e9371e4dcb82cd63e70a9d3bd90b40c2df0b6348ff7adfdd91f7733016\",\"sig\":\"e6c7b45ca15213dd530135c4336f5d96cb28ef8bf46f343b81e1f4af92e81be5374f988921edd7b741c6d60f5c555ea0fc29f259c13ffc0cbbfea514f9055901\"}"
+        }
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "same_organization_credentialed",
+          "binding_digest": "682dbb816d0937d734bac5add3df33aacab16c06aaa0059645488d6dde9ad782",
+          "properties": {
+            "controller_binding_form": "PASS",
+            "controller_binding_signatures": "PASS",
+            "controller_binding_window": "PASS",
+            "controller_binding_revocation": "NOT_CHECKED",
+            "controller_binding_credential": "FAIL"
+          },
+          "binds_pair": true,
+          "applies": true,
+          "proves": [
+            "control of both keys at the ceremony",
+            "both key holders state that both keys are held within one organization"
+          ]
+        },
+        "issuer_independence": {
+          "status": "FAIL",
+          "shown_as": "redundant, not corroborating",
+          "reason": "controller binding same_organization_credentialed 682dbb816d0937d734bac5add3df33aacab16c06aaa0059645488d6dde9ad782",
+          "satisfied_becomes": {
+            "r-corroborated": "INSUFFICIENT"
+          }
+        },
+        "fails": [
+          "controller_binding_credential"
+        ]
+      }
+    },
+    {
+      "id": "unknown-method",
+      "title": "A binding under a method this revision does not define, over two valid signatures",
+      "cites": [
+        "CB §3.2",
+        "CB §6.1",
+        "CB §6.2",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"ae0e5d303da94b884f4dff1be4f07a3b3478ef88b6f92f4cddcae4d851bdd805a00c0a8469a981c8e663ad06fa8d801b77ef8b157bc1bef8520989e3e24a7e0b\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"same_controller_asserted\",\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"method\":\"single_signature/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2027-10-01T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"3e9339ef9c78ea9f2779c1fb478f85cfe7828dccb98f4f143fb4ca40d38f272c16bf469d1de31194e59e81b3bad6f6ad36a35d51da7ac904eeb3377027ee790a\"},{\"key_id\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"87b92489cf2c0168cc4729fabf6e9902d6fb39987315414ca6f039dd5a83898db272a873a2d5e1a1aeb105070a52624fea7fa3d86657df937b9301ce123ce204\"}]}"
+        }
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "same_controller_asserted",
+          "binding_digest": "e8ffe69c497c1e094a95b563045613678e3964be44403c1319f290346506017c",
+          "properties": {
+            "controller_binding_form": "PASS",
+            "controller_binding_signatures": "NOT_CHECKED",
+            "controller_binding_window": "PASS",
+            "controller_binding_revocation": "NOT_CHECKED"
+          },
+          "binds_pair": true,
+          "applies": false,
+          "proves": []
+        },
+        "issuer_independence": {
+          "status": "NOT_CHECKED",
+          "shown_as": "not corroborating",
+          "reason": null,
+          "satisfied_becomes": {
+            "r-corroborated": "UNKNOWN"
+          }
+        },
+        "fails": []
+      }
+    },
+    {
+      "id": "delegator-not-bound",
+      "title": "A delegation whose delegator is neither bound key",
+      "cites": [
+        "CB §3.2",
+        "CB §6.1",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"ae0e5d303da94b884f4dff1be4f07a3b3478ef88b6f92f4cddcae4d851bdd805a00c0a8469a981c8e663ad06fa8d801b77ef8b157bc1bef8520989e3e24a7e0b\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"delegated_by\",\"delegator\":\"c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a\",\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"method\":\"dual_signature/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2027-10-01T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"fe5c7a580f808e8e6d513d135a39dfef1a588179d38cadae81dae63c0931bbc1ee5fd521c5ac27d182125022657b0e9f36b1cd4353eef32de1454474a33a2406\"},{\"key_id\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"208d7c3c2a9106860121761ac8af67409a5f23eec5b3d60bca47bcb0bf67781f393b5de5fb3891bc4d3f7d2a5853640d1dafbcccb12c94ac3527bf8531019a09\"}]}"
+        }
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "delegated_by",
+          "binding_digest": "b75e81f1c8e7668bf60d926dc3955dc7437a2ecf86e9f2c09396a197bf6a6d86",
+          "properties": {
+            "controller_binding_form": "FAIL"
+          },
+          "binds_pair": true,
+          "applies": false,
+          "proves": []
+        },
+        "issuer_independence": {
+          "status": "NOT_CHECKED",
+          "shown_as": "not corroborating",
+          "reason": null,
+          "satisfied_becomes": {
+            "r-corroborated": "UNKNOWN"
+          }
+        },
+        "fails": [
+          "controller_binding_form"
+        ]
+      }
+    },
+    {
+      "id": "revocation-by-other-key",
+      "title": "A revocation before the halves, signed by a key the binding does not bind",
+      "cites": [
+        "CB §5",
+        "CB §6.1",
+        "IP §6.7.4"
+      ],
+      "source": "derived: two producer records (IP §11.5) and a binding record (CB §3)",
+      "mode": "presented",
+      "pins": {
+        "trust_policy": {
+          "foreign_keys": [
+            "8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f",
+            "c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a",
+            "f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c"
+          ],
+          "credential_issuers": [
+            "41dd7d76a30e6dd180077fdc3af17b819942a5e26b00cebdcd764c683520d99d"
+          ]
+        },
+        "verification_policy": {
+          "online": false,
+          "profiles_implemented": [
+            "evidence-interop/0"
+          ],
+          "binding_methods_implemented": [
+            "dual_signature/0",
+            "dual_signature_credential/0"
+          ],
+          "credential_methods_implemented": [
+            "Ed25519 over UTF-8 of JCS of the credential's other members (controller-binding-v0 §10, vectors only)"
+          ]
+        },
+        "contract_ref": "C@1",
+        "contract_digest": "d47423f0a358f62b9904cc6331188bbd6e0aaf6a0daaecb8b577ad3bfc0a2ae3",
+        "evaluation_time": "2026-10-19T01:00:00Z"
+      },
+      "inputs": {
+        "halves": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:20Z\",\"producer\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"f4a36b07365197e386ecd0f86481ffed4475f7544964389bc73b978d0d559a4bb46138f852b646ce64bd711bb97a639a2a44fe6b2aed84b53c7d5cc662b0910f\"}"
+          },
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"claim\":\"the deal's step was completed\",\"issued_at\":\"2026-10-15T00:00:21Z\",\"producer\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"ae0e5d303da94b884f4dff1be4f07a3b3478ef88b6f92f4cddcae4d851bdd805a00c0a8469a981c8e663ad06fa8d801b77ef8b157bc1bef8520989e3e24a7e0b\"}"
+          }
+        ],
+        "binding": {
+          "media_type": "application/json",
+          "octets_text": "{\"binding_version\":\"controller-binding/0\",\"claim\":\"same_controller_asserted\",\"issued_at\":\"2026-10-01T00:00:00Z\",\"keys\":[\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\"],\"method\":\"dual_signature/0\",\"nonce\":\"ceremony-1\",\"not_after\":\"2027-10-01T00:00:00Z\",\"not_before\":\"2026-10-01T00:00:00Z\",\"revocation\":\"revocation_statement/0\",\"sigs\":[{\"key_id\":\"8934da1869ca4dd634e362e4959e029bf4175f5dc9ea28f573a5e4f1835cfc0f\",\"sig\":\"97c55701487873ee125a548b8b745406ca2757858e80ccd5394166521e442fab0cf04e0fc9fa460f2de8bc2d1926b319d52316c0b04dbaf64ff16864bcd8040f\"},{\"key_id\":\"f0e8b3356ce3f2a41a4c5583c3a6c30dfa24f0a09a24d166422d09341e391f0c\",\"sig\":\"5734793e2d6624fb893b0d1a01aeff23ad3a861b99fe6082e088f483c4ee9c5c2f533be102777c7051ebb5a2fe8c0b244eae066ec12856ec5f6c2fbe7bd10604\"}]}"
+        },
+        "revocations": [
+          {
+            "media_type": "application/json",
+            "octets_text": "{\"binding\":\"7c32632350a8bdf8793dffa50726967520afcf55007af3aa194dac7c8973474d\",\"key_id\":\"c335e5ce206c20bd0b1bc029673f37690823b4e4d7539f817dacbe6635ea429a\",\"revocation_version\":\"controller-binding-revocation/0\",\"revoked_at\":\"2026-10-12T00:00:00Z\",\"sig\":\"8117555519e76d31a48001b9163567c6c6ede40f79571d656bf9eca8fd022bc30833b96f62d0cef20daee77950fd82d7c9360840b0510538e39a70d40d94960c\"}"
+          }
+        ]
+      },
+      "expected": {
+        "halves": {
+          "signatures": [
+            "PASS",
+            "PASS"
+          ],
+          "agree": true
+        },
+        "binding": {
+          "claim": "same_controller_asserted",
+          "binding_digest": "7c32632350a8bdf8793dffa50726967520afcf55007af3aa194dac7c8973474d",
+          "properties": {
+            "controller_binding_form": "PASS",
+            "controller_binding_signatures": "PASS",
+            "controller_binding_window": "PASS",
+            "controller_binding_revocation": "NOT_CHECKED"
+          },
+          "binds_pair": true,
+          "applies": true,
+          "proves": [
+            "control of both keys at the ceremony",
+            "both key holders state that one controller holds both keys"
+          ]
+        },
+        "issuer_independence": {
+          "status": "FAIL",
+          "shown_as": "redundant, not corroborating",
+          "reason": "controller binding same_controller_asserted 7c32632350a8bdf8793dffa50726967520afcf55007af3aa194dac7c8973474d",
+          "satisfied_becomes": {
+            "r-corroborated": "INSUFFICIENT"
+          }
+        },
+        "fails": []
+      }
+    }
+  ]
+}

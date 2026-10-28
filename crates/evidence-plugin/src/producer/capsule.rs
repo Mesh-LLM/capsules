@@ -698,6 +698,11 @@ pub struct ReceivedHalfProvenance<'a> {
     /// The foreign half's own `agent_output_digest`, carried for the same
     /// correlation/`digest_match` reason. `None` when absent.
     pub foreign_agent_output_digest: Option<&'a str>,
+    /// The key the half verified under, and how this node accepted it
+    /// (D-34): provenance only, nothing gates on it. `None` where the caller
+    /// has no acceptance to record.
+    pub sender_key_id: Option<&'a str>,
+    pub accepted_via: Option<&'a crate::peer_keys::AcceptedVia>,
 }
 
 /// Seal the LOCAL CITING record for a
@@ -749,6 +754,20 @@ pub fn seal_citing_record(
     }
     if let Some(rd) = prov.foreign_agent_output_digest {
         received_half.insert("agent_output_digest".into(), json!(rd));
+    }
+    if let Some(key) = prov.sender_key_id {
+        received_half.insert("sender_key_id".into(), json!(key));
+    }
+    if let Some(via) = prov.accepted_via {
+        received_half.insert("accepted_via".into(), json!(via.token()));
+        if let crate::peer_keys::AcceptedVia::ControllerDeclaration {
+            binding_digest,
+            anchor_key,
+        } = via
+        {
+            received_half.insert("controller_binding_digest".into(), json!(binding_digest));
+            received_half.insert("controller_anchor_key_id".into(), json!(anchor_key));
+        }
     }
 
     seal_local_citation(
@@ -2635,6 +2654,8 @@ mod tests {
             digest_match: None,
             foreign_agent_input_digest: Some("a".repeat(64).leak()),
             foreign_agent_output_digest: Some("b".repeat(64).leak()),
+            sender_key_id: None,
+            accepted_via: None,
         }
     }
 

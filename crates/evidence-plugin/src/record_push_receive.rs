@@ -17,20 +17,27 @@
 //!    reason in reply to a bundle is how a sender recognises a receiver that
 //!    predates bundles.
 //! 3. `record_at_completion: off` refuses `policy_decline`.
-//! 4. A push with no sender id, or from a sender with no announced key
-//!    ([`crate::peer_keys`]), is refused `signature_unverified`. These cheap
-//!    refusals come before any work on the record's bytes: an unknown sender
-//!    is refused before its record is checked.
+//! 4. A push with no sender id, or whose half's `key_id` this node does not
+//!    accept ([`crate::peer_keys::accepted_via`]), is refused
+//!    `signature_unverified`. The key is the identity and the sender id a
+//!    hint (D-34): a key accepted for one peer is accepted whatever id the
+//!    push arrived under, and a known id with an unknown key is refused. A
+//!    bundle may carry a controller declaration ([`crate::controller_binding`])
+//!    binding the half's key to an accepted one. These cheap refusals come
+//!    before any work on the record's bytes: an unknown key is refused
+//!    before its record is checked.
 //! 5. The half passes the Class 1 checks on its own bytes, as the reference
 //!    verifier runs them (capsule-emit's `structure`, including that its
 //!    `capsule_id` recomputes), else malformed.
-//! 6. The announced key is the half's `key_id` and the half's signature
-//!    verifies under it, else `signature_unverified`.
+//! 6. The half's signature verifies under its accepted `key_id`, else
+//!    `signature_unverified`. Every `signature_unverified` refusal of a half
+//!    names the half's `key_id`, under the node's signature.
 //! 7. What a served half claims about the exchange agrees with this node's
-//!    own record of it, else `served_by_mismatch` / `model_mismatch`.
+//!    own record of it, else `served_by_mismatch` / `model_mismatch`. The
+//!    server it names may be any peer its key is bound to, or the sender id.
 //! 8. A split's carried stage records are each valid and named by the main
 //!    record's receipt, else `bundle_malformed`.
-//! 9. A bundle's checkpoint is signed by the same announced key and its proof
+//! 9. A bundle's checkpoint is signed by the same accepted key and its proof
 //!    puts the half under that checkpoint's root, else `inclusion_unverified`;
 //!    and it does not contradict a checkpoint already held for the same key
 //!    and log (`checkpoint_equivocation`) or come from before the newest one
@@ -77,6 +84,8 @@ pub const BUNDLE_VERSION: u64 = 1;
 
 /// The bundle member a split's coordinator carries its stage records in.
 pub const SPLIT_STAGE_RECORDS: &str = "split_stage_records";
+/// The bundle member a controller declaration travels in.
+pub const CONTROLLER_BINDING: &str = crate::controller_binding::MEMBER;
 /// More stage records than this in one bundle is refused.
 pub const MAX_SPLIT_STAGE_RECORDS: usize = 64;
 
@@ -129,8 +138,13 @@ pub struct Receiver<'a> {
     pub ledger_dir: &'a Path,
     /// This node's key: it signs every refusal.
     pub signing_key: &'a SigningKey,
-    /// The raw `CAPSULES_PEER_KEYS` value (`None` when unset).
+    /// The raw `CAPSULES_PEER_KEYS` value (`None` when unset), or the
+    /// registry already merged with [`Self::announced`]
+    /// (`crate::peer_keys::registry`): merging again changes nothing.
     pub peer_keys: Option<&'a str>,
+    /// The keys the host announced (`crate::peer_keys::announced::snapshot`),
+    /// so what was accepted records whether a host announced it.
+    pub announced: &'a BTreeMap<String, String>,
     /// `record_at_completion: off`: receive nothing.
     pub record_at_completion_off: bool,
     /// The most `rejected-record-pushes.jsonl` may grow to, in bytes
@@ -180,18 +194,34 @@ pub fn receive(
     sender: Option<&str>,
     now: &str,
 ) -> std::io::Result<Value> {
-    receive_via(node, body, sender, now, "push")
+    receive_via(node, body, sender, now, "push").map(|(reply, _)| reply)
 }
 
 /// `receive` for a record by how it reached this node: `via` is `"push"`
 /// for a pushed record, `"ask"` for a record this node asked the sender
 /// for, written to its provenance. The checks are the same either way.
+/// Beside the reply: how the half's key was accepted, when the reply is
+/// `received`, for the citing record the caller seals.
 pub fn receive_via(
     node: &Receiver<'_>,
     body: &[u8],
     sender: Option<&str>,
     now: &str,
     via: &str,
+) -> std::io::Result<(Value, Option<crate::peer_keys::Accepted>)> {
+    let mut accepted = None;
+    let reply = receive_checked(node, body, sender, now, via, &mut accepted)?;
+    let received = reply.get("status").and_then(Value::as_str) == Some("received");
+    Ok((reply, accepted.filter(|_| received)))
+}
+
+fn receive_checked(
+    node: &Receiver<'_>,
+    body: &[u8],
+    sender: Option<&str>,
+    now: &str,
+    via: &str,
+    accepted_as: &mut Option<crate::peer_keys::Accepted>,
 ) -> std::io::Result<Value> {
     // One push at a time: the held-checkpoint judgement (step 8) reads what
     // is stored and then stores more, and two pushes interleaving there could
@@ -200,7 +230,7 @@ pub fn receive_via(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let request_digest = hex::encode(Sha256::digest(body));
-    let refuse = |reason: &str| refusal(node.signing_key, &request_digest, reason, now);
+    let refuse = |reason: &str| refusal(node.signing_key, &request_digest, reason, now, None);
 
     let Ok(parsed) = strict_json::parse(body) else {
         return Ok(refuse(REASON_REQUEST_MALFORMED));
@@ -216,9 +246,10 @@ pub fn receive_via(
             return Ok(refuse(REASON_SIGNATURE_UNVERIFIED));
         };
         let own_key_id = hex::encode(node.signing_key.verifying_key().to_bytes());
+        let registry = crate::peer_keys::merged(node.peer_keys, node.announced);
         let door = crate::referee::hold::Node {
             ledger_dir: node.ledger_dir,
-            peer_keys: node.peer_keys,
+            peer_keys: registry.as_deref(),
             own_key_id: &own_key_id,
         };
         return match crate::referee::hold::hold_delivered_verdict(&door, &parsed, sender, now)? {
@@ -251,17 +282,23 @@ pub fn receive_via(
     };
 
     // The cheap refusals come before any work on the record's bytes: this
-    // node's policy, then a sender with no announced key.
+    // node's policy, then a sender id, then a key this node accepts.
     if node.record_at_completion_off {
         return Ok(refuse(REASON_POLICY_DECLINE));
     }
 
     // The id the half claims (not yet checked) until it is verified below.
     let mut logged_id = half.get("capsule_id").and_then(Value::as_str);
+    // The key the half claims, named in a `signature_unverified` refusal
+    // when it is a key's form at all.
+    let claimed_key = half
+        .get("key_id")
+        .and_then(Value::as_str)
+        .filter(|key| is_lower_hex(key, 64));
     // A refusal issued before the record's signature has verified (no sender,
-    // a sender with no announced key, or a key or signature that does not
-    // match) may use only a small share of the log: anyone can fill that
-    // share, but never crowd out the refusals of authenticated pushes.
+    // a key this node does not accept, or a signature that does not verify)
+    // may use only a small share of the log: anyone can fill that share, but
+    // never crowd out the refusals of authenticated pushes.
     let reject = |logged_id: Option<&str>,
                   reason: &str,
                   exchange: Option<&str>,
@@ -282,29 +319,56 @@ pub fn receive_via(
             node.rejected_log_limit / UNAUTHENTICATED_LOG_SHARE
         };
         append_capped(node.ledger_dir, REJECTED_PUSHES_FILENAME, &entry, limit)?;
-        Ok(refuse(reason))
+        let named = (reason == REASON_SIGNATURE_UNVERIFIED)
+            .then_some(claimed_key)
+            .flatten();
+        Ok(refusal(
+            node.signing_key,
+            &request_digest,
+            reason,
+            now,
+            named,
+        ))
     };
 
     let Some(sender) = sender.filter(|s| !s.is_empty()) else {
         return reject(logged_id, REASON_SIGNATURE_UNVERIFIED, None, false);
     };
-    let Some(announced) = crate::peer_keys::announced_key_in(node.peer_keys, sender) else {
+    // A body that is no record at all (not an object, or one with no id)
+    // and names no key is malformed, as it was when the sender id alone
+    // picked the key: there is no key to ask about.
+    if claimed_key.is_none() && record_id(half).is_none() {
+        return Ok(refuse(malformed));
+    }
+    let own_key = hex::encode(node.signing_key.verifying_key().to_bytes());
+    let declaration = bundle.and_then(|b| b.get(CONTROLLER_BINDING));
+    let Some(accepted) = claimed_key.and_then(|key| {
+        crate::peer_keys::accepted_via(
+            node.peer_keys,
+            node.announced,
+            key,
+            &own_key,
+            declaration,
+            evidence_request::time::parse_utc(now),
+        )
+    }) else {
         return reject(logged_id, REASON_SIGNATURE_UNVERIFIED, None, false);
     };
+    let key = claimed_key.unwrap_or_default().to_string();
 
     let Some(capsule_id) = record_id(half) else {
         return Ok(refuse(malformed));
     };
     logged_id = Some(capsule_id);
-    if half.get("key_id").and_then(Value::as_str) != Some(announced.as_str())
-        || !signed_by(half, &announced)
-    {
+    if !signed_by(half, &key) {
         return reject(logged_id, REASON_SIGNATURE_UNVERIFIED, None, false);
     }
-    // From here on the record is signed by the sender's announced key.
+    // From here on the record is signed by a key this node accepts.
     let reject = |reason: &str, exchange: Option<&str>| reject(logged_id, reason, exchange, true);
 
-    if let Some(reason) = claims_verdict(node.ledger_dir, half, sender)? {
+    let mut servers: Vec<&str> = accepted.peers.iter().map(String::as_str).collect();
+    servers.push(sender);
+    if let Some(reason) = claims_verdict(node.ledger_dir, half, &servers)? {
         let exchange = half
             .pointer("/effect/request_digest")
             .and_then(Value::as_str)
@@ -322,11 +386,14 @@ pub fn receive_via(
 
     let mut inclusion = None;
     if let Some(bundle) = bundle {
-        let Some(verified) = verify_bundle_inclusion(capsule_id, &announced, bundle) else {
+        let Some(verified) = verify_bundle_inclusion(capsule_id, &key, bundle) else {
             return reject(REASON_INCLUSION_UNVERIFIED, None);
         };
         match history_verdict(&held_inclusions(node.ledger_dir)?, capsule_id, &verified) {
-            History::Duplicate(row) => return Ok(received_reply(&row)),
+            History::Duplicate(row) => {
+                *accepted_as = Some(accepted);
+                return Ok(received_reply(&row));
+            }
             History::Equivocation(evidence) => {
                 let mut evidence = evidence;
                 evidence["received_from"] = json!(sender);
@@ -344,10 +411,11 @@ pub fn receive_via(
         inclusion = Some(verified);
     }
 
-    // A record already held from this sender is not stored again: a resent
-    // push (a retry, or a replay) adds nothing to disk. A bundle's proof is
-    // still judged and held on its own terms below.
-    if !already_held(node.ledger_dir, capsule_id, sender)? {
+    // A record already held is not stored again, whichever sender id it
+    // comes under: a resent push (a retry, or a replay, also under another
+    // id now that the key and not the id is checked) adds nothing to disk.
+    // A bundle's proof is still judged and held on its own terms below.
+    if !already_held(node.ledger_dir, capsule_id)? {
         append(node.ledger_dir, RECEIVED_CAPSULES_FILENAME, half)?;
         append(
             node.ledger_dir,
@@ -368,6 +436,7 @@ pub fn receive_via(
             )?;
         }
     }
+    *accepted_as = Some(accepted);
     let Some(inclusion) = inclusion else {
         return Ok(json!({"status": "received"}));
     };
@@ -387,7 +456,13 @@ pub fn receive_via(
 /// A refusal of `body` for `reason`, signed by this node's key: for a push
 /// this module does not take at all (a delivered verdict).
 pub fn refuse(signing_key: &SigningKey, body: &[u8], reason: &str, now: &str) -> Value {
-    refusal(signing_key, &hex::encode(Sha256::digest(body)), reason, now)
+    refusal(
+        signing_key,
+        &hex::encode(Sha256::digest(body)),
+        reason,
+        now,
+        None,
+    )
 }
 
 /// The success reply for a held bundle: the facts the bridge cites, never the
@@ -408,11 +483,22 @@ fn received_reply(held: &Value) -> Value {
 }
 
 /// A refusal signed by this node: Ed25519 over the RFC 8785 form of
-/// `{issued_at, reason, request_digest}` (three ASCII strings, so sorted
-/// compact JSON), `key_id` the raw public key. `policy_decline` also carries
-/// the fabric's `status`.
-fn refusal(key: &SigningKey, request_digest: &str, reason: &str, issued_at: &str) -> Value {
-    let body = json!({"issued_at": issued_at, "reason": reason, "request_digest": request_digest});
+/// `{issued_at, reason, request_digest}` (ASCII strings, so sorted compact
+/// JSON), plus `refused_key_id` when the refusal names the refused half's
+/// key (`signature_unverified`), `key_id` the raw public key.
+/// `policy_decline` also carries the fabric's `status`.
+fn refusal(
+    key: &SigningKey,
+    request_digest: &str,
+    reason: &str,
+    issued_at: &str,
+    refused_key: Option<&str>,
+) -> Value {
+    let mut body =
+        json!({"issued_at": issued_at, "reason": reason, "request_digest": request_digest});
+    if let Some(refused) = refused_key {
+        body["refused_key_id"] = json!(refused);
+    }
     let signed = sorted_compact(&body);
     let mut reply = json!({
         "request_digest": request_digest,
@@ -421,6 +507,9 @@ fn refusal(key: &SigningKey, request_digest: &str, reason: &str, issued_at: &str
         "key_id": hex::encode(key.verifying_key().to_bytes()),
         "sig": hex::encode(key.sign(signed.as_bytes()).to_bytes()),
     });
+    if let Some(refused) = refused_key {
+        reply["refused_key_id"] = json!(refused);
+    }
     if reason == REASON_POLICY_DECLINE {
         reply["status"] = json!("WITHHELD");
     }
@@ -499,11 +588,11 @@ fn json_lines(ledger_dir: &Path, filename: &str) -> std::io::Result<Vec<Value>> 
     Ok(rows)
 }
 
-/// Whether this sender's record `capsule_id` is held already.
-fn already_held(ledger_dir: &Path, capsule_id: &str, sender: &str) -> std::io::Result<bool> {
+/// Whether the record `capsule_id` is held already.
+fn already_held(ledger_dir: &Path, capsule_id: &str) -> std::io::Result<bool> {
     Ok(json_lines(ledger_dir, RECEIVED_PROVENANCE_FILENAME)?
         .iter()
-        .any(|row| row["capsule_id"] == capsule_id && row["received_from"] == sender))
+        .any(|row| row["capsule_id"] == capsule_id))
 }
 
 fn append(ledger_dir: &Path, filename: &str, entry: &Value) -> std::io::Result<()> {
@@ -587,11 +676,18 @@ fn bundle_exact(bundle: &Value) -> bool {
         return false;
     };
     let top = ["record_push_bundle", "capsule", "inclusion", "checkpoint"];
-    let expected = top.len() + usize::from(map.contains_key(SPLIT_STAGE_RECORDS));
+    let expected = top.len()
+        + usize::from(map.contains_key(SPLIT_STAGE_RECORDS))
+        + usize::from(map.contains_key(CONTROLLER_BINDING));
     if map.len() != expected || !top.iter().all(|k| map.contains_key(*k)) {
         return false;
     }
     if count(&map[BUNDLE_MARKER]) != Some(BUNDLE_VERSION) {
+        return false;
+    }
+    // A declaration is judged when the key is (`peer_keys::accepted_via`);
+    // here it need only be an object.
+    if map.get(CONTROLLER_BINDING).is_some_and(|b| !b.is_object()) {
         return false;
     }
     let inclusion = &map["inclusion"];
@@ -938,7 +1034,7 @@ fn own_requested_records(ledger_dir: &Path, request_digest: &str) -> std::io::Re
 fn claims_verdict(
     ledger_dir: &Path,
     half: &Value,
-    sender: &str,
+    servers: &[&str],
 ) -> std::io::Result<Option<&'static str>> {
     if cfg!(feature = "mutant-record-push-skips-claims") {
         return Ok(None);
@@ -950,7 +1046,7 @@ fn claims_verdict(
     {
         return Ok(None);
     }
-    if named_server(half).is_some_and(|named| named != sender) {
+    if named_server(half).is_some_and(|named| !servers.contains(&named.as_str())) {
         return Ok(Some(REASON_SERVED_BY_MISMATCH));
     }
     // No "our own record routed this elsewhere" refusal: the provider's push
@@ -965,7 +1061,7 @@ fn claims_verdict(
     };
     let own: Vec<&Value> = own
         .iter()
-        .filter(|record| named_server(record).is_none_or(|named| named == sender))
+        .filter(|record| named_server(record).is_none_or(|named| servers.contains(&named.as_str())))
         .collect();
     Ok(names_other_model(half, &own).then_some(REASON_MODEL_MISMATCH))
 }
@@ -1064,6 +1160,7 @@ mod tests {
                 peer_keys: case["node"]["peer_keys_env"].as_str(),
                 record_at_completion_off: false,
                 rejected_log_limit: MAX_REJECTED_LOG_BYTES,
+                announced: crate::peer_keys::NONE_ANNOUNCED,
             };
             for push in case["pushes"].as_array().unwrap() {
                 let body = body_bytes(push);
@@ -1114,6 +1211,7 @@ mod tests {
             peer_keys: valid["node"]["peer_keys_env"].as_str(),
             record_at_completion_off: false,
             rejected_log_limit: MAX_REJECTED_LOG_BYTES,
+            announced: crate::peer_keys::NONE_ANNOUNCED,
         };
         let push = &valid["pushes"][0];
         assert!(receive(&receiver, &body_bytes(push), push["sender"].as_str(), NOW).is_err());
@@ -1133,6 +1231,7 @@ mod tests {
                 peer_keys: case["node"]["peer_keys_env"].as_str(),
                 record_at_completion_off: case["node"]["record_at_completion"] == "off",
                 rejected_log_limit: MAX_REJECTED_LOG_BYTES,
+                announced: crate::peer_keys::NONE_ANNOUNCED,
             };
             for push in case["pushes"].as_array().unwrap() {
                 let held = |name: &str| {
@@ -1179,6 +1278,7 @@ mod tests {
             peer_keys: case["node"]["peer_keys_env"].as_str(),
             record_at_completion_off: false,
             rejected_log_limit: limit,
+            announced: crate::peer_keys::NONE_ANNOUNCED,
         }
     }
 
@@ -1221,10 +1321,10 @@ mod tests {
     #[test]
     fn the_rejected_log_stops_at_its_cap_and_counts_what_it_drops() {
         let corpus = corpus();
-        let unknown = case(&corpus, "bare_unknown_sender");
+        let unknown = case(&corpus, "bare_key_mismatch");
         let dir = tempfile::tempdir().unwrap();
         let key = SigningKey::from_bytes(&[9; 32]);
-        // An unknown sender's refusals get a sixteenth of the cap: 2,000 bytes.
+        // An unknown key's refusals get a sixteenth of the cap: 2,000 bytes.
         let limit = 32_000;
         let node = receiver(dir.path(), &key, unknown, limit);
         let push = &unknown["pushes"][0];
@@ -1288,7 +1388,7 @@ mod tests {
     #[test]
     fn an_unauthenticated_flood_cannot_crowd_out_an_authenticated_refusal() {
         let corpus = corpus();
-        let unknown = case(&corpus, "bare_unknown_sender");
+        let unknown = case(&corpus, "bare_key_mismatch");
         let lie = case(&corpus, "claims_served_by_other");
         let dir = tempfile::tempdir().unwrap();
         let own: String = lie["node"]["own_records"]
@@ -1320,22 +1420,29 @@ mod tests {
         assert_eq!(logged.last().unwrap()["reason"], REASON_SERVED_BY_MISMATCH);
     }
 
-    /// An unknown sender is refused before its record's bytes are checked:
+    /// An unknown key is refused before its record's bytes are checked:
     /// even a record that would fail every check gets the identity refusal.
+    /// A known key reaches the checks whatever sender id it arrives under.
     #[test]
-    fn an_unknown_sender_is_refused_before_its_bytes_are_checked() {
+    fn an_unknown_key_is_refused_before_its_bytes_are_checked() {
         let corpus = corpus();
         let malformed = case(&corpus, "structure_approver");
         let dir = tempfile::tempdir().unwrap();
         let key = SigningKey::from_bytes(&[9; 32]);
         let node = receiver(dir.path(), &key, malformed, MAX_REJECTED_LOG_BYTES);
         let push = &malformed["pushes"][0];
-        let known = receive(&node, &body_bytes(push), push["sender"].as_str(), NOW).unwrap();
-        assert_eq!(
-            known["reason"], REASON_REQUEST_MALFORMED,
-            "a known sender reaches the checks"
-        );
-        let unknown = receive(&node, &body_bytes(push), Some("nobody"), NOW).unwrap();
+        for sender in [push["sender"].as_str(), Some("nobody")] {
+            let known = receive(&node, &body_bytes(push), sender, NOW).unwrap();
+            assert_eq!(
+                known["reason"], REASON_REQUEST_MALFORMED,
+                "a known key reaches the checks under {sender:?}"
+            );
+        }
+        let mut stranger = malformed.clone();
+        stranger["node"]["peer_keys_env"] =
+            case(&corpus, "bare_key_mismatch")["node"]["peer_keys_env"].clone();
+        let node = receiver(dir.path(), &key, &stranger, MAX_REJECTED_LOG_BYTES);
+        let unknown = receive(&node, &body_bytes(push), push["sender"].as_str(), NOW).unwrap();
         assert_eq!(unknown["reason"], REASON_SIGNATURE_UNVERIFIED);
     }
 
@@ -1351,6 +1458,7 @@ mod tests {
             peer_keys: None,
             record_at_completion_off: false,
             rejected_log_limit: MAX_REJECTED_LOG_BYTES,
+            announced: crate::peer_keys::NONE_ANNOUNCED,
         };
         let body = br#"{"adjudication_delivery": 1, "verdict_capsule": {}, "extra": 1}"#;
         let reply = receive(&node, body, Some("node-c"), NOW).unwrap();
@@ -1421,7 +1529,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let line = serde_json::to_string(&requested(HF_ID)).unwrap();
         std::fs::write(dir.path().join("capsules.jsonl"), line + "\n").unwrap();
-        assert_eq!(claims_verdict(dir.path(), &half, "node-a").unwrap(), None);
+        assert_eq!(
+            claims_verdict(dir.path(), &half, &["node-a"]).unwrap(),
+            None
+        );
     }
 
     #[test]

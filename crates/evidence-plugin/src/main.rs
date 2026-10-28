@@ -4,10 +4,13 @@ mod adjudication_records;
 // yet by a live path of this binary.
 mod capsule_emit;
 mod checkpoint_cadence;
+mod controller_binding;
 mod data_dir;
 mod decision;
 mod evidence_answer;
 mod evidence_artifact;
+#[cfg(test)]
+mod evidence_key_acceptance;
 mod evidence_log;
 mod evidence_panes;
 #[cfg(test)]

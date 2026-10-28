@@ -33,8 +33,11 @@
 //!
 //! **The responder** ([`check`]) runs before anything is looked up: window,
 //! signature, audience, replay, then the key's binding and the stated id
-//! against it. It yields the verified principal, the node the host's
-//! announced key is bound to ([`bound_node`]), or why there is none.
+//! against it. It yields the verified principal, the key and every node it
+//! is bound to ([`claimants`]: announced by a host, listed by the operator,
+//! or reached through a carried controller declaration), or why there is
+//! none. The key is the asker's identity, not the peer id it asks under
+//! (D-34).
 //! `evidence_answer` decides what that means for the subject asked: a valid
 //! signature under a key no host binds ([`Failure::Unbound`]) reads as an
 //! unsigned request where the answer needs no identity; every other failure
@@ -268,8 +271,9 @@ pub fn form(map: &Map<String, Value>) -> Form {
 
 /// The nodes `key_id` is bound to: each peer whose key for this plugin the
 /// host announced as `key_id`, after checking that peer's binding against
-/// its node key (`peer_keys::announced`). An operator entry
-/// (`CAPSULES_PEER_KEYS`) binds nothing on its own, and one that gives that
+/// its node key (`peer_keys::announced`), and each entry of the operator's
+/// map (`CAPSULES_PEER_KEYS`) that gives `key_id`: the stopgap for a node
+/// with no stable peer id (D-34). An operator entry that gives an announced
 /// peer another key vetoes it, as for pushed records (`peer_keys::merged`).
 ///
 /// A host binds a key to a node by the node's signature alone, without
@@ -282,18 +286,43 @@ pub fn claimants(
     configured: Option<&str>,
     key_id: &str,
 ) -> Vec<String> {
-    let merged = crate::peer_keys::merged(configured, announced)
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
-    let Some(Value::Object(merged)) = merged else {
+    let merged = crate::peer_keys::merged(configured, announced);
+    crate::peer_keys::peers_for_key_in(merged.as_deref(), key_id)
+}
+
+/// [`claimants`] of `key_id`, or, when it has none, the claimants of the key
+/// a controller declaration carried in the request (`controller_binding`,
+/// covered by its signature) binds it to, when that binding applies at
+/// `now` (`peer_keys::accepted_via`). A declaration anchored on this node's
+/// own key (the one the registry gives `own_node`) binds nothing.
+fn request_claimants(
+    keys: Keys<'_>,
+    map: &Map<String, Value>,
+    key_id: &str,
+    now: UtcTime,
+    own_node: Option<&str>,
+) -> Vec<String> {
+    let direct = claimants(keys.announced, keys.configured, key_id);
+    if !direct.is_empty() {
+        return direct;
+    }
+    let Some(declaration) = map.get(crate::controller_binding::MEMBER) else {
         return Vec::new();
     };
-    announced
-        .iter()
-        .filter(|(node, key)| {
-            key.as_str() == key_id && merged.get(*node).and_then(Value::as_str) == Some(key_id)
-        })
-        .map(|(node, _)| node.clone())
-        .collect()
+    let merged = crate::peer_keys::merged(keys.configured, keys.announced);
+    let own_key = own_node
+        .and_then(|node| crate::peer_keys::announced_key_in(merged.as_deref(), node))
+        .unwrap_or_default();
+    crate::peer_keys::accepted_via(
+        keys.configured,
+        keys.announced,
+        key_id,
+        &own_key,
+        Some(declaration),
+        Some(now),
+    )
+    .map(|accepted| accepted.peers)
+    .unwrap_or_default()
 }
 
 /// What a key's [`claimants`] and a request's stated id make of who asks.
@@ -408,6 +437,10 @@ pub struct Principal {
     pub key_id: String,
     /// The node that key is bound to ([`bound_node`]).
     pub node_id: String,
+    /// Every node that key is bound to ([`claimants`]): the asker is each of
+    /// them, since the key, not the peer id it asks under, is its identity
+    /// (D-34). Holds `node_id`.
+    pub node_ids: Vec<String>,
 }
 
 /// Why a signed request names no principal.
@@ -502,7 +535,7 @@ pub fn check(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|id| !id.is_empty());
-    let claimants = claimants(keys.announced, keys.configured, key_id);
+    let claimants = request_claimants(keys, map, key_id, now, own_node);
     let nonce = map.get("nonce").and_then(Value::as_str).unwrap_or_default();
     let bound = !claimants.is_empty();
     let replay_checked = match replay.first_use(key_id, nonce, deadline.seconds, now.seconds, bound)
@@ -533,6 +566,7 @@ pub fn check(
     Ok(Principal {
         key_id: key_id.to_string(),
         node_id,
+        node_ids: claimants,
     })
 }
 
@@ -620,7 +654,10 @@ pub fn proves_principal(
         && verifies(channel, map, &key_id, &sig)
         && audience_matches(map.get(AUDIENCE).and_then(Value::as_str), own_node)
         && matches!(
-            bound_node(&claimants(keys.announced, keys.configured, &key_id), stated),
+            bound_node(
+                &request_claimants(keys, map, &key_id, now, own_node),
+                stated
+            ),
             Binding::Node(_)
         )
 }
@@ -871,12 +908,16 @@ mod tests {
     }
 
     #[test]
-    fn a_key_binds_only_through_the_host_and_an_operator_entry_can_only_veto() {
+    fn a_key_binds_through_the_host_or_the_operators_stopgap_and_a_disagreeing_entry_vetoes() {
         let k = "ab".repeat(32);
         let announced = BTreeMap::from([("node-a".to_string(), k.clone())]);
         assert_eq!(claimants(&announced, None, &k), ["node-a"]);
-        let configured_only = format!(r#"{{"node-a": "{k}"}}"#);
-        assert!(claimants(&BTreeMap::new(), Some(&configured_only), &k).is_empty());
+        let configured_only = format!(r#"{{"muse-vm": "{k}"}}"#);
+        assert_eq!(
+            claimants(&BTreeMap::new(), Some(&configured_only), &k),
+            ["muse-vm"],
+            "the stopgap names a node with no stable peer id"
+        );
         let disagrees = format!(r#"{{"node-a": "{}"}}"#, "cd".repeat(32));
         assert!(claimants(&announced, Some(&disagrees), &k).is_empty());
         assert!(claimants(&announced, Some("not json"), &k).is_empty());

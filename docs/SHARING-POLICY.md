@@ -84,10 +84,18 @@ way, because its operator asked for it. Its provenance says `via: "ask"`.
 mesh-llm has told it who the other side is. A pushed record is received and
 checked in-process (the sender's announced key, the signature, the claims, and
 a bundle's proof and checkpoint) and held only if every check passes; anything
-else gets a signed refusal. The sender's key must be known:
-announced by its host, or configured (`CAPSULES_PEER_KEYS`, see INSTALL.md).
-Both are keyed by peer id, and a client-only node gets a new id each time it
-starts, so a push from a client node is never accepted (INSTALL.md says more).
+else gets a signed refusal. The key that signed the record must be known:
+announced by some peer's host, listed in `CAPSULES_PEER_KEYS` (a stopgap, see
+INSTALL.md), or bound to such a key by a controller declaration the sender
+carries (a `controller-binding/0` record both keys signed). The key is the
+sender's identity, not the peer id the push arrives under: a known key is
+accepted under any id, and a known id with an unknown key is refused. A
+refusal for an unknown key names that key under this node's signature. A
+declaration binding the sender's key to this node's own key is never used.
+The citing record this node seals for a held record names the sender's key
+and how it was accepted (`accepted_via`: `host_announced`,
+`operator_stopgap` or `controller_declaration`). That is provenance only:
+nothing decides on it.
 
 ## Reading records back (`share_history_segments`)
 
@@ -153,22 +161,26 @@ Before it looks anything up, the answering node checks, in order:
 - the signature verifies;
 - the `audience` is this node, so a request one node received cannot be
   forwarded to another;
-- the nonce has not been used before its deadline. For a key a host
-  announced this is strict: a replay is refused, and so is a request once that
-  key holds 4,096 live nonces. Keys no host announced share one pool of 16,384
+- the nonce has not been used before its deadline. For a key bound to a node
+  (below) this is strict: a replay is refused, and so is a request once that
+  key holds 4,096 live nonces. Keys bound to no node share one pool of 16,384
   nonces, held until their deadlines, and the check there is best-effort: a
   replay found in the pool is refused, but while the pool is full of live
   nonces a new one is not held, and the request goes on unchecked (it can then
   only be answered as an unsigned request would be, below);
-- a host announced the key for a node. If several nodes announced it, the
-  request's `requester_id` must be one of them. If only one did, the request's
-  `requester_id`, when given, must be that node. An entry in
-  `CAPSULES_PEER_KEYS` alone does not count, and one that disagrees with the
-  host's vetoes it.
+- the key is bound to a node: a host announced it for that node, an entry in
+  `CAPSULES_PEER_KEYS` gives it under that name (the stopgap), or the request
+  carries a controller declaration (`controller_binding`, covered by the
+  signature) binding it to a key bound one of those ways. An entry that
+  disagrees with the host's vetoes both. If the key is bound to several
+  nodes, the request's `requester_id` must be one of them. If to only one,
+  the request's `requester_id`, when given, must be that node.
 
-That node is the asker. Under `counterparties`:
+The asker is every node the key is bound to: the key, not the peer id it
+asks under, is its identity. Under `counterparties`:
 
-- a record goes only to the node it names, as proven this way;
+- a record goes only to the node it names, when that is one of the asker's
+  nodes;
 - an unsigned request is refused `not_authorized`;
 - a proven node that no record names is refused `not_authorized` before the
   subject is resolved, the same refusal for any subject, so which refusal it
@@ -176,7 +188,7 @@ That node is the asker. Under `counterparties`:
 
 Under `peers` a record goes to any node proven this way, whether or not a
 record names it. An unsigned request gets no record under any setting, and
-neither does a valid signature under a key no host announced: it proves no
+neither does a valid signature under a key bound to no node: it proves no
 node. That signature is the one failure answered as an unsigned request would
 be, and only where an unsigned request is answered (the checkpoint list,
 `history_card/1`, and Standard History when it is shared). Every other failed

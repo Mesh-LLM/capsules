@@ -228,8 +228,10 @@ Confirmation needs each node to send its record to the other side, which
 both nodes, and give each node the other's key (below).
 
 **Each node must know the other node's public key.** The plugin accepts a
-record only from a peer whose key it knows, and refuses the rest. It knows a
-key from either of two places:
+record only when it knows the key that signed it, and refuses the rest. The
+key is what counts, not the peer id the record arrives under: a known key is
+accepted under any id, and a known id with an unknown key is refused. It knows
+a key from any of three places:
 
 - **The host,** when mesh-llm announces plugin keys (it lists the
   `plugin_keys.v1` capability): each directly-connected peer's key for this
@@ -238,19 +240,24 @@ key from either of two places:
   `http://127.0.0.1:3131`). This plugin announces its own key there at start,
   on a host that lists `plugin_keys.v1`.
 - **You:** set `CAPSULES_PEER_KEYS` in the node's environment to a JSON object
-  mapping each peer's id to its raw Ed25519 public key in hex. A node writes
-  its own id to `<data dir>/self-peer-id` and its public key to
-  `<data dir>/keys/node-key.pub.pem`.
+  mapping a name to a raw Ed25519 public key in hex. The name is a peer's id,
+  or any label for a node with no stable id. A node writes its own id to
+  `<data dir>/self-peer-id` and its public key to
+  `<data dir>/keys/node-key.pub.pem`. This is a stopgap: the record of what
+  was accepted says so (`accepted_via: operator_stopgap`), and it binds the
+  key to nothing.
+- **A controller declaration** the sender carries: a `controller-binding/0`
+  record (Controller Binding v0) that both keys signed, binding the sender's
+  key to a key known one of the other two ways. Only `same_controller_asserted`
+  under `dual_signature/0` is used, and only inside its window. A declaration
+  that binds the sender's key to this node's own key is never used.
 
-If the two give a peer different keys, nothing from that peer verifies until
-you remove the stale entry.
+If the host and `CAPSULES_PEER_KEYS` give a peer different keys, nothing
+signed by either key for that peer verifies until you remove the stale entry.
 
-**A client-only node (`mesh-llm client`) cannot be named there.** mesh-llm
-gives a client node a new peer id each time it starts, so no entry in
-`CAPSULES_PEER_KEYS` stays true, and its pushed records are refused by every
-peer. Its own records are still sealed and kept on that node. A node started
-with `mesh-llm serve` keeps its id across restarts of the same home directory
-and can be named.
+**A client-only node (`mesh-llm client`)** gets a new peer id each time it
+starts. Name its key in `CAPSULES_PEER_KEYS` under any label, and its pushed
+records are accepted whatever id they arrive under.
 
 ## Where the records are kept
 
