@@ -29,7 +29,8 @@
 //! a join unless the reporter already acknowledged one under this key and this
 //! statement under its current mesh id; so a node joins once, and again only
 //! when the statement, the key, the reporter or its id changes (a client
-//! node's id is new each start: the old id's join is left first). Off after a
+//! node's id is new each start: the old id's join is left first, when it is
+//! at the reporter in force). Off after a
 //! join was sent, acknowledged or not, it sends a leave to that reporter. A
 //! join that fails is tried again after each
 //! wait in `retry_after_s` in turn, then not until the switch changes or the
@@ -46,7 +47,9 @@
 //! the latest join of each node and the leave that ends it, if any, in
 //! [`JOINS_DIR`] for the daily reporter to commit. A directory of these passes
 //! `check_join.py`'s order check: a leave is kept only beside the join it ends
-//! (a leave of a node never joined there is acknowledged and not kept).
+//! (a leave of a node not joined there is acknowledged and kept apart, in
+//! [`ENDED_DIR`], never listed, so the join it ends is refused if it arrives
+//! later).
 //! The mesh does not tell the reporter which node sent a record, so the key is
 //! what binds it: a record is refused when its key is not the one the host
 //! announced for its `node_id`, and a node held under one key moves to another
@@ -100,6 +103,9 @@ pub const STATE_FILE: &str = "network-join.json";
 
 /// The reporter's joins and leaves, in the data directory.
 pub const JOINS_DIR: &str = "joins";
+
+/// Leaves of nodes not joined there, in the data directory: never listed.
+pub const ENDED_DIR: &str = "joins-ended";
 
 /// How far in the future a record's `at` may be (`check_join.py`'s `SKEW`).
 const SKEW: chrono::Duration = chrono::Duration::minutes(5);
@@ -305,7 +311,13 @@ pub fn due(
     // unacknowledged leave was ending.
     let joined = acked.filter(|a| a.record["kind"] == KIND_JOIN || !a.acknowledged);
     match (switch_on, joined) {
-        (true, Some(a)) if a.record["node_id"] != node_id => Due::Leave(a.reporter.clone()),
+        // The old id is left at the reporter in force; a former reporter is
+        // not chased, as for a join (it may be gone for good).
+        (true, Some(a))
+            if a.record["node_id"] != node_id && Some(a.reporter.as_str()) == reporter =>
+        {
+            Due::Leave(a.reporter.clone())
+        }
         (true, Some(a))
             if a.acknowledged
                 && a.record["kind"] == KIND_JOIN
@@ -532,7 +544,7 @@ where
             Some(node.node_id),
             reporter,
             registry,
-            &node.data_dir.join(JOINS_DIR),
+            node.data_dir,
             now.utc,
         )
     } else {
@@ -677,10 +689,15 @@ pub const MAX_NODES: usize = 10_000;
 
 /// How many nodes `dir` holds a join of.
 fn held_nodes(dir: &Path) -> usize {
+    held_nodes_in(dir, ".join.json")
+}
+
+/// How many files in `dir` end with `suffix`.
+fn held_nodes_in(dir: &Path, suffix: &str) -> usize {
     std::fs::read_dir(dir).map_or(0, |entries| {
         entries
             .filter_map(Result::ok)
-            .filter(|e| e.file_name().to_string_lossy().ends_with(".join.json"))
+            .filter(|e| e.file_name().to_string_lossy().ends_with(suffix))
             .count()
     })
 }
@@ -695,7 +712,7 @@ pub fn intake_bytes(bytes: &[u8], self_id: Option<&str>, data_dir: &Path) -> Res
         self_id,
         reporter().as_deref(),
         crate::peer_keys::registry().as_deref(),
-        &data_dir.join(JOINS_DIR),
+        data_dir,
         Utc::now(),
     )
 }
@@ -706,9 +723,10 @@ pub fn intake(
     self_id: Option<&str>,
     reporter: Option<&str>,
     registry: Option<&str>,
-    dir: &Path,
+    data_dir: &Path,
     now: DateTime<Utc>,
 ) -> Result<(), String> {
+    let dir = &data_dir.join(JOINS_DIR);
     if self_id.is_none() || self_id != reporter {
         return Err("this node is not the reporter".into());
     }
@@ -731,6 +749,9 @@ pub fn intake(
     std::fs::create_dir_all(dir).map_err(|e| format!("could not keep it: {e}"))?;
     let join_path = dir.join(format!("{node_id}.join.json"));
     let leave_path = dir.join(format!("{node_id}.leave.json"));
+    // A leave that arrived before any join here: kept apart from the list, so
+    // a join it ends that arrives later, late or replayed, is refused.
+    let ended_path = data_dir.join(ENDED_DIR).join(format!("{node_id}.json"));
     let held =
         |path: &Path| -> Option<Value> { serde_json::from_slice(&std::fs::read(path).ok()?).ok() };
     let at = at_of(&doc);
@@ -758,7 +779,11 @@ pub fn intake(
             }
             None => {}
         }
-        if held(&leave_path).is_some_and(|leave| at_of(&leave) >= at) {
+        let ends = |leave: &Value| at_of(leave) >= at;
+        if held(&leave_path).is_some_and(|leave| ends(&leave))
+            || held(&ended_path)
+                .is_some_and(|leave| ends(&leave) && leave["key_id"] == doc["key_id"])
+        {
             return Err("a later leave of this node is held".into());
         }
         // The earlier leave goes first: stopped between the two steps, the
@@ -772,10 +797,22 @@ pub fn intake(
         }
         keep(&join_path)
     } else {
-        // A leave of a node never joined here ends nothing: taken, not kept
-        // (a node whose join never arrived can still leave).
+        // A leave of a node not joined here is taken, so a node whose join
+        // never arrived can still leave, and kept apart from the list.
         let Some(join) = held(&join_path) else {
-            return Ok(());
+            if held(&ended_path).is_some_and(|leave| at_of(&leave) >= at) {
+                return Ok(());
+            }
+            if !ended_path.exists()
+                && held_nodes_in(&data_dir.join(ENDED_DIR), ".json") >= MAX_NODES
+            {
+                return Err(format!(
+                    "the reporter holds {MAX_NODES} nodes, the most it takes"
+                ));
+            }
+            std::fs::create_dir_all(data_dir.join(ENDED_DIR))
+                .map_err(|e| format!("could not keep it: {e}"))?;
+            return keep(&ended_path);
         };
         if at_of(&join) > at {
             return Err(format!(

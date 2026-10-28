@@ -285,7 +285,7 @@ impl Reporter {
     }
 
     fn files(&self) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(self.dir.path())
+        let mut names: Vec<String> = std::fs::read_dir(self.dir.path().join(JOINS_DIR))
             .map(|d| {
                 d.map(|e| e.unwrap().file_name().into_string().unwrap())
                     .collect()
@@ -296,7 +296,8 @@ impl Reporter {
     }
 
     fn held(&self, name: &str) -> Value {
-        serde_json::from_slice(&std::fs::read(self.dir.path().join(name)).unwrap()).unwrap()
+        serde_json::from_slice(&std::fs::read(self.dir.path().join(JOINS_DIR).join(name)).unwrap())
+            .unwrap()
     }
 }
 
@@ -328,9 +329,6 @@ fn the_reporter_keeps_the_latest_join_and_the_leave_that_ends_it() {
     let reporter = Reporter::new();
     let join = signed(KIND_JOIN, &key(1), "2026-10-28T12:00:00Z");
     let leave = signed(KIND_LEAVE, &key(1), "2026-10-28T13:00:00Z");
-    // A leave with no join ends nothing: taken, not kept.
-    assert_eq!(reporter.take(&leave), Ok(()));
-    assert!(reporter.files().is_empty());
     assert_eq!(reporter.take(&join), Ok(()));
     // The same join again changes nothing.
     assert_eq!(reporter.take(&join), Ok(()));
@@ -447,13 +445,10 @@ fn a_held_node_moves_to_another_key_only_when_the_host_announced_it() {
 #[test]
 fn the_reporter_holds_at_most_max_nodes() {
     let reporter = Reporter::new();
-    std::fs::create_dir_all(reporter.dir.path()).unwrap();
+    let joins = reporter.dir.path().join(JOINS_DIR);
+    std::fs::create_dir_all(&joins).unwrap();
     for n in 0..MAX_NODES {
-        std::fs::write(
-            reporter.dir.path().join(format!("{n:064x}.join.json")),
-            b"{}",
-        )
-        .unwrap();
+        std::fs::write(joins.join(format!("{n:064x}.join.json")), b"{}").unwrap();
     }
     assert_eq!(
         reporter.take(&signed(KIND_JOIN, &key(1), "2026-10-28T12:00:00Z")),
@@ -476,6 +471,11 @@ fn a_new_mesh_id_leaves_the_old_one_first_then_joins() {
     assert_eq!(
         due(false, Some(&joined), &key_id, &node(2), Some(&r)),
         Due::Leave(r.clone())
+    );
+    // A former reporter is not chased: the new id joins the one in force.
+    assert_eq!(
+        due(true, Some(&joined), &key_id, &node(2), Some(&node(8))),
+        Due::Join(node(8))
     );
 }
 
@@ -698,4 +698,36 @@ fn keys_that_disagree_are_not_no_key() {
     );
     let others_only = json!({ node(2): commitment::key_id(&key(2)) }).to_string();
     assert_eq!(reporter.take_with(&join, Some(&others_only)), Ok(()));
+}
+
+#[test]
+fn a_leave_before_any_join_refuses_the_join_it_ends_and_is_never_listed() {
+    let reporter = Reporter::new();
+    let n = node(1);
+    let join = signed(KIND_JOIN, &key(1), "2026-10-28T12:00:00Z");
+    let leave = signed(KIND_LEAVE, &key(1), "2026-10-28T13:00:00Z");
+    // The leave arrives first: taken, kept apart from the list.
+    assert_eq!(reporter.take(&leave), Ok(()));
+    assert_eq!(reporter.take(&leave), Ok(()));
+    assert!(reporter.files().is_empty());
+    assert!(reporter
+        .dir
+        .path()
+        .join(ENDED_DIR)
+        .join(format!("{n}.json"))
+        .is_file());
+    // The join it ends, late or replayed, is refused; another key's is not
+    // ended by it.
+    assert_eq!(
+        reporter.take(&join),
+        Err("a later leave of this node is held".into())
+    );
+    let other = signed(KIND_JOIN, &key(2), "2026-10-28T12:30:00Z");
+    assert_eq!(reporter.take(&other), Ok(()));
+    // A later join of the same key is a rejoin.
+    let reporter = Reporter::new();
+    reporter.take(&leave).unwrap();
+    let rejoin = signed(KIND_JOIN, &key(1), "2026-10-28T14:00:00Z");
+    assert_eq!(reporter.take(&rejoin), Ok(()));
+    assert_eq!(reporter.files(), [format!("{n}.join.json")]);
 }
