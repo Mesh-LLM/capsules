@@ -141,10 +141,14 @@ cll = { package = "checkpointed-local-log", version = "0.3.1" }
 # Pinned exactly: a new release may change what verifies.
 evidence-request = { version = "=0.2.0", features = ["cll", "receipt"] }
 # The "asked of you" log (`evidence_answer::log_received`) is evidencebook's
-# `received` (evidencebook#35); which directory it may write is this
-# plugin's (`data_dir`). Same checkpointed-local-log and evidence-request
-# lines as above.
-evidencebook = "0.0.7"
+# `received` and the `served_summary/1` fold is its `served_summary`
+# (evidencebook#35); which directory the log may write, how a ledger line is
+# read (`evidence_log::leaf_facts`), the summary's labels and the witness
+# keys its receipts are checked under are this plugin's
+# (`evidence_artifact::served_summary`). 0.0.8 checks each receipt with
+# agent-action-capsule 0.4's witness verifier. Same checkpointed-local-log
+# and evidence-request lines as above.
+evidencebook = "0.0.8"
 # The witness's own record of this log (`witness_status`): one blocking GET,
 # no redirects, a capped body. Already in the tree through capsule-emit.
 ureq = { version = "2", features = ["json"] }

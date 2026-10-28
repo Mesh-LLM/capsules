@@ -60,7 +60,9 @@ use evidence_request::resolve::{Anchor, Responder};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::served_summary::{LeafFacts, SERVED_SUMMARY_DERIVATION_TOKEN};
+use evidencebook::served_summary::{
+    latency, LeafFacts, Outcome, ServedFacts, DERIVATION as SERVED_SUMMARY_DERIVATION_TOKEN,
+};
 
 pub const CAPSULES_FILE: &str = "capsules.jsonl";
 pub const CHECKPOINTS_FILE: &str = "checkpoints.jsonl";
@@ -316,7 +318,7 @@ impl LedgerIndex {
                     .pointer("/model_attestation/compute_attestation")
                     .and_then(|c| c.get(crate::producer::capsule::OWNER_MAINTENANCE_BLOCK))
                     .is_some(),
-            facts: LeafFacts::of(&record),
+            facts: leaf_facts(&record),
         });
         Ok(())
     }
@@ -848,6 +850,113 @@ mod tests {
         assert_eq!(
             record_digest(&view.record_at(9).unwrap().body).as_deref(),
             Some(padding_id)
+        );
+    }
+}
+
+/// What the served summary (evidencebook's `served_summary`) reads from one
+/// ledger line, in this plugin's record shape: a served record's model,
+/// quantization, outcome, latency and whether it states a weights digest,
+/// and an adjudication verdict's two halves. Padding reads as nothing.
+/// Never a requester-identity field (`cross_party.initiator_ref`,
+/// `serving_provenance.requesting_party`/`counterparty_ref`): the summary
+/// answers what was served, never who asked.
+pub fn leaf_facts(record: &Value) -> LeafFacts {
+    if crate::producer::padding::is_padding(record) {
+        return LeafFacts::default();
+    }
+    let served = (crate::evidence_panes::label_role(record) == "served").then(|| {
+        let poc = record.pointer("/model_attestation/compute_attestation/x-mesh-poc-v1");
+        let provenance = poc.and_then(|p| p.get("serving_provenance"));
+        let text_or_unknown = |key: &str| {
+            provenance
+                .and_then(|sp| sp.get(key))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("unknown")
+                .to_string()
+        };
+        ServedFacts {
+            group: text_or_unknown("model_canonical_ref"),
+            variant: text_or_unknown("quantization"),
+            outcome: match record.pointer("/effect/status").and_then(Value::as_str) {
+                Some("confirmed") => Outcome::Completed,
+                Some("failed" | "reverted") => Outcome::Failed,
+                _ => Outcome::Unknown,
+            },
+            latency_ms: poc.and_then(|p| p.get("latency_ms")).and_then(latency),
+            digest_present: provenance
+                .and_then(|sp| sp.get("weights_digest"))
+                .is_some_and(|w| !w.is_null()),
+        }
+    });
+    let adjudicated_halves = crate::producer::capsule::is_adjudication(record)
+        .then(|| record.pointer("/model_attestation/compute_attestation/adjudication"))
+        .flatten()
+        .filter(|a| is_truthy(a))
+        .map(|a| {
+            let half = |k: &str| a.get(k).and_then(Value::as_str).map(str::to_string);
+            (half("half_a_capsule_id"), half("half_b_capsule_id"))
+        });
+    LeafFacts {
+        served,
+        adjudicated_halves,
+    }
+}
+
+/// Python truthiness of a JSON value, as `if not adjudication` reads it.
+fn is_truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    }
+}
+
+#[cfg(test)]
+mod leaf_facts_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_verdict_is_read_whether_it_writes_confirms_or_the_legacy_adjudicates() {
+        for relation in ["confirms", "adjudicates"] {
+            let record = json!({"chain": {"relation": relation},
+                "model_attestation": {"compute_attestation": {"epistemic_type": "adjudication",
+                    "adjudication": {"half_a_capsule_id": "a", "half_b_capsule_id": "b"}}}});
+            assert_eq!(
+                leaf_facts(&record).adjudicated_halves,
+                Some((Some("a".into()), Some("b".into()))),
+                "{relation}"
+            );
+        }
+        let plain = json!({"chain": {"relation": "confirms"},
+            "model_attestation": {"compute_attestation": {"adjudication": {"half_a_capsule_id": "a"}}}});
+        assert_eq!(leaf_facts(&plain).adjudicated_halves, None);
+    }
+
+    #[test]
+    fn a_served_record_reads_its_model_quantization_outcome_and_latency() {
+        let record = json!({
+            "effect": {"status": "reverted"},
+            "model_attestation": {"compute_attestation": {"x-mesh-poc-v1": {
+                "role": "served", "latency_ms": " 12.5 ",
+                "serving_provenance": {"model_canonical_ref": "m", "quantization": "",
+                                       "weights_digest": "w", "requesting_party": "someone"}
+            }}}
+        });
+        assert_eq!(
+            leaf_facts(&record).served,
+            Some(ServedFacts {
+                group: "m".into(),
+                variant: "unknown".into(),
+                outcome: Outcome::Failed,
+                latency_ms: Some(12.5),
+                digest_present: true,
+            })
         );
     }
 }

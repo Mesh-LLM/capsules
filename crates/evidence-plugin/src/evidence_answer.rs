@@ -124,7 +124,7 @@ use std::path::Path;
 use crate::evidence_artifact::{self, Build, CheckError, ReceiptStatus};
 use crate::evidence_log::{self, LedgerIndex, LogView};
 use crate::requester_auth::{self, Form, Principal};
-use crate::served_summary::SERVED_SUMMARY_DERIVATION_TOKEN;
+use evidencebook::served_summary::DERIVATION as SERVED_SUMMARY_DERIVATION_TOKEN;
 
 /// The largest request answered. A -00 request is a few hundred bytes; this
 /// turns a large one away before it is parsed.
@@ -1403,7 +1403,7 @@ pub(crate) mod tests {
 
     /// A node whose every checkpoint carries a receipt from [`WITNESS`],
     /// signed by `witness`, for that checkpoint's own entry.
-    fn witnessed_node(witness: &SigningKey) -> tempfile::TempDir {
+    pub(crate) fn witnessed_node(witness: &SigningKey) -> tempfile::TempDir {
         node_with_witnesses(|entry| {
             json!([{
                 "ts_url": WITNESS, "entry_hash": hex::encode(entry),
@@ -1414,7 +1414,7 @@ pub(crate) mod tests {
     }
 
     /// A node whose every checkpoint carries `witnesses(its entry)`.
-    fn node_with_witnesses(witnesses: impl Fn(&[u8; 32]) -> Value) -> tempfile::TempDir {
+    pub(crate) fn node_with_witnesses(witnesses: impl Fn(&[u8; 32]) -> Value) -> tempfile::TempDir {
         let dir = node(&corpus_ledger());
         let path = dir.path().join("checkpoints.jsonl");
         let lines: Vec<Value> = std::fs::read_to_string(&path)

@@ -78,8 +78,8 @@ use crate::evidence_log::{ChainCheckpoint, LogView, Record};
 
 pub(crate) mod cll_proofs;
 
-use crate::served_summary::SERVED_SUMMARY_DERIVATION_TOKEN;
 use cll_proofs::{consistent, inclusion_leaf, proves};
+use evidencebook::served_summary::DERIVATION as SERVED_SUMMARY_DERIVATION_TOKEN;
 
 /// The reply member that carries witness receipts beside the envelope.
 pub const WITNESS_RECEIPTS: &str = "witness_receipts";
@@ -112,6 +112,108 @@ pub struct Build<'a> {
     pub records: &'a [u64],
     pub signing_key: &'a ed25519_dalek::SigningKey,
     pub issued_at: &'a str,
+}
+
+/// The labels this plugin publishes `served_summary/1` under
+/// (`mesh-served-summary/1`): its schema, the fold's definition digest
+/// (`mesh.served_summary_fold/1`, SHA-256 over the RFC 8785 bytes of the
+/// account definition, fixed while its reads and class are), and the fixed
+/// texts of the published form, as the Python sidecar wrote them.
+const SERVED_SUMMARY_LABELS: evidencebook::served_summary::Labels<'static> =
+    evidencebook::served_summary::Labels {
+        schema: "mesh-served-summary/1",
+        definition_digest: "6eb6f1870dbcee613573c60692b79ab979e2a6188a0f4c6191d4af65a7b773b8",
+        groups_member: "by_model",
+        digest_member: "weights_digest",
+        variants_member: "quantizations",
+        refused_note: "agent_action_capsule.contracts.EFFECT_STATUSES carries no distinct 'refused' value; a \
+             pre-dispatch policy refusal is coarsened to effect.status='failed' before this module sees \
+             it (mesh_record_emitter.py's policy_denied terminal state) -- refused is always 0 until a \
+             status value distinguishes it, never inferred from other fields",
+        digest_absent_note: "no capsule field named weights_digest exists in records this sidecar emits today \
+             (same absence self_accountability.rung_summary documents) -- never fabricated",
+        selection_note: "witnessed range only: entries appended after the latest witnessed \
+             checkpoint are excluded by design, same as account_capsule.py",
+        derivation_note: "counts + latency distribution per model, over the selected witnessed \
+             range; an ACCOUNT of what was served, not a score. The relying party \
+             computes its own predicate.",
+        coverage_note: "cross-check handle: recompute the fold from the node's ledger, check \
+             the ledger against this root, confirm the root was witnessed",
+        adjudications_note: "verdicts this node has received() into its own log about its served \
+             exchanges -- not this node's own judgment of itself. The counterparty-held \
+             references path is what carries weight in an adversarial reading; this \
+             count is never presented as a substitute for it.",
+        no_requester_identifiers: "this summary reads and reports no requester-identity field \
+             (cross_party.initiator_ref, serving_provenance.requesting_party/counterparty_ref) \
+             -- it answers WHAT was served, never WHO asked",
+        not_a_score: "An account of facts + a witness handle to verify them, not a score or routing \
+             recommendation.",
+    };
+
+/// The served summary at `served`, the first `covered` ledger lines folded
+/// (evidencebook's `served_summary`). Each witness receipt the checkpoint
+/// carries is checked against its COSE statement under the key
+/// `witness_keys` configures for its witness, matched as every other
+/// receipt check here matches it (`evidence_answer::configured_witness_key`);
+/// a receipt with no configured key reads `NOT_CHECKED`.
+fn served_summary(
+    index: &crate::evidence_log::LedgerIndex,
+    served: &ChainCheckpoint,
+    covered: u64,
+    witness_keys: &std::collections::BTreeMap<String, String>,
+) -> Value {
+    let facts: Vec<_> = index.leaves.iter().map(|l| &l.facts).collect();
+    let cp = &served.record;
+    let checkpoint = evidencebook::substrate::Checkpoint {
+        v: cp.v,
+        kind: cp.kind.clone(),
+        log_id: cp.log_id.clone(),
+        mmr_size: cp.mmr_size,
+        root: cp.root.clone(),
+        prev_size: cp.prev_size,
+        prev_root: cp.prev_root.clone(),
+        key_id: cp.key_id.clone(),
+        timestamp: cp.timestamp.clone(),
+        signature: cp.signature.clone(),
+        witnesses: cp
+            .witnesses
+            .iter()
+            .map(|w| evidencebook::substrate::WitnessEntry {
+                ts_url: w.ts_url.clone(),
+                entry_hash: w.entry_hash.clone(),
+                receipt_b64: w.receipt_b64.clone(),
+                leaf_index: w.leaf_index,
+                tree_size: w.tree_size,
+                is_stub: w.is_stub,
+            })
+            .collect(),
+    };
+    // One directory row per carried witness this node has a key for, its
+    // endpoint the receipt's own URL, so the verifier's row lookup finds it.
+    let rows: Vec<Value> = cp
+        .witnesses
+        .iter()
+        .filter_map(|w| {
+            let key = crate::evidence_answer::configured_witness_key(witness_keys, &w.ts_url)?;
+            Some(json!({
+                "name": w.ts_url,
+                "endpoint": w.ts_url.trim_end_matches('/'),
+                "key_ids": [hex::encode(key.to_bytes())],
+            }))
+        })
+        .collect();
+    let directory = json!({ "witnesses": rows });
+    evidencebook::served_summary::summary_value(
+        &facts,
+        &evidencebook::served_summary::Coverage {
+            checkpoint: &checkpoint,
+            covered,
+            statement: &served.statement,
+            witness_directory: Some(&directory),
+        },
+        &|id| index.leaf_index_of(id),
+        &SERVED_SUMMARY_LABELS,
+    )
 }
 
 /// Build and sign the answer: the profile's flat reply, carried in a JSON
@@ -163,14 +265,11 @@ pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
         {
             let covered =
                 leaf_count(served.record.mmr_size).map_err(|_| Reason::CoverageUnsatisfiable)?;
-            let facts: Vec<_> = index.leaves.iter().map(|l| &l.facts).collect();
-            let summary = crate::served_summary::summary_value(
-                &facts,
-                &crate::served_summary::Coverage {
-                    checkpoint: &served.record,
-                    covered,
-                },
-                &|id| index.leaf_index_of(id),
+            let summary = served_summary(
+                index,
+                served,
+                covered,
+                &crate::checkpoint_cadence::active_witness_keys(),
             );
             head.insert("derivation".into(), json!(SERVED_SUMMARY_DERIVATION_TOKEN));
             head.insert("served_summary".into(), summary);
@@ -1971,7 +2070,7 @@ mod tests {
     fn every_answer_form_is_byte_for_byte_the_baseline() {
         const FIXTURE: &str = "tests/fixtures/evidence_answers_5d2d102.json";
         const FIXTURE_SHA256: &str =
-            "f06115e14dcf39f76c87484bb559e79cf0de9927b2d634b0b5eb106e69f32aaa";
+            "6278678c4a1413171c3b92473fb20e1fa9b2fdba9b340b98f7bfaae2bed9e91c";
         let node = node();
         let last = node.anchors.len() - 1;
         let half = hex::encode(Sha256::digest(b"the counterparty's own half"));
@@ -2280,5 +2379,94 @@ mod tests {
             .decoded
             .unwrap()
             .mmr_size
+    }
+
+    /// The served summary over a node whose checkpoints carry `witnesses`,
+    /// at its last checkpoint, under the witness keys `keys` configures.
+    fn summary_coverage(dir: &std::path::Path, keys: &[(&str, &SigningKey)]) -> Value {
+        let keys = keys
+            .iter()
+            .map(|(url, k)| (url.to_string(), hex::encode(k.verifying_key().to_bytes())))
+            .collect();
+        let key_id = hex::encode(key().verifying_key().to_bytes());
+        crate::evidence_log::with_index(dir, &key_id, |index| {
+            let served = index.chain.last().unwrap();
+            let covered = leaf_count(served.record.mmr_size).unwrap();
+            served_summary(index, served, covered, &keys)["coverage"].clone()
+        })
+        .unwrap()
+    }
+
+    /// A receipt counts only under the key this node configures for its
+    /// witness, matched as every other receipt check here matches a URL;
+    /// with no key it reads NOT_CHECKED, never a lower count; under another
+    /// key it fails.
+    #[test]
+    fn the_served_summary_checks_each_receipt_under_the_configured_witness_key() {
+        use crate::evidence_answer::tests::{witnessed_node, WITNESS};
+        let witness = SigningKey::from_bytes(&[0x33; 32]);
+        let dir = witnessed_node(&witness);
+        let receipts = |status: &str| json!([{"ts_url": WITNESS, "status": status}]);
+        for configured in [WITNESS, "HTTPS://WITNESS.example/"] {
+            let v = summary_coverage(dir.path(), &[(configured, &witness)]);
+            assert_eq!(v["witnessed"], json!(true), "{configured}");
+            assert_eq!(v["witnesses"], json!([WITNESS]), "{configured}");
+            assert_eq!(v["witness_check"], json!("PASS"), "{configured}");
+            assert_eq!(v["witness_receipts"], receipts("PASS"), "{configured}");
+        }
+        let v = summary_coverage(dir.path(), &[]);
+        assert_eq!(v["witnessed"], json!(false));
+        assert_eq!(v["witness_check"], json!("NOT_CHECKED"));
+        assert_eq!(v["witness_receipts"], receipts("NOT_CHECKED"));
+        let v = summary_coverage(
+            dir.path(),
+            &[(WITNESS, &SigningKey::from_bytes(&[0x44; 32]))],
+        );
+        assert_eq!(v["witnessed"], json!(false));
+        assert_eq!(v["witness_check"], json!("FAIL"));
+        assert_eq!(v["witness_receipts"], receipts("FAIL"));
+    }
+
+    /// Several receipts, each checked on its own: a keyed one beside an
+    /// unkeyed one witnesses the range with the other NOT_CHECKED; the same
+    /// witness under two spellings of its URL passes twice.
+    #[test]
+    fn each_carried_receipt_is_checked_on_its_own() {
+        use crate::evidence_answer::tests::{mint_receipt, node_with_witnesses, WITNESS};
+        let witness = SigningKey::from_bytes(&[0x33; 32]);
+        let receipt = |url: &str, entry: &[u8; 32]| {
+            json!({"ts_url": url, "entry_hash": hex::encode(entry),
+                   "receipt_b64": mint_receipt(entry, &witness), "leaf_index": 0, "tree_size": 1})
+        };
+        let other = "https://other.example";
+        let dir = node_with_witnesses(|e| json!([receipt(WITNESS, e), receipt(other, e)]));
+        let v = summary_coverage(dir.path(), &[(WITNESS, &witness)]);
+        assert_eq!(v["witnessed"], json!(true));
+        assert_eq!(v["witnesses"], json!([WITNESS]));
+        assert_eq!(v["witness_check"], json!("PASS"));
+        assert_eq!(
+            v["witness_receipts"],
+            json!([{"ts_url": WITNESS, "status": "PASS"}, {"ts_url": other, "status": "NOT_CHECKED"}])
+        );
+        let shouted = "HTTPS://WITNESS.example/";
+        let dir = node_with_witnesses(|e| json!([receipt(WITNESS, e), receipt(shouted, e)]));
+        let v = summary_coverage(dir.path(), &[(WITNESS, &witness)]);
+        assert_eq!(v["witness_check"], json!("PASS"));
+        assert_eq!(
+            v["witness_receipts"],
+            json!([{"ts_url": WITNESS, "status": "PASS"}, {"ts_url": shouted, "status": "PASS"}])
+        );
+    }
+
+    /// A checkpoint line whose witness entry is not a receipt (no `ts_url`)
+    /// never reaches the served summary: the line does not read as a
+    /// checkpoint, so nothing is served under it.
+    #[test]
+    fn a_malformed_witness_entry_never_reaches_the_served_summary() {
+        let dir =
+            crate::evidence_answer::tests::node_with_witnesses(|_| json!([{"entry_hash": "ab"}]));
+        let key_id = hex::encode(key().verifying_key().to_bytes());
+        let chain = crate::evidence_log::with_index(dir.path(), &key_id, |index| index.chain.len());
+        assert_eq!(chain.unwrap(), 0, "no checkpoint is read");
     }
 }

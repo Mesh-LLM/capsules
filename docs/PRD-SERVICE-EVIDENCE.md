@@ -60,7 +60,8 @@ Each member is separately declared and separately verifiable:
   serves for that subject and anchor;
 - optionally `served_summary/1` (**built**: per-model served counts and latency
   over the checkpointed range, "fewer than 5" below a floor of 5,
-  `crates/evidence-plugin/src/served_summary.rs`; not in -00's registry);
+  evidencebook's `served_summary` fold under this plugin's labels,
+  `crates/evidence-plugin/src/evidence_artifact.rs`; not in -00's registry);
 - witness receipt status;
 - peer-confirmed exchange halves;
 - referee verdicts;
@@ -98,7 +99,7 @@ network: payment legs record observations, they do not move money.
   receipts, referee verdicts. Records keep `role` ∈ `requested / served /
   conflict / unknown` ([DESIGN-split-stage-records.md](DESIGN-split-stage-records.md)
   §1). `served_summary/1` counts served records only and reads no
-  requester-identity field (`served_summary.rs` module doc). No count mixes
+  requester-identity field (`evidence_log::leaf_facts`). No count mixes
   units.
 - **R-2 Split-stage inference.** A split run is one requester⟷coordinator
   exchange today; stage nodes leave no record. When stage records exist
