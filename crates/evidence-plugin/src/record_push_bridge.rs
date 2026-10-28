@@ -1035,8 +1035,9 @@ mod tests {
     /// After an ask, the held record is read back from disk like any other:
     /// the Peers pane (what the page loads on a reload) gives the row a
     /// confirmed sibling `via: "ask"` whose digests match ours, which is what
-    /// "Saved as confirmed" counts. With `share_record_at_completion` off (the
-    /// default), the same record PUSHED is still declined.
+    /// "Saved as confirmed" counts. The record is asked for here, not pushed,
+    /// so the result does not depend on `share_record_at_completion`; the
+    /// declined push under `off` is pinned in `record_push_receive`.
     #[tokio::test]
     async fn an_asked_record_survives_a_reload_as_saved_confirmed() {
         use crate::capsule_emit::{HostProvenance, ObservedHostExchange};
@@ -1087,13 +1088,6 @@ mod tests {
             &their_id,
             record["key_id"].as_str().unwrap(),
         );
-
-        // Pushed with the switch at its default (off): declined, nothing held.
-        assert!(crate::share_policy::record_at_completion_is_off());
-        let pushed = receive_pushed_record(&mine, &their_id, &record_bytes)
-            .await
-            .unwrap();
-        assert!(!accepted(&pushed), "a push is declined: {pushed}");
 
         assert!(hold_asked_record(&mine, &their_id, &record_bytes)
             .await

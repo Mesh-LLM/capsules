@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **`share_record_at_completion` is on by default (`counterparty`), reversing the 0.1.3 default.**
+  Every node now pushes its sealed record of a completed exchange to the counterparty and accepts
+  the counterparty's push, with no setting; `off` still does neither. The record goes only to the
+  other side of that exchange; the public checkpoint list shows when exchanges ended.
+  `share_adjudications`, `adjudicate_differing_twins`, `share_standard_history` and
+  `share_history_segments` keep their defaults. Mesh-LLM/capsules-plugin#68.
+
 ## 0.1.5
 
 **Milestone M1: who asks for evidence is proven, and a node gets back the record of the exchange it

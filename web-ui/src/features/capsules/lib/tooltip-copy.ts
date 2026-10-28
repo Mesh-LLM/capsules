@@ -31,10 +31,10 @@ export const HERO_TOOLTIPS = {
 export const OWNER_LINKED_PHRASE = 'linked to your owner account (self-asserted)'
 export const OWNER_NOT_LINKED_PHRASE = 'not linked to an owner'
 
-/** Record push is off by default (INSTALL.md "Quiet by default"), so their
- *  record arriving by itself is the exception, never the expectation. */
+/** Record push is on by default (D-37) but a node may turn it off, so their
+ *  record arriving by itself is never promised. */
 export const THEIR_RECORD_ARRIVES_IF_PUSHED =
-  'Their record arrives on its own only if their node sends records (off by default). Otherwise, ask for it on the exchange row.'
+  'Their record arrives on its own only if their node sends records (on by default, unless its operator turned it off). Otherwise, ask for it on the exchange row.'
 
 /** p2 item 5: why an action is disabled -- said on hover, never a silent grey. */
 export const SAMPLE_DATA_UNAVAILABLE = 'Not available on sample data.'
@@ -141,11 +141,11 @@ export const ROW_STATE_TOOLTIPS = {
     'They say they have no record of this exchange. That is their statement; there is nothing of theirs to check.',
   open_asked: 'You asked for their record and no verified reply has arrived yet.',
   open_not_held:
-    'Their record hasn’t arrived, or what arrived couldn’t be confirmed as theirs from the node that served you. It arrives on its own only if their node sends records (off by default); otherwise, ask for it on this row.',
+    'Their record hasn’t arrived, or what arrived couldn’t be confirmed as theirs from the node that served you. It arrives on its own only if their node sends records (on by default, unless its operator turned it off); otherwise, ask for it on this row.',
   open_not_given:
-    'Their record hasn’t arrived, and nothing they sent names it by its id. It arrives on its own only if their node sends records (off by default); otherwise, ask for it on this row.',
+    'Their record hasn’t arrived, and nothing they sent names it by its id. It arrives on its own only if their node sends records (on by default, unless its operator turned it off); otherwise, ask for it on this row.',
   open_not_asked:
-    'Their record hasn’t arrived. It arrives on its own only if their node sends records (off by default); otherwise, ask for it on this row.'
+    'Their record hasn’t arrived. It arrives on its own only if their node sends records (on by default, unless its operator turned it off); otherwise, ask for it on this row.'
 } as const
 
 /** The per-property cells a CLOSED row shows, each with its own (i). */

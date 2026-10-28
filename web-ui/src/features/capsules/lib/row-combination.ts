@@ -42,7 +42,7 @@ export function rowCombinationText(input: RowCombinationInput): string {
         ? 'Their signed record says another server or another model handled your request, so your node refused it. Use Compare to see the difference.'
         : `Your record checks out, and their signed record disagrees with it, or doesn’t match its own id. Use Compare to see where.${witnessed}`
     case 'open_not_held':
-      return 'Your record is sealed and checks out; their record hasn’t arrived. It comes on its own only if their node sends records (off by default), so ask for it on this row.'
+      return 'Your record is sealed and checks out; their record hasn’t arrived. It comes on its own only if their node sends records (on by default, unless its operator turned it off), so ask for it on this row.'
     case 'open_not_given':
       return 'Your record is sealed and checks out; their record hasn’t arrived, and nothing they sent names it by its id. Ask for it on this row.'
     case 'open_not_asked':

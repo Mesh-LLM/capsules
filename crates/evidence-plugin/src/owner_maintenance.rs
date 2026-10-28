@@ -750,7 +750,7 @@ fn witness_switch() -> Value {
 
 fn sharing_status() -> Value {
     json!({
-        "record_at_completion": switch(crate::share_policy::ENV_RECORD_AT_COMPLETION, Some("off")),
+        "record_at_completion": switch(crate::share_policy::ENV_RECORD_AT_COMPLETION, Some("counterparty")),
         "history_segments": switch("CAPSULES_SHARE_HISTORY_SEGMENTS", Some("counterparties")),
         "standard_history": switch(crate::share_policy::ENV_STANDARD_HISTORY, Some("off")),
         "advertise_evidence_requests": switch(crate::share_policy::ENV_ADVERTISE_EVIDENCE_REQUESTS, Some("off")),

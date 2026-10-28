@@ -567,7 +567,7 @@ describe('rightCellDetail — Item 4: the fuller story behind each state, moved 
     expect(rightCellDetail(stateOf('open_not_held'))).toContain('couldn’t be confirmed as theirs')
     expect(rightCellDetail(stateOf('open_not_given'))).toContain('nothing they sent names it by its id')
     for (const kind of ['open_not_held', 'open_not_given', 'open_not_asked'] as const) {
-      expect(rightCellDetail(stateOf(kind))).toContain('only if their node sends records (off by default)')
+      expect(rightCellDetail(stateOf(kind))).toContain('only if their node sends records (on by default, unless its operator turned it off)')
     }
   })
 
