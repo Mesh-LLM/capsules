@@ -127,7 +127,7 @@ fn held(receiver: &Node) -> usize {
 
 /// Whether `reply` is a refusal signed by `node_key` over its members,
 /// `refused_key_id` included when present.
-fn refusal_verifies(reply: &Value, node_key: &str) -> bool {
+pub(crate) fn refusal_verifies(reply: &Value, node_key: &str) -> bool {
     let text = |k: &str| reply[k].as_str().unwrap_or_default().to_string();
     let mut body = json!({
         "issued_at": text("issued_at"),
