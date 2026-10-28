@@ -565,6 +565,127 @@ fn hashes(hex_list: &[String]) -> Option<Vec<Hash>> {
         .collect()
 }
 
+/// `cp` as evidencebook's checkpoint type: the same fields and witness
+/// records, member for member.
+pub fn book_checkpoint(cp: &CheckpointRecord) -> evidencebook::substrate::Checkpoint {
+    evidencebook::substrate::Checkpoint {
+        v: cp.v,
+        kind: cp.kind.clone(),
+        log_id: cp.log_id.clone(),
+        mmr_size: cp.mmr_size,
+        root: cp.root.clone(),
+        prev_size: cp.prev_size,
+        prev_root: cp.prev_root.clone(),
+        key_id: cp.key_id.clone(),
+        timestamp: cp.timestamp.clone(),
+        signature: cp.signature.clone(),
+        witnesses: cp
+            .witnesses
+            .iter()
+            .map(|w| evidencebook::substrate::WitnessEntry {
+                ts_url: w.ts_url.clone(),
+                entry_hash: w.entry_hash.clone(),
+                receipt_b64: w.receipt_b64.clone(),
+                leaf_index: w.leaf_index,
+                tree_size: w.tree_size,
+                is_stub: w.is_stub,
+            })
+            .collect(),
+    }
+}
+
+impl LogView<'_> {
+    fn book_record(record: Record) -> evidencebook::store::Record {
+        evidencebook::store::Record {
+            leaf_index: record.leaf_index,
+            digest: record.digest,
+            body: record.body,
+        }
+    }
+}
+
+/// The record side of evidencebook's store, over this index (evidencebook#35):
+/// the crate reads the plugin's ledger through it and never opens a file the
+/// checkpointer owns. A line's committed entry is the `capsule_id` it states,
+/// the id this index keys it by.
+impl evidencebook::store::RecordSource for LogView<'_> {
+    fn record_by_digest(&self, digest: &str) -> Option<evidencebook::store::Record> {
+        self.record_at(self.index.leaf_index_of(digest)?)
+            .map(Self::book_record)
+    }
+    fn record_at(&self, leaf_index: u64) -> Option<evidencebook::store::Record> {
+        LogView::record_at(self, leaf_index).map(Self::book_record)
+    }
+    fn leaf_index_of(&self, digest: &str) -> Option<u64> {
+        self.index.leaf_index_of(digest)
+    }
+    fn correlation(&self, id: &str) -> Vec<u64> {
+        self.index.correlated(id).to_vec()
+    }
+    fn citing(&self, half_digest: &str) -> Vec<u64> {
+        self.index.citing(half_digest).to_vec()
+    }
+    /// The `capsule_id` the line states, as [`LogView::record_at`] checks a
+    /// line against the one indexed; `None` for octets that are no JSON
+    /// object stating one.
+    fn entry_of(&self, body: &[u8]) -> Option<String> {
+        let parsed: Value = serde_json::from_slice(body).ok()?;
+        parsed
+            .get("capsule_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
+}
+
+/// The commitment side of evidencebook's store: this index's re-derived
+/// chain and its own MMR, never the checkpointer's node store.
+impl evidencebook::store::CheckpointedLog for LogView<'_> {
+    fn leaf_count(&self) -> Result<u64, evidencebook::substrate::SubstrateError> {
+        Ok(self.index.leaves.len() as u64)
+    }
+    fn stated_checkpoints(
+        &self,
+    ) -> Result<
+        Vec<evidencebook::substrate::StatedCheckpoint>,
+        evidencebook::substrate::SubstrateError,
+    > {
+        Ok(self
+            .index
+            .chain
+            .iter()
+            .map(|cp| evidencebook::substrate::StatedCheckpoint {
+                checkpoint: book_checkpoint(&cp.record),
+                statement: cp.statement.clone(),
+            })
+            .collect())
+    }
+    fn inclusion_path(
+        &self,
+        leaf_index: u64,
+        mmr_size: u64,
+    ) -> Result<Vec<[u8; 32]>, evidencebook::substrate::SubstrateError> {
+        self.index
+            .inclusion_path(leaf_index, mmr_size)
+            .ok_or_else(|| {
+                evidencebook::substrate::SubstrateError::Mmr(format!(
+                    "no inclusion path for leaf {leaf_index} in an MMR of {mmr_size} nodes"
+                ))
+            })
+    }
+    fn consistency_parts(
+        &self,
+        from: u64,
+        to: u64,
+    ) -> Result<evidencebook::store::ConsistencyParts, evidencebook::substrate::SubstrateError>
+    {
+        self.index.consistency_parts(from, to).ok_or_else(|| {
+            evidencebook::substrate::SubstrateError::Mmr(format!(
+                "no consistency proof from {from} to {to} nodes"
+            ))
+        })
+    }
+}
+
 impl Responder for LogView<'_> {
     fn holds_record(&self, digest: &str) -> bool {
         self.index.leaf_index_of(digest).is_some()
@@ -958,5 +1079,84 @@ mod leaf_facts_tests {
                 digest_present: true,
             })
         );
+    }
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+    use crate::evidence_request_parity::{corpus_ledger, corpus_ledger_dir, NODE_KEY_SEED};
+    use evidencebook::store::{CheckpointedLog, RecordSource};
+
+    /// The corpus ledger's index, with `f` run over its view.
+    fn over_corpus<T>(f: impl FnOnce(&LogView<'_>) -> T) -> T {
+        let dir = tempfile::tempdir().unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&NODE_KEY_SEED);
+        corpus_ledger_dir(dir.path(), &key);
+        let key_id = hex::encode(key.verifying_key().to_bytes());
+        with_index(dir.path(), &key_id, |index| f(&index.view().unwrap())).unwrap()
+    }
+
+    /// The crate reads every record as this index serves it: by position, by
+    /// its `capsule_id`, and through the correlation and citation sets.
+    #[test]
+    fn the_record_side_is_the_index() {
+        over_corpus(|view| {
+            let ledger = corpus_ledger();
+            assert_eq!(view.leaf_count().unwrap(), ledger.len() as u64);
+            for (i, line) in ledger.iter().enumerate() {
+                let i = i as u64;
+                let id = line["capsule_id"].as_str().unwrap();
+                let ours = view.record_at(i).unwrap();
+                let book = RecordSource::record_at(view, i).unwrap();
+                assert_eq!(
+                    (book.leaf_index, &book.digest, &book.body),
+                    (i, &ours.digest, &ours.body)
+                );
+                assert_eq!(view.entry_of(&book.body).as_deref(), Some(id));
+                // The first occurrence of a capsule_id is the one indexed.
+                if let Some(at) = RecordSource::leaf_index_of(view, id) {
+                    assert_eq!(view.record_by_digest(id).unwrap().leaf_index, at);
+                }
+            }
+            assert_eq!(view.correlation("n-1"), view.index.correlated("n-1"));
+            assert!(view.record_by_digest(&"00".repeat(32)).is_none());
+            assert_eq!(view.entry_of(b"not json"), None);
+            assert_eq!(view.entry_of(b"{\"no\":\"id\"}"), None);
+        });
+    }
+
+    /// The crate's checkpoints are this index's chain, statement and fields
+    /// unchanged, and its proofs are the index's own.
+    #[test]
+    fn the_commitment_side_is_the_index() {
+        over_corpus(|view| {
+            let stated = view.stated_checkpoints().unwrap();
+            assert_eq!(stated.len(), view.index.chain.len());
+            for (book, ours) in stated.iter().zip(&view.index.chain) {
+                assert_eq!(book.statement, ours.statement);
+                assert_eq!(
+                    serde_json::to_value(&book.checkpoint).unwrap(),
+                    serde_json::to_value(&ours.record).unwrap(),
+                    "every field and witness record"
+                );
+            }
+            let (first, last) = (&stated[0].checkpoint, &stated[stated.len() - 1].checkpoint);
+            assert_eq!(
+                view.inclusion_path(3, last.mmr_size).unwrap(),
+                view.index.inclusion_path(3, last.mmr_size).unwrap()
+            );
+            assert_eq!(
+                view.consistency_parts(first.mmr_size, last.mmr_size)
+                    .unwrap(),
+                view.index
+                    .consistency_parts(first.mmr_size, last.mmr_size)
+                    .unwrap()
+            );
+            assert!(view.inclusion_path(10_000, last.mmr_size).is_err());
+            assert!(view
+                .consistency_parts(last.mmr_size, first.mmr_size)
+                .is_err());
+        });
     }
 }
