@@ -590,3 +590,52 @@ fn the_host_names_both_sides_and_the_requester_holds_the_providers_record() {
         );
     }
 }
+
+/// The settlement adapter reads each real ledger through the ledger's own
+/// reload, and its denominator is every settlement record on disk. The run
+/// is free traffic, so there may be none; then no exchange is reported at
+/// all, never one reported "unpaid".
+#[test]
+#[ignore = "needs the data directories of a real two-node run (scripts/e2e-two-node.sh)"]
+fn the_settlement_adapter_counts_every_settlement_record() {
+    let run = Run::from_env();
+    for node in [&run.requester, &run.provider] {
+        let (ledger, _) = crate::producer::index::open_ledger(&node.ledger_dir()).unwrap();
+        let records: Vec<Value> = ledger
+            .capsule_ids_in_order()
+            .iter()
+            .map(|id| ledger.lookup(id).unwrap().expect("listed").capsule)
+            .collect();
+        let on_disk = node
+            .ledger_lines()
+            .iter()
+            .filter(|line| {
+                line.pointer(crate::producer::capsule::SETTLEMENT_BLOCK_POINTER)
+                    .is_some()
+            })
+            .count();
+        let report = crate::settlement_adapter::report(records, None);
+        assert_eq!(report["settlement_records"], json!(on_disk), "{report:#}");
+        assert_eq!(
+            report["public_ledger_count"]["status"],
+            json!("NOT_CHECKED"),
+            "Lightning has no public ledger"
+        );
+        assert!(
+            report["disclosed_count"]["settlements"].as_u64().unwrap() <= on_disk as u64,
+            "{report:#}"
+        );
+        for book in report["exchanges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|e| e["books"].as_array().unwrap())
+        {
+            assert!(
+                ["PASS", "FAIL", "INCONCLUSIVE"]
+                    .contains(&book["settled"]["status"].as_str().unwrap()),
+                "{book:#}"
+            );
+        }
+    }
+}
