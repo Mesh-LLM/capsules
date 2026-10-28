@@ -212,6 +212,8 @@ wait_for 120 "join on the requester says it has joined" joined
 # --- the switch off: a signed leave -----------------------------------------
 sed -i.bak 's/^join_network = "on"$/join_network = "off"/' "$(node_home requester)/config.toml"
 wait_for 120 "the reporter holds the requester's signed leave" holds leave
+left() { tool "$REQUESTER_CONSOLE" join '{}' | jq -e '.network.acknowledged.kind == "leave/1"'; }
+wait_for 60 "the requester recorded the reporter's acknowledgement of its leave" left
 
 stop_nodes
 

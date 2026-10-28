@@ -27,19 +27,26 @@
 //!
 //! **When the node sends.** A task checks the switch every minute. On, it sends
 //! a join unless the reporter already acknowledged one under this key and this
-//! statement; so a node joins once, and again only when the statement, the key
-//! or the reporter changes. Off after an acknowledged join, it sends a leave to
-//! the reporter that took the join. A send that fails is tried again after each
+//! statement under its current mesh id; so a node joins once, and again only
+//! when the statement, the key, the reporter or its id changes (a client
+//! node's id is new each start: the old id's join is left first). Off after a
+//! join was sent, acknowledged or not, it sends a leave to that reporter. A
+//! join that fails is tried again after each
 //! wait in `retry_after_s` in turn, then not until the switch changes or the
-//! plugin restarts. What was acknowledged is kept in the data directory
-//! ([`STATE_FILE`]); the `join` operation reports it.
+//! plugin restarts. A leave is never given up: after the last wait it is tried
+//! again at that wait until the reporter takes it, since the statement promises
+//! that turning the switch off stops the asks. The last record is kept in the
+//! data directory ([`STATE_FILE`]) before it is sent, with whether the reporter
+//! acknowledged it, so a join whose reply was lost is still left; the `join`
+//! operation reports what was acknowledged and what is still owed.
 //!
 //! **The reporter's side.** The reporter node runs this plugin too. A node
 //! takes `join/1` only when it is the reporter (its own id is the reporter id
 //! above), checks each record as loop's `scripts/check_join.py` does, and keeps
 //! the latest join of each node and the leave that ends it, if any, in
 //! [`JOINS_DIR`] for the daily reporter to commit. A directory of these passes
-//! `check_join.py`'s order check: a leave is kept only beside the join it ends.
+//! `check_join.py`'s order check: a leave is kept only beside the join it ends
+//! (a leave of a node never joined there is acknowledged and not kept).
 //! The mesh does not tell the reporter which node sent a record, so the key is
 //! what binds it: a record is refused when its key is not the one the host
 //! announced for its `node_id`, and a node held under one key moves to another
@@ -88,7 +95,7 @@ pub const ENV_JOIN_NETWORK: &str = "CAPSULES_JOIN_NETWORK";
 /// The reporter node id, over the pinned one.
 pub const ENV_JOIN_REPORTER: &str = "CAPSULES_JOIN_REPORTER";
 
-/// What the reporter acknowledged, in the data directory.
+/// The last record sent and whether it was acknowledged, in the data directory.
 pub const STATE_FILE: &str = "network-join.json";
 
 /// The reporter's joins and leaves, in the data directory.
@@ -262,11 +269,15 @@ pub fn problems(doc: &Value, now: DateTime<Utc>) -> Vec<String> {
 // The node's side
 // ---------------------------------------------------------------------
 
-/// What the reporter acknowledged last: the record, and which reporter.
+/// The last record this node sent, which reporter it went to, and whether
+/// that reporter acknowledged it. A record is kept before it is sent, so a
+/// join the reporter took whose reply was lost is still left when the switch
+/// goes off.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Acked {
     pub record: Value,
     pub reporter: String,
+    pub acknowledged: bool,
 }
 
 /// What is due now.
@@ -280,12 +291,25 @@ pub enum Due {
 }
 
 /// What the node owes the reporter, from the switch, the last acknowledged
-/// record, this node's key and the reporter in force.
-pub fn due(switch_on: bool, acked: Option<&Acked>, key_id: &str, reporter: Option<&str>) -> Due {
-    let joined = acked.filter(|a| a.record["kind"] == KIND_JOIN);
+/// record, this node's key and mesh id, and the reporter in force. A client
+/// node's mesh id is new each time it starts (`self_peer`): the join of an
+/// earlier id is left first, so no id the node no longer has stays listed.
+pub fn due(
+    switch_on: bool,
+    acked: Option<&Acked>,
+    key_id: &str,
+    node_id: &str,
+    reporter: Option<&str>,
+) -> Due {
+    // A join sent, acknowledged or not, may be held; so may the join an
+    // unacknowledged leave was ending.
+    let joined = acked.filter(|a| a.record["kind"] == KIND_JOIN || !a.acknowledged);
     match (switch_on, joined) {
+        (true, Some(a)) if a.record["node_id"] != node_id => Due::Leave(a.reporter.clone()),
         (true, Some(a))
-            if a.record["key_id"] == key_id
+            if a.acknowledged
+                && a.record["kind"] == KIND_JOIN
+                && a.record["key_id"] == key_id
                 && a.record["consent_sha256"] == consent_sha256().as_str()
                 && Some(a.reporter.as_str()) == reporter =>
         {
@@ -301,18 +325,23 @@ fn state_path(data_dir: &Path) -> PathBuf {
     data_dir.join(STATE_FILE)
 }
 
-/// The last acknowledged record, when there is one.
+/// The last record sent, when there is one.
 pub fn load(data_dir: &Path) -> Option<Acked> {
     let raw = std::fs::read(state_path(data_dir)).ok()?;
     let doc: Value = serde_json::from_slice(&raw).ok()?;
     Some(Acked {
         record: doc.get("record")?.clone(),
         reporter: doc.get("reporter")?.as_str()?.to_string(),
+        acknowledged: doc.get("acknowledged")?.as_bool()?,
     })
 }
 
 fn save(data_dir: &Path, acked: &Acked) -> std::io::Result<()> {
-    let doc = json!({"record": acked.record, "reporter": acked.reporter});
+    let doc = json!({
+        "record": acked.record,
+        "reporter": acked.reporter,
+        "acknowledged": acked.acknowledged,
+    });
     write_atomically(&state_path(data_dir), &doc)
 }
 
@@ -342,14 +371,18 @@ impl Tries {
                 ..Tries::default()
             };
         }
-        self.failed <= retry_after().len() && self.next.is_none_or(|next| now >= next)
+        let leave = matches!(due, Due::Leave(_));
+        (leave || self.failed <= retry_after().len()) && self.next.is_none_or(|next| now >= next)
     }
 
-    /// A send failed at `now`: the next waits `retry_after_s` in turn, and
-    /// none follows the last wait's try.
+    /// A send failed at `now`: the next waits `retry_after_s` in turn. None
+    /// follows a join's last try; a leave's tries go on at the last wait.
     pub fn failed(&mut self, now: std::time::Instant) -> bool {
         let waits = retry_after();
-        let wait = waits.get(self.failed).copied();
+        let mut wait = waits.get(self.failed).copied();
+        if matches!(self.sending, Some(Due::Leave(_))) {
+            wait = wait.or(waits.last().copied());
+        }
         self.failed += 1;
         self.next = wait.map(|s| now + Duration::from_secs(s));
         wait.is_some()
@@ -401,51 +434,115 @@ async fn step(
     let Some(node_id) = self_peer.current() else {
         return;
     };
-    let acked = load(data_dir);
-    let due = due(
-        switch_on(),
-        acked.as_ref(),
-        &commitment::key_id(key),
-        reporter().as_deref(),
-    );
-    let (kind, to) = match &due {
-        Due::Nothing => return,
-        Due::Join(to) => (KIND_JOIN, to.clone()),
-        Due::Leave(to) => (KIND_LEAVE, to.clone()),
+    let now = Now {
+        instant: std::time::Instant::now(),
+        utc: Utc::now(),
     };
-    let now = std::time::Instant::now();
-    if !tries.may_send(&due, now) {
-        return;
-    }
-    // A leave is never older than the join it ends.
-    let mut at = Utc::now();
-    if let Some(joined) = acked.as_ref().filter(|_| kind == KIND_LEAVE) {
-        at = at.max(at_of(&joined.record));
+    let reporter = reporter();
+    let registry = crate::peer_keys::registry();
+    let node = Node {
+        key,
+        node_id: &node_id,
+        data_dir,
+    };
+    let send = |to: String, doc: Value| async move { send(context, &to, &doc).await };
+    tick_once(
+        &node,
+        switch_on(),
+        reporter.as_deref(),
+        registry.as_deref(),
+        tries,
+        now,
+        send,
+    )
+    .await;
+}
+
+/// The node a tick is for.
+struct Node<'a> {
+    key: &'a SigningKey,
+    node_id: &'a str,
+    data_dir: &'a Path,
+}
+
+/// When a tick runs.
+#[derive(Clone, Copy)]
+struct Now {
+    instant: std::time::Instant,
+    utc: DateTime<Utc>,
+}
+
+/// One tick with everything it reads given: what is due, if it may go now,
+/// signed and sent with `send` (or taken here when this node is the
+/// reporter), and the acknowledgement recorded. Returns what was sent.
+async fn tick_once<F, Fut>(
+    node: &Node<'_>,
+    switch_on: bool,
+    reporter: Option<&str>,
+    registry: Option<&str>,
+    tries: &mut Tries,
+    now: Now,
+    send: F,
+) -> Option<Result<(), String>>
+where
+    F: FnOnce(String, Value) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    let acked = load(node.data_dir);
+    let key_id = commitment::key_id(node.key);
+    let due = due(switch_on, acked.as_ref(), &key_id, node.node_id, reporter);
+    let (kind, to, node_id, at) = match &due {
+        Due::Nothing => {
+            // A switch turned off and on again starts a join's tries over.
+            *tries = Tries::default();
+            return None;
+        }
+        Due::Join(to) => (KIND_JOIN, to.clone(), node.node_id.to_string(), now.utc),
+        Due::Leave(to) => {
+            // A leave names the id its join named, and is never older than it
+            // (nor than an earlier try of the same leave).
+            let joined = &acked.as_ref().expect("a leave follows a join").record;
+            let id = joined["node_id"].as_str().unwrap_or_default().to_string();
+            (KIND_LEAVE, to.clone(), id, now.utc.max(at_of(joined)))
+        }
+    };
+    if !tries.may_send(&due, now.instant) {
+        return None;
     }
     let doc = record(
         kind,
         &node_id,
-        key,
+        node.key,
         &at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
     );
-    let sent = if to == node_id {
+    let mut kept = Acked {
+        record: doc.clone(),
+        reporter: to.clone(),
+        acknowledged: false,
+    };
+    if let Err(error) = save(node.data_dir, &kept) {
+        // Unkept, a join whose reply was lost could never be left.
+        tracing::warn!(%error, kind, "could not keep the record before sending it; not sent");
+        return None;
+    }
+    let sent = if to == node.node_id {
         // This node is the reporter: it takes its own record.
-        intake_bytes(
+        intake(
             &serde_json::to_vec(&doc).unwrap_or_default(),
-            Some(&node_id),
-            data_dir,
+            Some(node.node_id),
+            reporter,
+            registry,
+            &node.data_dir.join(JOINS_DIR),
+            now.utc,
         )
     } else {
-        send(context, &to, &doc).await
+        send(to.clone(), doc.clone()).await
     };
-    match sent {
+    match &sent {
         Ok(()) => {
             tries.sending = None;
-            let acked = Acked {
-                record: doc,
-                reporter: to.clone(),
-            };
-            match save(data_dir, &acked) {
+            kept.acknowledged = true;
+            match save(node.data_dir, &kept) {
                 Ok(()) => {
                     tracing::info!(kind, reporter = %to, "the reporter acknowledged this node's {kind}")
                 }
@@ -455,10 +552,11 @@ async fn step(
             }
         }
         Err(error) => {
-            let again = tries.failed(now);
+            let again = tries.failed(now.instant);
             tracing::warn!(%error, kind, reporter = %to, again, "the reporter did not take this node's {kind}");
         }
     }
+    Some(sent)
 }
 
 /// Send `doc` to `reporter` over [`JOIN_CHANNEL`]: `Ok` only on `{"ok": true}`.
@@ -507,14 +605,38 @@ async fn send(
     }
 }
 
-/// The `network` part of the `join` operation: the switch, the reporter, and
-/// what the reporter last acknowledged.
-pub fn status(data_dir: &Path) -> Value {
+/// The `network` part of the `join` operation: the switch, the reporter,
+/// what the reporter last acknowledged, and what this node, with `key_id` and
+/// mesh id `node_id` (if known yet), still has to send it (`join/1`,
+/// `leave/1`, or null).
+pub fn status(data_dir: &Path, key_id: &str, node_id: Option<&str>) -> Value {
     let acked = load(data_dir);
+    let reporter = reporter();
+    // Before the host names this node, judge by the id last sent.
+    let node_id = node_id
+        .map(str::to_string)
+        .or_else(|| {
+            acked
+                .as_ref()
+                .and_then(|a| a.record["node_id"].as_str().map(str::to_string))
+        })
+        .unwrap_or_default();
+    let unsent = match due(
+        switch_on(),
+        acked.as_ref(),
+        key_id,
+        &node_id,
+        reporter.as_deref(),
+    ) {
+        Due::Nothing => None,
+        Due::Join(_) => Some(KIND_JOIN),
+        Due::Leave(_) => Some(KIND_LEAVE),
+    };
     json!({
         "switch": if switch_on() { "on" } else { "off" },
-        "reporter": reporter(),
-        "acknowledged": acked.map(|a| json!({
+        "reporter": reporter,
+        "unacknowledged": unsent,
+        "acknowledged": acked.filter(|a| a.acknowledged).map(|a| json!({
             "kind": a.record["kind"],
             "at": a.record["at"],
             "reporter": a.reporter,
@@ -529,6 +651,24 @@ pub fn status(data_dir: &Path) -> Value {
 /// True exactly when an inbound `OpenStreamRequest` is this module's.
 pub fn is_join_request(request: &OpenStreamRequest) -> bool {
     request.metadata_json.as_deref() == Some(JOIN_CHANNEL)
+}
+
+/// The key the keys this node holds give `node_id`: `None` when there is
+/// none. An entry that is not one key (the host's announcement and the
+/// configured key disagree, `peer_keys::merged`), or keys that are not a JSON
+/// object, refuse the record: that is "cannot check", not "no key known".
+fn known_key(registry: Option<&str>, node_id: &str) -> Result<Option<String>, String> {
+    let Some(raw) = registry.filter(|raw| !raw.is_empty()) else {
+        return Ok(None);
+    };
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(raw) else {
+        return Err("the keys this node holds cannot be read".into());
+    };
+    match map.get(node_id) {
+        None => Ok(None),
+        Some(Value::String(key)) if is_hex64(key) => Ok(Some(key.clone())),
+        Some(_) => Err("the keys this node holds for node_id disagree".into()),
+    }
 }
 
 /// The most nodes the reporter holds a join of: every one costs a file, and
@@ -578,7 +718,7 @@ pub fn intake(
         return Err(errs.join("; "));
     }
     let node_id = doc["node_id"].as_str().unwrap_or_default();
-    let announced = crate::peer_keys::announced_key_in(registry, node_id);
+    let announced = known_key(registry, node_id)?;
     if announced
         .as_ref()
         .is_some_and(|key| doc["key_id"] != key.as_str())
@@ -621,16 +761,21 @@ pub fn intake(
         if held(&leave_path).is_some_and(|leave| at_of(&leave) >= at) {
             return Err("a later leave of this node is held".into());
         }
-        keep(&join_path)?;
+        // The earlier leave goes first: stopped between the two steps, the
+        // directory holds the earlier join alone, never a leave older than
+        // its join.
         match std::fs::remove_file(&leave_path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                Err(format!("could not drop the earlier leave: {e}"))
+                return Err(format!("could not drop the earlier leave: {e}"))
             }
-            _ => Ok(()),
+            _ => {}
         }
+        keep(&join_path)
     } else {
+        // A leave of a node never joined here ends nothing: taken, not kept
+        // (a node whose join never arrived can still leave).
         let Some(join) = held(&join_path) else {
-            return Err("a leave with no join for its node_id".into());
+            return Ok(());
         };
         if at_of(&join) > at {
             return Err(format!(

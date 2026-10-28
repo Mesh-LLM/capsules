@@ -133,6 +133,7 @@ fn acked(kind: &str, key: &SigningKey, reporter: &str) -> Acked {
     Acked {
         record: record(kind, &node(1), key, "2026-10-28T12:00:00Z"),
         reporter: reporter.into(),
+        acknowledged: true,
     }
 }
 
@@ -140,38 +141,51 @@ fn acked(kind: &str, key: &SigningKey, reporter: &str) -> Acked {
 fn a_node_joins_once_and_leaves_only_after_a_join() {
     let (k, r) = (key(1), node(9));
     let key_id = commitment::key_id(&k);
+    let me = node(1);
     let join = Due::Join(r.clone());
     // Off and never joined: nothing. On: a join, until one is acknowledged.
-    assert_eq!(due(false, None, &key_id, Some(&r)), Due::Nothing);
-    assert_eq!(due(true, None, &key_id, Some(&r)), join);
-    assert_eq!(due(true, None, &key_id, None), Due::Nothing);
+    assert_eq!(due(false, None, &key_id, &me, Some(&r)), Due::Nothing);
+    assert_eq!(due(true, None, &key_id, &me, Some(&r)), join);
+    assert_eq!(due(true, None, &key_id, &me, None), Due::Nothing);
     let joined = acked(KIND_JOIN, &k, &r);
-    assert_eq!(due(true, Some(&joined), &key_id, Some(&r)), Due::Nothing);
+    assert_eq!(
+        due(true, Some(&joined), &key_id, &me, Some(&r)),
+        Due::Nothing
+    );
     // Again when the key or the reporter changes.
     assert_eq!(
-        due(true, Some(&joined), &commitment::key_id(&key(2)), Some(&r)),
+        due(
+            true,
+            Some(&joined),
+            &commitment::key_id(&key(2)),
+            &me,
+            Some(&r)
+        ),
         join
     );
     assert_eq!(
-        due(true, Some(&joined), &key_id, Some(&node(8))),
+        due(true, Some(&joined), &key_id, &me, Some(&node(8))),
         Due::Join(node(8))
     );
     // Off after a join: a leave, to the reporter that took it.
     assert_eq!(
-        due(false, Some(&joined), &key_id, Some(&node(8))),
+        due(false, Some(&joined), &key_id, &me, Some(&node(8))),
         Due::Leave(r.clone())
     );
     assert_eq!(
-        due(false, Some(&joined), &key_id, None),
+        due(false, Some(&joined), &key_id, &me, None),
         Due::Leave(r.clone())
     );
     let left = acked(KIND_LEAVE, &k, &r);
-    assert_eq!(due(false, Some(&left), &key_id, Some(&r)), Due::Nothing);
-    assert_eq!(due(true, Some(&left), &key_id, Some(&r)), join);
+    assert_eq!(
+        due(false, Some(&left), &key_id, &me, Some(&r)),
+        Due::Nothing
+    );
+    assert_eq!(due(true, Some(&left), &key_id, &me, Some(&r)), join);
     // A join under another statement is joined again.
     let mut stale = joined.clone();
     stale.record["consent_sha256"] = json!("0".repeat(64));
-    assert_eq!(due(true, Some(&stale), &key_id, Some(&r)), join);
+    assert_eq!(due(true, Some(&stale), &key_id, &me, Some(&r)), join);
 }
 
 #[test]
@@ -195,6 +209,43 @@ fn a_failed_send_is_tried_after_each_wait_and_then_no_more() {
     assert_eq!(sent, 1 + retry_after().len());
     // Turning the switch off starts the leave's own tries.
     assert!(tries.may_send(&Due::Leave(node(9)), at));
+}
+
+#[test]
+fn a_leave_is_never_given_up() {
+    // The statement promises that turning the switch off stops the asks.
+    let leave = Due::Leave(node(9));
+    let waits = retry_after();
+    let last = Duration::from_secs(*waits.last().unwrap());
+    let mut tries = Tries::default();
+    let mut at = std::time::Instant::now();
+    for wait in waits
+        .iter()
+        .map(|s| Duration::from_secs(*s))
+        .chain([last; 5])
+    {
+        assert!(tries.may_send(&leave, at));
+        assert!(tries.failed(at));
+        assert!(!tries.may_send(&leave, at + wait - Duration::from_secs(1)));
+        at += wait;
+    }
+    assert!(tries.may_send(&leave, at));
+}
+
+#[test]
+fn join_shows_what_the_reporter_has_not_acknowledged() {
+    let dir = tempfile::tempdir().unwrap();
+    let key_id = commitment::key_id(&key(1));
+    // The switch is off in tests and nothing was ever joined.
+    assert_eq!(
+        status(dir.path(), &key_id, None)["unacknowledged"],
+        Value::Null
+    );
+    save(dir.path(), &acked(KIND_JOIN, &key(1), &node(9))).unwrap();
+    let status = status(dir.path(), &key_id, None);
+    assert_eq!(status["switch"], "off");
+    assert_eq!(status["unacknowledged"], KIND_LEAVE);
+    assert_eq!(status["acknowledged"]["kind"], KIND_JOIN);
 }
 
 #[test]
@@ -277,11 +328,9 @@ fn the_reporter_keeps_the_latest_join_and_the_leave_that_ends_it() {
     let reporter = Reporter::new();
     let join = signed(KIND_JOIN, &key(1), "2026-10-28T12:00:00Z");
     let leave = signed(KIND_LEAVE, &key(1), "2026-10-28T13:00:00Z");
-    // A leave with no join is refused.
-    assert_eq!(
-        reporter.take(&leave),
-        Err("a leave with no join for its node_id".into())
-    );
+    // A leave with no join ends nothing: taken, not kept.
+    assert_eq!(reporter.take(&leave), Ok(()));
+    assert!(reporter.files().is_empty());
     assert_eq!(reporter.take(&join), Ok(()));
     // The same join again changes nothing.
     assert_eq!(reporter.take(&join), Ok(()));
@@ -412,4 +461,241 @@ fn the_reporter_holds_at_most_max_nodes() {
             "the reporter holds {MAX_NODES} nodes, the most it takes"
         ))
     );
+}
+
+#[test]
+fn a_new_mesh_id_leaves_the_old_one_first_then_joins() {
+    // A client node's mesh id is new each start.
+    let (k, r) = (key(1), node(9));
+    let key_id = commitment::key_id(&k);
+    let joined = acked(KIND_JOIN, &k, &r);
+    assert_eq!(
+        due(true, Some(&joined), &key_id, &node(2), Some(&r)),
+        Due::Leave(r.clone())
+    );
+    assert_eq!(
+        due(false, Some(&joined), &key_id, &node(2), Some(&r)),
+        Due::Leave(r.clone())
+    );
+}
+
+fn now(utc: &str) -> Now {
+    Now {
+        instant: std::time::Instant::now(),
+        utc: time(utc),
+    }
+}
+
+/// Ticks of a node that is its own reporter: every record goes through
+/// the reporter's own intake, never `send`.
+async fn tick_self(
+    node_id: &str,
+    dir: &Path,
+    on: bool,
+    at: &str,
+    tries: &mut Tries,
+) -> Option<Result<(), String>> {
+    let k = key(1);
+    let this = Node {
+        key: &k,
+        node_id,
+        data_dir: dir,
+    };
+    let reporter = node(9);
+    tick_once(
+        &this,
+        on,
+        Some(&reporter),
+        None,
+        tries,
+        now(at),
+        |_, _| async { panic!("a node that is the reporter sends nothing over the mesh") },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_node_that_is_the_reporter_takes_its_own_join_and_leave() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut tries = Tries::default();
+    let me = node(9);
+    assert_eq!(
+        tick_self(&me, dir.path(), true, "2026-10-28T12:00:00Z", &mut tries).await,
+        Some(Ok(()))
+    );
+    assert_eq!(load(dir.path()).unwrap().record["kind"], KIND_JOIN);
+    // Joined: nothing more is due while the switch stays on.
+    assert_eq!(
+        tick_self(&me, dir.path(), true, "2026-10-28T12:01:00Z", &mut tries).await,
+        None
+    );
+    assert_eq!(
+        tick_self(&me, dir.path(), false, "2026-10-28T12:02:00Z", &mut tries).await,
+        Some(Ok(()))
+    );
+    let leave = load(dir.path()).unwrap().record;
+    assert_eq!(
+        (leave["kind"].as_str(), leave["node_id"].as_str()),
+        (Some(KIND_LEAVE), Some(me.as_str()))
+    );
+    assert!(dir
+        .path()
+        .join(JOINS_DIR)
+        .join(format!("{me}.leave.json"))
+        .is_file());
+}
+
+#[tokio::test]
+async fn a_leave_names_the_joined_id_and_is_never_older_than_the_join() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = node(9);
+    let k = key(1);
+    // The reporter took a join of node(1) at 12:00.
+    save(dir.path(), &acked(KIND_JOIN, &k, &r)).unwrap();
+    let this = Node {
+        key: &k,
+        node_id: &node(2),
+        data_dir: dir.path(),
+    };
+    let sent = std::sync::Mutex::new(None);
+    let mut tries = Tries::default();
+    // A clock behind the join, and a new mesh id: the leave still names the
+    // joined id, at the join's time.
+    let outcome = tick_once(
+        &this,
+        true,
+        Some(&r),
+        None,
+        &mut tries,
+        now("2026-10-28T11:00:00Z"),
+        |to, doc| {
+            *sent.lock().unwrap() = Some((to, doc));
+            async { Ok(()) }
+        },
+    )
+    .await;
+    assert_eq!(outcome, Some(Ok(())));
+    let (to, doc) = sent.into_inner().unwrap().unwrap();
+    assert_eq!(to, r);
+    assert_eq!(doc["kind"], KIND_LEAVE);
+    assert_eq!(doc["node_id"], node(1).as_str());
+    assert_eq!(doc["at"], "2026-10-28T12:00:00Z");
+    assert!(problems(&doc, time("2026-10-28T12:00:00Z")).is_empty());
+    assert_eq!(load(dir.path()).unwrap().record, doc);
+}
+
+#[tokio::test]
+async fn turning_the_switch_off_and_on_starts_a_join_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let k = key(1);
+    let r = node(9);
+    let this = Node {
+        key: &k,
+        node_id: &node(1),
+        data_dir: dir.path(),
+    };
+    let mut tries = Tries::default();
+    let at = now("2026-10-28T12:00:00Z");
+    let fail = |_: String, _: Value| async { Err::<(), String>("down".into()) };
+    for _ in 0..=retry_after().len() {
+        tries.next = None; // as if each wait had passed
+        assert!(tick_once(&this, true, Some(&r), None, &mut tries, at, fail)
+            .await
+            .is_some());
+    }
+    assert_eq!(
+        tick_once(&this, true, Some(&r), None, &mut tries, at, fail).await,
+        None,
+        "given up"
+    );
+    // Off: the join may have arrived, so a leave is tried (its own tries).
+    assert_eq!(
+        tick_once(&this, false, Some(&r), None, &mut tries, at, fail).await,
+        Some(Err("down".into()))
+    );
+    // On again: the join's tries start over.
+    assert!(tick_once(&this, true, Some(&r), None, &mut tries, at, fail)
+        .await
+        .is_some());
+}
+
+#[tokio::test]
+async fn a_join_whose_reply_was_lost_is_still_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let (k, r) = (key(1), node(9));
+    let this = Node {
+        key: &k,
+        node_id: &node(1),
+        data_dir: dir.path(),
+    };
+    let mut tries = Tries::default();
+    let at = now("2026-10-28T12:00:00Z");
+    // The reporter kept the join, but its reply never came back.
+    let lost = tick_once(&this, true, Some(&r), None, &mut tries, at, |_, _| async {
+        Err::<(), String>("the reporter did not reply in time".into())
+    })
+    .await;
+    assert!(matches!(lost, Some(Err(_))));
+    let kept = load(dir.path()).unwrap();
+    assert_eq!(
+        (kept.record["kind"].as_str(), kept.acknowledged),
+        (Some(KIND_JOIN), false)
+    );
+    assert_eq!(
+        status(dir.path(), &commitment::key_id(&k), Some(&node(1)))["acknowledged"],
+        Value::Null
+    );
+    // Switched off (after a restart, too): the leave goes.
+    let mut tries = Tries::default();
+    let sent = std::sync::Mutex::new(None);
+    let left = tick_once(&this, false, Some(&r), None, &mut tries, at, |_, doc| {
+        *sent.lock().unwrap() = Some(doc);
+        async { Ok(()) }
+    })
+    .await;
+    assert_eq!(left, Some(Ok(())));
+    assert_eq!(sent.into_inner().unwrap().unwrap()["kind"], KIND_LEAVE);
+    assert!(load(dir.path()).unwrap().acknowledged);
+    // A leave that was not acknowledged is sent again.
+    let mut unacked = load(dir.path()).unwrap();
+    unacked.acknowledged = false;
+    assert_eq!(
+        due(
+            false,
+            Some(&unacked),
+            &commitment::key_id(&k),
+            &node(1),
+            Some(&r)
+        ),
+        Due::Leave(r.clone())
+    );
+    assert_eq!(
+        due(
+            true,
+            Some(&unacked),
+            &commitment::key_id(&k),
+            &node(1),
+            Some(&r)
+        ),
+        Due::Join(r)
+    );
+}
+
+#[test]
+fn keys_that_disagree_are_not_no_key() {
+    let reporter = Reporter::new();
+    let join = signed(KIND_JOIN, &key(1), "2026-10-28T12:00:00Z");
+    // `peer_keys::merged` gives a peer an empty key when the host's
+    // announcement and the configured key disagree.
+    let conflict = json!({ node(1): "" }).to_string();
+    assert_eq!(
+        reporter.take_with(&join, Some(&conflict)),
+        Err("the keys this node holds for node_id disagree".into())
+    );
+    assert_eq!(
+        reporter.take_with(&join, Some("not json")),
+        Err("the keys this node holds cannot be read".into())
+    );
+    let others_only = json!({ node(2): commitment::key_id(&key(2)) }).to_string();
+    assert_eq!(reporter.take_with(&join, Some(&others_only)), Ok(()));
 }

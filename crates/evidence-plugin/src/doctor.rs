@@ -686,7 +686,11 @@ pub async fn handle_join(
         // The ledger is `<data dir>/ledger`; the join switch keeps its state
         // in the data directory.
         if let Some(data_dir) = capsules.ledger_dir().parent() {
-            report["network"] = crate::network_join::status(data_dir);
+            report["network"] = crate::network_join::status(
+                data_dir,
+                &commitment::key_id(capsules.signing_key()),
+                node_id.as_deref(),
+            );
         }
         Ok(report)
     })

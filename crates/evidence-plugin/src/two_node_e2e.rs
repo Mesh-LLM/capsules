@@ -708,6 +708,7 @@ fn the_switch_joins_over_the_mesh_and_off_leaves() {
     // The requester recorded the leave as the reporter's last acknowledgement.
     let acked = network_join::load(&run.requester.data_dir).expect("the requester's join state");
     assert_eq!(acked.record, leave);
+    assert!(acked.acknowledged);
     assert_eq!(acked.reporter, provider_id);
     // Nothing else reached the reporter's list.
     assert_eq!(std::fs::read_dir(&joins).unwrap().count(), 2);
