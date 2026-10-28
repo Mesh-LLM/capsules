@@ -44,6 +44,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 struct RealHost {
     child: Child,
     api_port: u16,
+    console_port: u16,
     home_dir: PathBuf,
     capsule_data_dir: PathBuf,
 }
@@ -127,6 +128,7 @@ args = []
         let host = Self {
             child,
             api_port,
+            console_port,
             home_dir,
             capsule_data_dir,
         };
@@ -168,6 +170,25 @@ args = []
             }
             sleep(Duration::from_millis(500)).await;
         }
+    }
+
+    /// One of the plugin's tools, through the console's own route.
+    async fn post_tool(&self, operation: &str, args: &serde_json::Value) -> serde_json::Value {
+        let client = reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .unwrap();
+        let resp = client
+            .post(format!(
+                "http://127.0.0.1:{}/api/plugins/capsules/tools/{operation}",
+                self.console_port
+            ))
+            .json(args)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("POST tools/{operation} to the real host: {e}"));
+        assert_eq!(resp.status(), reqwest::StatusCode::OK, "tools/{operation}");
+        resp.json().await.expect("a tool's reply is JSON")
     }
 
     async fn post_chat_completions(&self, body: &serde_json::Value) -> reqwest::Response {
@@ -452,4 +473,53 @@ async fn allowed_exchange_emits_a_signed_chained_ledgered_capsule_and_publishes_
         mutated_id, capsule_id,
         "mutating the observed response digest must change capsule_id"
     );
+}
+
+/// `doctor` and `join` (Mesh-LLM/capsules-plugin#53) through the real
+/// host's console route: a fresh node lists all twelve findings, names its
+/// checkpoint missing, matches no probe yet, and is not joined. Neither call
+/// seals a record.
+#[tokio::test]
+#[ignore = "requires MESH_LLM_HOST_BIN; see docs/REAL-HOST-VERIFICATION.md"]
+async fn doctor_and_join_answer_through_the_real_hosts_console() {
+    let host = RealHost::spawn().await;
+    let ledger = host.capsule_data_dir().join("ledger");
+    assert!(
+        ledger.is_dir(),
+        "the plugin opened its ledger at {ledger:?}"
+    );
+    let sealed = || std::fs::read(ledger.join("capsules.jsonl")).ok();
+    let before = sealed();
+    let doctor = host
+        .post_tool("doctor", &serde_json::json!({"probe": true}))
+        .await;
+    let findings = doctor["findings"].as_array().expect("a list of findings");
+    let checks: Vec<&str> = findings
+        .iter()
+        .map(|f| f["check"].as_str().unwrap())
+        .collect();
+    assert_eq!(checks.len(), 12, "{doctor:#}");
+    assert_eq!(checks[0], "self_attested");
+    assert_eq!(checks[11], "probe_history_card");
+    let state = |check: &str| {
+        findings
+            .iter()
+            .find(|f| f["check"] == check)
+            .map(|f| f["state"].clone())
+            .unwrap()
+    };
+    assert_eq!(state("checkpoint"), "missing");
+    assert_eq!(state("probe_checkpoints"), "NOT_CHECKED");
+    assert!(
+        findings.iter().all(|f| f.get("score").is_none()),
+        "a list, never a score"
+    );
+
+    let join = host.post_tool("join", &serde_json::json!({})).await;
+    assert_eq!(join["joined"], false, "{join:#}");
+    assert!(join["pending"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("the first checkpoint"));
+    assert_eq!(sealed(), before, "doctor and join seal nothing");
 }

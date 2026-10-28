@@ -9,6 +9,7 @@ mod commitment_bridge;
 mod controller_binding;
 mod data_dir;
 mod decision;
+mod doctor;
 mod evidence_answer;
 mod evidence_artifact;
 #[cfg(test)]
@@ -1069,6 +1070,43 @@ fn with_evidence_operations(
             }),
     );
     builder = builder.mcp_item(
+        mcp::tool(doctor::DOCTOR_OPERATION)
+            .description(
+                "Inspect this node and talk to nobody: a list of findings (what is self-attested, \
+                 unwitnessed, unchecked, unbound or not shared), never a score. With probe, also ask \
+                 this node's own responder checkpoints, then history_card/1, as a stranger, in \
+                 process, and check that each answer verifies under the key the node's commitment \
+                 advertises (its own key when it serves no commitment yet) and that the node \
+                 answers under the policy that commitment signs. \
+                 Seals nothing.",
+            )
+            .input::<doctor::DoctorArgs>()
+            .handle({
+                let capsules = capsules_for_delivery.clone();
+                let self_peer = self_peer.clone();
+                move |args, _context| {
+                    Box::pin(doctor::handle_doctor(args, capsules.clone(), self_peer.current()))
+                }
+            }),
+    );
+    builder = builder.mcp_item(
+        mcp::tool(doctor::JOIN_OPERATION)
+            .description(
+                "Check that this node is ready to join, idempotently: check the key, the book, the first checkpoint, \
+                 the commitment served on commitment/1 and both stranger probes, and list what is \
+                 in place and what is not. Seals nothing, writes nothing and contacts nobody; a \
+                 fresh node's first checkpoint follows its first exchange.",
+            )
+            .input::<doctor::JoinArgs>()
+            .handle({
+                let capsules = capsules_for_delivery.clone();
+                let self_peer = self_peer.clone();
+                move |_args, _context| {
+                    Box::pin(doctor::handle_join(capsules.clone(), self_peer.current()))
+                }
+            }),
+    );
+    builder = builder.mcp_item(
         mcp::tool(commitment_bridge::FETCH_COMMITMENT_OPERATION)
             .description(
                 "Fetch a mesh peer's signed commitment and disclosure policy over the commitment/1 \
@@ -1231,6 +1269,11 @@ async fn main() -> anyhow::Result<()> {
                 share_policy::share_policy_config_schema(PLUGIN_ID),
             )?
         );
+        return Ok(());
+    }
+    // The join quickstart INSTALL.md carries, from the tools' own constants.
+    if std::env::args().nth(1).as_deref() == Some("--print-join-quickstart") {
+        print!("{}", doctor::quickstart(PLUGIN_ID));
         return Ok(());
     }
 
