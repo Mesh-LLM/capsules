@@ -1924,9 +1924,10 @@ mod tests {
     /// them: the baseline the move onto the evidencebook crate
     /// (evidencebook#35) is held to. Artifact octets, material kinds and
     /// order, witness receipts and signed refusals all sit in the wire.
-    /// `CAPSULES_WRITE_ANSWER_FIXTURE=1` rewrites the fixture instead (only
-    /// ever from that commit); its SHA-256 is pinned below, so a rewrite
-    /// shows in review.
+    /// `CAPSULES_WRITE_ANSWER_FIXTURE=1` rewrites the fixture instead. Only a
+    /// change that means to alter an answer rewrites it, says so, and updates
+    /// the SHA-256 pinned below, so the rewrite shows in review; a move of
+    /// code alone never does.
     #[test]
     fn every_answer_form_is_byte_for_byte_the_baseline() {
         const FIXTURE: &str = "tests/fixtures/evidence_answers_5d2d102.json";
