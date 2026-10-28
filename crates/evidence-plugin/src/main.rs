@@ -48,6 +48,7 @@ mod routing_rule;
 mod self_peer;
 mod served_summary;
 mod settings;
+mod settlement_adapter;
 mod settlement_channel;
 mod settlement_legs;
 mod share_policy;
@@ -1090,6 +1091,24 @@ fn with_evidence_operations(
             }),
     );
     builder = builder.mcp_item(
+        mcp::tool(settlement_adapter::SETTLEMENT_CHECK_OPERATION)
+            .description(
+                "Check the Lightning settlement objects this node holds for a paid exchange, under \
+                 the lightning-v0 adapter declaration: per property (object held, invoice join, \
+                 amount, finality as the wallet reported it, preimage, payee credit) PASS, FAIL, \
+                 INCONCLUSIVE or NOT_CHECKED, and each settled payment's value band. Also counts \
+                 every settlement record the book holds. Never a score. Seals nothing and \
+                 contacts nobody.",
+            )
+            .input::<settlement_adapter::SettlementCheckArgs>()
+            .handle({
+                let capsules = capsules_for_delivery.clone();
+                move |args, _context| {
+                    Box::pin(settlement_adapter::handle(args, capsules.clone()))
+                }
+            }),
+    );
+    builder = builder.mcp_item(
         mcp::tool(doctor::JOIN_OPERATION)
             .description(
                 "Check that this node is ready to join, idempotently: check the key, the book, the first checkpoint, \
@@ -2057,6 +2076,7 @@ mod published_operations_tests {
             owner_maintenance::DELETE_STORED_TEXT_OPERATION,
             owner_maintenance::REBUILD_INDEX_OPERATION,
             owner_maintenance::START_NEW_HISTORY_OPERATION,
+            settlement_adapter::SETTLEMENT_CHECK_OPERATION,
         ] {
             assert!(
                 declared.contains(&name),
