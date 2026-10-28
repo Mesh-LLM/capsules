@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- **`doctor` and `join` (loop step 12).** `doctor` lists what this node's evidence is: what is
+  self-attested, unwitnessed, unchecked, unbound or not shared, one finding each with
+  evidencebook's check names and states (`Book.Doctor`), never a score. With `probe`, it asks the
+  node's own responder `checkpoints`, then `history_card/1`, as a stranger, in process, and checks
+  that each answer verifies under the key the node's commitment advertises and that the node
+  answers under the policy that commitment signs. `join` checks the key, the book, the first
+  checkpoint, the commitment served on `commitment/1` and both probes, and lists what is in place
+  and what is not; it is idempotent. Neither seals, writes or contacts anything; a fresh node's
+  first checkpoint follows its first exchange. The quickstart in INSTALL.md is printed by
+  `capsules --print-join-quickstart`, and a test holds the two together.
+  Mesh-LLM/capsules-plugin#53.
+
 ### Changed
 
 - **`share_record_at_completion` is on by default (`counterparty`), reversing the 0.1.3 default.**
