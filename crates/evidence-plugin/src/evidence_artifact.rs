@@ -1011,7 +1011,7 @@ mod tests {
     use super::*;
     use crate::evidence_answer::{self, Outcome, Responder};
     use crate::evidence_request_parity::{
-        announced_keys, corpus_ledger, corpus_ledger_dir, NODE_KEY_SEED, RESPONDER_NODE,
+        announced_keys, asker_key, corpus_ledger, corpus_ledger_dir, NODE_KEY_SEED, RESPONDER_NODE,
     };
     use ed25519_dalek::SigningKey;
     use evidence_request::request;
@@ -1022,8 +1022,22 @@ mod tests {
         SigningKey::from_bytes(&NODE_KEY_SEED)
     }
 
-    /// A node over the corpus that answers anyone everything
-    /// (`evidence_answer::ungated`).
+    /// How [`Node::outcome`] sets the node up. The default answers anyone
+    /// everything (`evidence_answer::ungated`), with exchange corroboration
+    /// off and no commitment.
+    #[derive(Clone, Copy, Default)]
+    struct Setup {
+        /// The sharing-policy gate applies.
+        gated: bool,
+        /// The node is busy and declines unread.
+        busy: bool,
+        /// `share_exchange_corroboration` is on.
+        corroboration: bool,
+        /// The digest of the policy the node's commitment signs.
+        policy_digest: Option<&'static str>,
+    }
+
+    /// A node over the corpus, set up per request by [`Setup`].
     struct Node {
         _dir: tempfile::TempDir,
         ledger: std::path::PathBuf,
@@ -1045,36 +1059,57 @@ mod tests {
     }
 
     impl Node {
+        /// A node over `records` in place of the corpus, with the corpus's
+        /// checkpoint positions.
+        fn over(records: &[Value]) -> Node {
+            use crate::evidence_request_parity::{corpus_checkpoints, write_jsonl};
+            let dir = tempfile::tempdir().unwrap();
+            let ledger = dir.path().join("ledger");
+            let cps = corpus_checkpoints(records, &key());
+            std::fs::create_dir_all(&ledger).unwrap();
+            write_jsonl(&ledger.join(crate::evidence_log::CAPSULES_FILE), records);
+            let lines: Vec<Value> = cps.iter().map(|c| c.line()).collect();
+            write_jsonl(&ledger.join(crate::evidence_log::CHECKPOINTS_FILE), &lines);
+            Node {
+                _dir: dir,
+                ledger,
+                anchors: cps.iter().map(|c| c.anchor()).collect(),
+            }
+        }
+    }
+
+    impl Node {
         fn ask(&self, request: &Value) -> (Vec<u8>, Value) {
-            let (bytes, outcome) = self.outcome(request, None);
+            let bytes = serde_json::to_vec(request).unwrap();
+            let outcome = self.outcome(&bytes, Setup::default(), None);
             let Outcome::Answered { wire, .. } = outcome else {
                 panic!("{request}: {outcome:?}");
             };
             (bytes, wire)
         }
 
-        /// What the node does with `request`, logging it to the received log
-        /// in `log_dir` when one is given.
+        /// What the node set up as `setup` does with `bytes`, logging it to
+        /// the received log in `log_dir` when one is given.
         fn outcome(
             &self,
-            request: &Value,
+            bytes: &[u8],
+            setup: Setup,
             log_dir: Option<&std::path::Path>,
-        ) -> (Vec<u8>, Outcome) {
-            let bytes = serde_json::to_vec(request).unwrap();
+        ) -> Outcome {
             let announced = announced_keys();
             let replay = crate::requester_auth::ReplayCache::default();
             let key = key();
-            let outcome = evidence_answer::ungated(|| {
+            let answer = || {
                 evidence_answer::answer_and_log(
-                    &bytes,
-                    false,
+                    bytes,
+                    setup.busy,
                     &Responder {
                         ledger_dir: &self.ledger,
                         signing_key: &key,
                         now: NOW,
                         history_segments: "peers",
                         share_standard_history: true,
-                        share_exchange_corroboration: false,
+                        share_exchange_corroboration: setup.corroboration,
                         keys: crate::requester_auth::Keys {
                             announced: &announced,
                             configured: None,
@@ -1082,12 +1117,16 @@ mod tests {
                         },
                         replay: &replay,
                         node_id: Some(RESPONDER_NODE),
-                        policy_digest: None,
+                        policy_digest: setup.policy_digest,
                     },
                     log_dir,
                 )
-            });
-            (bytes, outcome)
+            };
+            if setup.gated {
+                answer()
+            } else {
+                evidence_answer::ungated(answer)
+            }
         }
 
         fn pin(&self, i: usize) -> Value {
@@ -1919,8 +1958,8 @@ mod tests {
         );
     }
 
-    /// Every answer form this node gives, refusals included, and the
-    /// received-log line each one writes, byte for byte as Mesh-LLM/capsules-plugin 5d2d102 gave
+    /// Every answer form this node gives, gated and ungated, refusals
+    /// included, and the received-log line each one writes, byte for byte as Mesh-LLM/capsules-plugin 5d2d102 gave
     /// them: the baseline the move onto the evidencebook crate
     /// (evidencebook#35) is held to. Artifact octets, material kinds and
     /// order, witness receipts and signed refusals all sit in the wire.
@@ -1932,101 +1971,256 @@ mod tests {
     fn every_answer_form_is_byte_for_byte_the_baseline() {
         const FIXTURE: &str = "tests/fixtures/evidence_answers_5d2d102.json";
         const FIXTURE_SHA256: &str =
-            "57b3ebb022b27e2497a6255ef3f4234133809742bd775c930ff1c88ef91ba792";
+            "b4639728f8e932be7f187979b6cc9e737877929a95ba6daf8680238a4de3182d";
         let node = node();
         let last = node.anchors.len() - 1;
         let half = hex::encode(Sha256::digest(b"the counterparty's own half"));
         let leaves = leaf_count(node_size(&node, last)).unwrap();
-        let mut cases: Vec<(String, Value)> = vec![
+        let plain = Setup::default();
+        let gated = Setup {
+            gated: true,
+            ..plain
+        };
+        let unsigned = |request: Value| serde_json::to_vec(&request).unwrap();
+        // Signed at `NOW` by `key` for this node, with a nonce fixed by the
+        // case's name so the bytes are the same every run.
+        let signed = |key: &SigningKey, name: &str, mut request: Value| {
+            request["nonce"] = json!(hex::encode(Sha256::digest(name.as_bytes())));
+            crate::requester_auth::sign(
+                crate::requester_auth::Channel::EvidenceRequest,
+                &mut request,
+                key,
+                chrono::DateTime::parse_from_rfc3339(NOW).unwrap().into(),
+                RESPONDER_NODE,
+            );
+            serde_json::to_vec(&request).unwrap()
+        };
+        let ledger = corpus_ledger();
+        let id = |i: usize| ledger[i]["capsule_id"].clone();
+        let mut cases: Vec<(String, Vec<u8>, Setup)> = vec![
             (
                 "range_last".into(),
-                json!({"subject": {"range": [leaves.saturating_sub(10), leaves - 1]}, "coverage": node.pin(last)}),
+                unsigned(
+                    json!({"subject": {"range": [leaves.saturating_sub(10), leaves - 1]}, "coverage": node.pin(last)}),
+                ),
+                plain,
             ),
             (
-                "full_history_first".into(),
-                json!({"subject": {"full_history": null}, "coverage": node.pin(0)}),
-            ),
-            (
-                "full_history_last".into(),
-                json!({"subject": {"full_history": null}, "coverage": node.pin(last)}),
+                "range_first".into(),
+                unsigned(json!({"subject": {"range": [0, 2]}, "coverage": node.pin(0)})),
+                plain,
             ),
             (
                 "range_fresh".into(),
-                json!({"subject": {"range": [1, 3]}, "coverage": {"min_freshness": 1}}),
+                unsigned(json!({"subject": {"range": [1, 3]}, "coverage": {"min_freshness": 1}})),
+                plain,
             ),
             (
-                "range".into(),
-                json!({"subject": {"range": [0, 2]}, "coverage": node.pin(1)}),
+                "full_history_first".into(),
+                unsigned(json!({"subject": {"full_history": null}, "coverage": node.pin(0)})),
+                plain,
+            ),
+            (
+                "full_history_last".into(),
+                unsigned(json!({"subject": {"full_history": null}, "coverage": node.pin(last)})),
+                plain,
             ),
             (
                 "correlation".into(),
-                json!({"subject": {"correlation": "n-1"}, "coverage": node.pin(1)}),
+                unsigned(json!({"subject": {"correlation": "n-1"}, "coverage": node.pin(last)})),
+                plain,
             ),
             (
                 "exchange".into(),
-                json!({"subject": {"exchange": half}, "coverage": {"expected_pin": half}}),
+                unsigned(
+                    json!({"subject": {"exchange": half}, "coverage": {"expected_pin": half}}),
+                ),
+                plain,
             ),
             (
                 "checkpoints".into(),
-                json!({"subject": {"checkpoints": null}, "coverage": node.pin(last)}),
+                unsigned(json!({"subject": {"checkpoints": null}, "coverage": node.pin(last)})),
+                plain,
             ),
             (
                 "checkpoints_time".into(),
-                json!({"subject": {"checkpoints": null}, "coverage": {"min_freshness": "2026-01-01T00:00:00Z"}}),
+                unsigned(
+                    json!({"subject": {"checkpoints": null}, "coverage": {"min_freshness": "2026-01-01T00:00:00Z"}}),
+                ),
+                plain,
+            ),
+            (
+                "history_card_first".into(),
+                unsigned(
+                    json!({"subject": {"full_history": null}, "coverage": node.pin(0), "derivation": "history_card/1"}),
+                ),
+                plain,
             ),
             (
                 "history_card".into(),
-                json!({"subject": {"full_history": null}, "coverage": node.pin(last), "derivation": "history_card/1"}),
+                unsigned(
+                    json!({"subject": {"full_history": null}, "coverage": node.pin(last), "derivation": "history_card/1"}),
+                ),
+                plain,
             ),
             (
                 "history_card_checkpoints".into(),
-                json!({"subject": {"checkpoints": null}, "coverage": node.pin(1), "derivation": "history_card/1"}),
+                unsigned(
+                    json!({"subject": {"checkpoints": null}, "coverage": node.pin(last), "derivation": "history_card/1"}),
+                ),
+                plain,
             ),
             (
                 "served_summary".into(),
-                json!({"subject": {"full_history": null}, "coverage": node.pin(last), "derivation": "served_summary/1"}),
+                unsigned(
+                    json!({"subject": {"full_history": null}, "coverage": node.pin(last), "derivation": "served_summary/1"}),
+                ),
+                plain,
             ),
             (
                 "served_summary_first".into(),
-                json!({"subject": {"full_history": null}, "coverage": node.pin(0), "derivation": "served_summary/1"}),
+                unsigned(
+                    json!({"subject": {"full_history": null}, "coverage": node.pin(0), "derivation": "served_summary/1"}),
+                ),
+                plain,
             ),
             (
                 "refused_unknown_pin".into(),
-                json!({"subject": {"full_history": null}, "coverage": {"expected_pin": "00".repeat(32)}}),
+                unsigned(
+                    json!({"subject": {"full_history": null}, "coverage": {"expected_pin": "00".repeat(32)}}),
+                ),
+                plain,
             ),
             (
                 "refused_unknown_derivation".into(),
-                json!({"subject": {"full_history": null}, "coverage": node.pin(last), "derivation": "no_such/1"}),
+                unsigned(
+                    json!({"subject": {"full_history": null}, "coverage": node.pin(last), "derivation": "no_such/1"}),
+                ),
+                plain,
             ),
             (
                 "refused_range_past_the_log".into(),
-                json!({"subject": {"range": [leaves, leaves + 2]}, "coverage": node.pin(last)}),
+                unsigned(
+                    json!({"subject": {"range": [leaves, leaves + 2]}, "coverage": node.pin(last)}),
+                ),
+                plain,
             ),
             (
                 "refused_unknown_record".into(),
-                json!({"subject": {"record": "00".repeat(32)}, "coverage": node.pin(last)}),
+                unsigned(
+                    json!({"subject": {"record": "00".repeat(32)}, "coverage": node.pin(last)}),
+                ),
+                plain,
+            ),
+            (
+                "refused_busy".into(),
+                unsigned(json!({"subject": {"record": id(0)}, "coverage": node.pin(last)})),
+                Setup {
+                    busy: true,
+                    ..plain
+                },
+            ),
+            // A node with a commitment adds its policy digest to a refusal.
+            (
+                "refused_with_policy_digest".into(),
+                unsigned(
+                    json!({"subject": {"record": "00".repeat(32)}, "coverage": node.pin(last)}),
+                ),
+                Setup {
+                    policy_digest: Some("ab"),
+                    ..plain
+                },
+            ),
+            // The received log's identity fields: a stated id past the cut,
+            // a key the host binds, and a key nobody binds.
+            (
+                "requester_id_cut".into(),
+                unsigned(
+                    json!({"subject": {"record": id(0)}, "coverage": node.pin(last), "requester_id": "r".repeat(200)}),
+                ),
+                plain,
+            ),
+            (
+                "signed_bound".into(),
+                signed(
+                    &asker_key("node-a"),
+                    "signed_bound",
+                    json!({"subject": {"record": id(0)}, "coverage": node.pin(last), "requester_id": "node-a"}),
+                ),
+                plain,
+            ),
+            (
+                "signed_unbound".into(),
+                signed(
+                    &SigningKey::from_bytes(&[7; 32]),
+                    "signed_unbound",
+                    json!({"subject": {"record": id(0)}, "coverage": node.pin(last)}),
+                ),
+                plain,
             ),
         ];
-        // Both sides of the first checkpoint, padding and the never-served
-        // record included: a refusal is a baseline answer too.
-        for (i, record) in corpus_ledger().iter().enumerate().take(24) {
+        // Both sides of the first checkpoint and the record no checkpoint
+        // covers, padding (8-15, 22-23) and the local block (21) included, as
+        // the ungated node answers them; then the sharing-policy gate's
+        // answers to a stranger and to node-a.
+        for i in (0..24).chain([ledger.len() - 1]) {
             for anchor in [0, last] {
                 cases.push((
                     format!("record_{i}_at_{anchor}"),
-                    json!({"subject": {"record": record["capsule_id"]}, "coverage": node.pin(anchor)}),
+                    unsigned(json!({"subject": {"record": id(i)}, "coverage": node.pin(anchor)})),
+                    plain,
                 ));
             }
+            let request = json!({"subject": {"record": id(i)}, "coverage": node.pin(last)});
+            let name = format!("gated_record_{i}_by_node_a");
+            cases.push((
+                name.clone(),
+                signed(&asker_key("node-a"), &name, request.clone()),
+                gated,
+            ));
+            cases.push((
+                format!("gated_record_{i}_unsigned"),
+                unsigned(request),
+                gated,
+            ));
         }
         let log = tempfile::tempdir().unwrap();
         let mut got = serde_json::Map::new();
-        for (name, request) in &cases {
-            let (_, outcome) = node.outcome(request, Some(log.path()));
-            let wire = match outcome {
+        for (name, bytes, setup) in &cases {
+            let wire = match node.outcome(bytes, *setup, Some(log.path())) {
                 Outcome::Answered { wire, .. } | Outcome::Refused { wire, .. } => wire,
                 Outcome::Unanswerable(why) => panic!("{name}: {why}"),
             };
             got.insert(name.clone(), wire);
         }
+        // No corpus record binds a client nonce, so exchange corroboration
+        // is asked of a node whose leaf 3 is a served half that binds one.
+        let mut bound = ledger.clone();
+        bound[3] = crate::evidence_request_parity::sealed(json!({
+            "action_type": "fyi",
+            "effect": {"status": "confirmed", "request_digest": "q", "response_digest": "r"},
+            "model_attestation": {"compute_attestation": {"x-mesh-poc-v1": {
+                "role": "served",
+                "client_nonce_source": "client",
+                "client_nonce": "c-1",
+                "serving_provenance": {"requesting_party": "node-a", "served_by_node_id": RESPONDER_NODE},
+            }}},
+        }));
+        let corroborating = Node::over(&bound);
+        let request =
+            crate::exchange_corroboration::request_for(&hex::encode(Sha256::digest(b"c-1")));
+        let outcome = corroborating.outcome(
+            &serde_json::to_vec(&request).unwrap(),
+            Setup {
+                corroboration: true,
+                ..plain
+            },
+            Some(log.path()),
+        );
+        let Outcome::Answered { wire, .. } = outcome else {
+            panic!("exchange corroboration: {outcome:?}");
+        };
+        got.insert("exchange_corroboration".into(), wire);
         let lines: Vec<Value> =
             std::fs::read_to_string(log.path().join(crate::received_log::RECEIVED_LOG_FILE))
                 .unwrap()
@@ -2035,7 +2229,7 @@ mod tests {
                 .collect();
         assert_eq!(
             lines.len(),
-            cases.len(),
+            cases.len() + 1,
             "one received-log line per request"
         );
         got.insert("received_log".into(), Value::Array(lines));
