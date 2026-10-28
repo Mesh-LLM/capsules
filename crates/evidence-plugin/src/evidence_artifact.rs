@@ -2427,6 +2427,37 @@ mod tests {
         assert_eq!(v["witness_receipts"], receipts("FAIL"));
     }
 
+    /// Several receipts, each checked on its own: a keyed one beside an
+    /// unkeyed one witnesses the range with the other NOT_CHECKED; the same
+    /// witness under two spellings of its URL passes twice.
+    #[test]
+    fn each_carried_receipt_is_checked_on_its_own() {
+        use crate::evidence_answer::tests::{mint_receipt, node_with_witnesses, WITNESS};
+        let witness = SigningKey::from_bytes(&[0x33; 32]);
+        let receipt = |url: &str, entry: &[u8; 32]| {
+            json!({"ts_url": url, "entry_hash": hex::encode(entry),
+                   "receipt_b64": mint_receipt(entry, &witness), "leaf_index": 0, "tree_size": 1})
+        };
+        let other = "https://other.example";
+        let dir = node_with_witnesses(|e| json!([receipt(WITNESS, e), receipt(other, e)]));
+        let v = summary_coverage(dir.path(), &[(WITNESS, &witness)]);
+        assert_eq!(v["witnessed"], json!(true));
+        assert_eq!(v["witnesses"], json!([WITNESS]));
+        assert_eq!(v["witness_check"], json!("PASS"));
+        assert_eq!(
+            v["witness_receipts"],
+            json!([{"ts_url": WITNESS, "status": "PASS"}, {"ts_url": other, "status": "NOT_CHECKED"}])
+        );
+        let shouted = "HTTPS://WITNESS.example/";
+        let dir = node_with_witnesses(|e| json!([receipt(WITNESS, e), receipt(shouted, e)]));
+        let v = summary_coverage(dir.path(), &[(WITNESS, &witness)]);
+        assert_eq!(v["witness_check"], json!("PASS"));
+        assert_eq!(
+            v["witness_receipts"],
+            json!([{"ts_url": WITNESS, "status": "PASS"}, {"ts_url": shouted, "status": "PASS"}])
+        );
+    }
+
     /// A checkpoint line whose witness entry is not a receipt (no `ts_url`)
     /// never reaches the served summary: the line does not read as a
     /// checkpoint, so nothing is served under it.

@@ -858,6 +858,9 @@ mod tests {
 /// ledger line, in this plugin's record shape: a served record's model,
 /// quantization, outcome, latency and whether it states a weights digest,
 /// and an adjudication verdict's two halves. Padding reads as nothing.
+/// Never a requester-identity field (`cross_party.initiator_ref`,
+/// `serving_provenance.requesting_party`/`counterparty_ref`): the summary
+/// answers what was served, never who asked.
 pub fn leaf_facts(record: &Value) -> LeafFacts {
     if crate::producer::padding::is_padding(record) {
         return LeafFacts::default();
