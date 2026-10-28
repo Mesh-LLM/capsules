@@ -560,7 +560,7 @@ fn answer_from(
         Resolution::Artifact(anchor) => anchor,
         Resolution::Refuse(reason) => return Err(reason),
     };
-    let at = serving_position(index, &anchor)?;
+    let at = serving_position(view, &anchor)?;
     let served_summary = matches!(&req.derivation,
         Some(Derivation::Token(t)) if t == SERVED_SUMMARY_DERIVATION_TOKEN);
     if served_summary {
@@ -660,7 +660,7 @@ fn corroboration_answer(
         Resolution::Artifact(ResolvedAnchor::ExchangeHalf(_)) => return Err(Reason::NoSuchSubject),
         Resolution::Refuse(reason) => return Err(reason),
     };
-    let at = serving_position(index, &anchor)?;
+    let at = serving_position(view, &anchor)?;
     #[allow(unused_mut)]
     let mut records = corroboration::matching_records(req, &index.chain[at].record, view);
     if records.len() as u64 > MAX_ANSWER_RECORDS {
@@ -700,28 +700,18 @@ fn corroboration_answer(
 /// anchor, the checkpoint it names. For an `exchange` subject pinned by the
 /// requester's own half, the earliest checkpoint covering the last record
 /// citing the half among those the latest one covers, so growth that adds
-/// no citing record does not change the artifact (-00 §5), as evidencebook
-/// and the Go responder choose it; `coverage_unsatisfiable` when no
-/// checkpoint covers one yet.
-fn serving_position(index: &LedgerIndex, anchor: &ResolvedAnchor) -> Result<usize, Reason> {
-    let covers = |c: &evidence_log::ChainCheckpoint| leaf_count(c.record.mmr_size).unwrap_or(0);
-    match anchor {
-        ResolvedAnchor::Anchor(a) => index
-            .chain
-            .iter()
-            .position(|c| c.anchor_digest() == a.digest),
-        ResolvedAnchor::ExchangeHalf(half) => {
-            let latest = index.chain.last().map_or(0, covers);
-            index
-                .citing(half)
-                .iter()
-                .copied()
-                .filter(|&i| i < latest)
-                .max()
-                .and_then(|last| index.chain.iter().position(|c| covers(c) > last))
-        }
-    }
-    .ok_or(Reason::CoverageUnsatisfiable)
+/// no citing record does not change the artifact (-00 §5), as the Go
+/// responder chooses it. It is evidencebook's `answer::serving_checkpoint`
+/// over this index (evidencebook#35); every failure, an anchor no
+/// checkpoint states or a half no checkpoint covers yet, is
+/// `coverage_unsatisfiable`.
+fn serving_position(view: &LogView<'_>, anchor: &ResolvedAnchor) -> Result<usize, Reason> {
+    use evidencebook::store::CheckpointedLog as _;
+    let stated = view
+        .stated_checkpoints()
+        .map_err(|_| Reason::CoverageUnsatisfiable)?;
+    evidencebook::answer::serving_checkpoint(view, &stated, anchor)
+        .map_err(|_| Reason::CoverageUnsatisfiable)
 }
 
 /// Whether `counterparty` is one of `principal`, the nodes a signed

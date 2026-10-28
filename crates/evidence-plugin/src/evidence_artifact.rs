@@ -2446,4 +2446,44 @@ mod tests {
         let chain = crate::evidence_log::with_index(dir.path(), &key_id, |index| index.chain.len());
         assert_eq!(chain.unwrap(), 0, "no checkpoint is read");
     }
+
+    /// The serving checkpoint for an `exchange` subject is the earliest one
+    /// covering the last record citing the half: a citing record committed
+    /// again after the first checkpoint moves the answer under the second,
+    /// and a citing record no checkpoint covers yet moves nothing.
+    #[test]
+    fn an_exchange_is_served_under_the_checkpoint_covering_its_last_citing_record() {
+        let half = hex::encode(Sha256::digest(b"the counterparty's own half"));
+        let ledger = corpus_ledger();
+        let citing = ledger
+            .iter()
+            .position(|r| crate::evidence_log::counterparty_half_citations(r).contains(&half))
+            .unwrap();
+        assert!(citing < 16, "the corpus cites the half under checkpoint 0");
+        let ask = |ledger: &[Value]| {
+            let node = Node::over(ledger);
+            let (sent, reply) = node
+                .ask(&json!({"subject": {"exchange": half}, "coverage": {"expected_pin": half}}));
+            let checked = check_reply(&sent, &reply).unwrap();
+            (checked.anchor, node.anchors.clone(), checked.records)
+        };
+        let (anchor, anchors, records) = ask(&ledger);
+        assert_eq!(anchor, anchors[0]);
+        assert_eq!(records, vec![citing as u64]);
+
+        let mut twice = ledger.clone();
+        twice[20] = ledger[citing].clone();
+        let (anchor, anchors, records) = ask(&twice);
+        assert_eq!(anchor, anchors[1]);
+        assert_eq!(records, vec![citing as u64, 20]);
+
+        let mut uncovered = ledger.clone();
+        let last = uncovered.len() - 1;
+        uncovered[last] = ledger[citing].clone();
+        let (anchor, anchors, _) = ask(&uncovered);
+        assert_eq!(
+            anchor, anchors[0],
+            "a citing record past the latest checkpoint moves nothing"
+        );
+    }
 }
