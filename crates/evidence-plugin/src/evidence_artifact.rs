@@ -199,7 +199,7 @@ fn served_summary(
 pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
     let index = view.index;
     let served = index.chain.get(b.at).ok_or(Reason::CoverageUnsatisfiable)?;
-    let signed = build_with_book(b, view, served)?;
+    let signed = signed_envelope(b, view, served)?;
     let mut reply: Value = serde_json::from_slice(&signed.encode(Binding::Json))
         .map_err(|_| Reason::PolicyDeclined)?;
     // The checkpoints whose receipts go with the answer: every one listed
@@ -232,13 +232,11 @@ pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
     Ok(reply)
 }
 
-/// Every answer, built and signed by evidencebook's `answer::build` over
-/// this node's index (evidencebook#35), with material beyond the profile
-/// (P-13) as this node has always sent it. `served_summary/1` and
-/// `exchange_corroboration/1` (named by its definition digest) are derived
-/// here and carried through the crate's `Derive`. Each crate error
-/// is the reason this node has always refused it with.
-fn build_with_book(
+/// The envelope `answer::build` signs over this node's index, with
+/// material beyond the profile (P-13) as this node has always sent it, this
+/// node's own derivations carried through its `Derive`, and each crate
+/// error the reason this node has always refused it with.
+fn signed_envelope(
     b: &Build<'_>,
     view: &LogView<'_>,
     served: &ChainCheckpoint,
