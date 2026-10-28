@@ -64,12 +64,35 @@ fn requester_idle_timeout_ms() -> u64 {
     env_millis("CAPSULES_COMMITMENT_TIMEOUT_MS", 8_000).as_millis() as u64
 }
 
+/// The last commitment built, and what it was built from: this node's id,
+/// the policy's digest and the latest checkpoint's anchor. Anyone may open
+/// `commitment/1`, so a commitment is built (a history card answered and
+/// two signatures) only when one of those changed; every other ask is
+/// answered with the same bytes, and its `issued_at` is when it was built.
+static LAST: std::sync::Mutex<Option<(BuiltFrom, Signed)>> = std::sync::Mutex::new(None);
+
+/// This node's id, the policy's digest, the latest checkpoint's anchor.
+type BuiltFrom = (String, String, String);
+
 /// This node's commitment as it stands now, or why there is none.
 fn own(capsules: &CapsuleState, node_id: Option<&str>) -> Result<Signed, String> {
     let node_id = node_id.ok_or("this node's mesh id is not known yet")?;
     let now = crate::evidence_answer::now_utc();
     commitment::with_responder(capsules, &now, Some(node_id), |responder, policy| {
-        commitment::build(responder, node_id, policy)
+        let digest = responder.policy_digest.unwrap_or_default().to_string();
+        let anchor = commitment::latest_anchor(responder)?;
+        let key = (node_id.to_string(), digest, anchor);
+        let mut last = LAST
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((built_from, signed)) = last.as_ref() {
+            if *built_from == key {
+                return Ok(signed.clone());
+            }
+        }
+        let signed = commitment::build(responder, node_id, policy)?;
+        *last = Some((key, signed.clone()));
+        Ok(signed)
     })
 }
 
@@ -192,13 +215,43 @@ pub async fn handle_fetch(
         PluginError::internal(format!("peer returned a malformed commitment frame: {e}"))
     })?;
     let registry = crate::peer_keys::registry();
-    let announced = crate::peer_keys::announced_key_in(registry.as_deref(), &peer_id);
-    Ok(checked(&frame, &peer_id, announced.as_deref()))
+    Ok(checked(
+        &frame,
+        &peer_id,
+        announced(registry.as_deref(), &peer_id),
+    ))
+}
+
+/// What the keys this node holds say about `peer_id`'s key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Announced {
+    /// No key is configured or announced for the peer.
+    None,
+    Key(String),
+    /// An entry that is not one key: the host's announcement and the
+    /// configured key disagree (`peer_keys::registry` blanks it), or the
+    /// configured value is not a key id. No commitment can be checked
+    /// against it.
+    Unusable,
+}
+
+fn announced(registry: Option<&str>, peer_id: &str) -> Announced {
+    let Some(raw) = registry.filter(|raw| !raw.is_empty()) else {
+        return Announced::None;
+    };
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(raw) else {
+        return Announced::Unusable;
+    };
+    match map.get(peer_id) {
+        None => Announced::None,
+        Some(Value::String(key)) if !key.is_empty() => Announced::Key(key.clone()),
+        Some(_) => Announced::Unusable,
+    }
 }
 
 /// The frame as fetched, with `problems` (empty when every check passed) and
 /// whether its key is the one the host announced for the peer.
-fn checked(frame: &Value, peer_id: &str, announced: Option<&str>) -> Value {
+fn checked(frame: &Value, peer_id: &str, announced: Announced) -> Value {
     if let Some(error) = frame.get("error").and_then(Value::as_str) {
         return json!({ "error": error });
     }
@@ -211,12 +264,20 @@ fn checked(frame: &Value, peer_id: &str, announced: Option<&str>) -> Value {
         problems.push("the commitment does not name the peer asked".into());
     }
     let key = match announced {
-        None => "not_announced",
-        Some(k) if signed.commitment["key_id"] == k => "matches",
-        Some(_) => {
+        Announced::None => "not_announced",
+        Announced::Key(k) if signed.commitment["key_id"] == k.as_str() => "matches",
+        Announced::Key(_) => {
             problems
                 .push("the commitment is not under the key the host announced for the peer".into());
             "differs"
+        }
+        Announced::Unusable => {
+            problems.push(
+                "the keys this node holds for the peer disagree or are not a key id, so the \
+                 commitment's key cannot be checked"
+                    .into(),
+            );
+            "unusable"
         }
     };
     let mut out = signed.to_wire();
@@ -239,9 +300,81 @@ mod tests {
         assert!(!is_commitment_request(&open));
     }
 
+    /// A valid commitment for `NODE` under the corpus key.
+    fn frame() -> (Value, String) {
+        let signed = commitment::tests::built(&commitment::tests::defaults());
+        let key_id = signed.commitment["key_id"].as_str().unwrap().to_string();
+        (signed.to_wire(), key_id)
+    }
+
+    #[test]
+    fn a_valid_commitment_from_the_peer_asked_under_its_announced_key_passes() {
+        let (frame, key_id) = frame();
+        let out = checked(&frame, commitment::tests::NODE, Announced::Key(key_id));
+        assert_eq!(out["problems"], json!([]), "{out}");
+        assert_eq!(out["announced_key"], "matches");
+        let out = checked(&frame, commitment::tests::NODE, Announced::None);
+        assert_eq!(out["problems"], json!([]), "{out}");
+        assert_eq!(out["announced_key"], "not_announced");
+    }
+
+    #[test]
+    fn another_nodes_valid_commitment_is_refused() {
+        let (frame, _) = frame();
+        let out = checked(&frame, &"cd".repeat(32), Announced::None);
+        assert_eq!(
+            out["problems"],
+            json!(["the commitment does not name the peer asked"])
+        );
+    }
+
+    #[test]
+    fn a_commitment_under_another_key_than_the_announced_one_is_refused() {
+        let (frame, _) = frame();
+        let out = checked(
+            &frame,
+            commitment::tests::NODE,
+            Announced::Key("ef".repeat(32)),
+        );
+        assert_eq!(out["announced_key"], "differs");
+        assert_eq!(
+            out["problems"],
+            json!(["the commitment is not under the key the host announced for the peer"])
+        );
+    }
+
+    #[test]
+    fn keys_that_disagree_are_never_read_as_no_key() {
+        let peer = commitment::tests::NODE;
+        assert_eq!(announced(None, peer), Announced::None);
+        assert_eq!(announced(Some(r#"{"other":"ab"}"#), peer), Announced::None);
+        let key = "ab".repeat(32);
+        assert_eq!(
+            announced(Some(&json!({ peer: key }).to_string()), peer),
+            Announced::Key(key)
+        );
+        // `peer_keys::registry` blanks a peer whose announced and configured
+        // keys disagree.
+        for unusable in [json!({ peer: "" }), json!({ peer: 7 })] {
+            assert_eq!(
+                announced(Some(&unusable.to_string()), peer),
+                Announced::Unusable
+            );
+        }
+        assert_eq!(announced(Some("not json"), peer), Announced::Unusable);
+        let (frame, _) = frame();
+        let out = checked(&frame, peer, Announced::Unusable);
+        assert_eq!(out["announced_key"], "unusable");
+        assert_eq!(out["problems"].as_array().unwrap().len(), 1, "{out}");
+    }
+
     #[test]
     fn an_error_frame_is_reported_as_the_peer_gave_it() {
-        let out = checked(&json!({"error": "no checkpoint yet"}), "aa", None);
+        let out = checked(
+            &json!({"error": "no checkpoint yet"}),
+            "aa",
+            Announced::None,
+        );
         assert_eq!(out, json!({"error": "no checkpoint yet"}));
     }
 }

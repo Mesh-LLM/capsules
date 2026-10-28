@@ -156,10 +156,12 @@ separate operator settings. Each is its own switch; none implies another.
 | Protected exchange records (§5.3) | Any subject carrying record bodies | Authenticated **and** authorized requesters only; never on a stated id alone |
 | `public_summary_policy` | A broad, public-safe summary any requester may read | **none**; only under an explicit policy with bounded periods and anti-differencing controls (R-9) |
 
-Every default is pinned in `policies/disclosure-default.json`: the node signs
-the policy its switches are (`disclosure-policy/0`), its commitment carries
-the digest of that signed policy, and every refusal names the digest it was
-refused under (SHARING-POLICY, "The signed policy and the commitment").
+The defaults of the shipped sharing switches are pinned in
+`policies/disclosure-default.json` (`public_summary_policy` is not built, and
+protected records follow §5.3). The node signs the policy its switches are
+(`disclosure-policy/0`), its commitment carries the digest of that signed
+policy, and every evidence refusal names the digest it was refused under
+(SHARING-POLICY, "The signed policy and the commitment").
 
 - **R-7 Opt-in advertisement.** A node that has not enabled
   `advertise_evidence_requests` advertises no evidence capability. It may still

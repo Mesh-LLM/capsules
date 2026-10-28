@@ -354,7 +354,7 @@ what it can answer, never what it has done, and it carries no counts. Both
 shapes are the ones evidence-network/loop's step 3 checks
 (`steps/03-advertise.md` there).
 
-With the defaults, the policy is exactly
+With the defaults, the policy's `policy` member is exactly
 [`policies/disclosure-default.json`](../policies/disclosure-default.json):
 
 ```json
@@ -375,8 +375,11 @@ and the code cannot differ. Change a switch and the policy, and its digest,
 change with it.
 
 - **The digest.** The commitment's `lcap.policy_digest` is the SHA-256 of the
-  signed policy file's bytes (its RFC 8785 form). The plugin computes it from
-  the switches it is answering under; nobody writes it down.
+  signed policy file's bytes (its RFC 8785 form), not of the pinned file. The
+  signed file wraps the `policy` member with `profile`, `key_id` and `sig`, so
+  two nodes with the same settings have different digests, and one node's
+  digest changes only when its switches or its key do. The plugin computes it
+  from the switches it is answering under; nobody writes it down.
 - **What else the commitment says.** The ask goes to `mesh:<node_id>` over
   this plugin's evidence-request channel. The node answers `checkpoints`,
   `history_card/1`, `served_summary/1` and `exchange_corroboration/1` (by
@@ -389,9 +392,13 @@ change with it.
   `performed:counterparty_half`.
 - **What it carries.** The node's latest signed checkpoint, whole, and the
   `history_card/1` answer this node gives any stranger at that checkpoint
-  (the staple). A node with no checkpoint yet has no commitment.
-- **A refusal names the policy.** Every signed refusal to an evidence
-  request carries a `policy_digest` member: the digest of the policy it was
+  (the staple). A node has no commitment while it has no checkpoint, while
+  its `history_card/1` is refused (past 1024 checkpoints, #76), or while the
+  commitment would be larger than a peer reads (1 MiB).
+- **A refusal names the policy.** Every signed refusal the evidence
+  responder gives carries a `policy_digest` member (an `adjudicate` request,
+  answered by the referee on the same channel, is not under this policy and
+  its refusal carries none): the digest of the policy it was
   refused under, so it can be checked against the commitment. The member is
   **not signed**: the refusal's signature covers `issued_at`, `reason` and
   `request_digest` only, as the evidence-request profile defines it.

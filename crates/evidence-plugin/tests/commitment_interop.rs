@@ -294,7 +294,8 @@ async fn a_second_node_fetches_the_commitment_and_a_refusal_names_its_policy_dig
     // A's own pair, as the operator would publish it.
     let own = a.call_tool("commitment", json!({}), None).await;
 
-    // B fetches A's over the channel, through the relay.
+    // B fetches A's over the channel, through the relay, a second later.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     let a_side = a.open_stream(Some(COMMITMENT_CHANNEL)).await;
     let relay = relay_to(a_side).await;
     let fetched = b
@@ -309,9 +310,10 @@ async fn a_second_node_fetches_the_commitment_and_a_refusal_names_its_policy_dig
     let commitment = &fetched["commitment"];
     assert_eq!(commitment["node_id"], NODE_A);
     assert_eq!(commitment["profile"], "evidence-commitment/0");
-    // The same policy bytes as A hands its operator, and the same claims.
+    // The same bytes A handed its operator a second earlier: nothing it was
+    // built from changed, so A did not build or sign it again.
     assert_eq!(fetched["policy"], own["policy"]);
-    assert_eq!(commitment["lcap"], own["commitment"]["lcap"]);
+    assert_eq!(*commitment, own["commitment"]);
 
     // A stranger asking A for its served summary is refused, and the
     // refusal names the digest A's signed commitment advertises.

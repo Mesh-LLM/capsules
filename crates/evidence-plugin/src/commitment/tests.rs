@@ -4,18 +4,18 @@ use crate::requester_auth::{Keys, ReplayCache};
 use std::collections::BTreeMap;
 
 const NOW: &str = "2026-10-28T00:00:00Z";
-const NODE: &str = "16a607c33006dd4243cb2347c4bdbaa5129a590b5257eea62ac5047abcf87864";
+pub(crate) const NODE: &str = "16a607c33006dd4243cb2347c4bdbaa5129a590b5257eea62ac5047abcf87864";
 
 fn key() -> SigningKey {
     SigningKey::from_bytes(&NODE_KEY_SEED)
 }
 
-fn defaults() -> Policy {
+pub(crate) fn defaults() -> Policy {
     Policy::from_settings(|_| None)
 }
 
 /// A commitment over the parity corpus, signed by its node, under `policy`.
-fn built(policy: &Policy) -> Signed {
+pub(crate) fn built(policy: &Policy) -> Signed {
     let dir = tempfile::tempdir().unwrap();
     let key = key();
     corpus_ledger_dir(dir.path(), &key);
@@ -49,6 +49,23 @@ fn resigned(signed: &Signed, edit: impl FnOnce(&mut Value)) -> Signed {
         commitment: sign(doc, &key()),
         policy: signed.policy.clone(),
     }
+}
+
+/// `signed` with `edit` applied to its stapled card, carried and signed
+/// again: only the staple's own checks can refuse it.
+fn restapled(signed: &Signed, edit: impl FnOnce(&mut Value)) -> Signed {
+    resigned(signed, |d| {
+        let mut card: Value = serde_json::from_slice(
+            &base64::engine::general_purpose::STANDARD
+                .decode(d["history_card"]["bytes"].as_str().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        edit(&mut card);
+        let raw = serde_json::to_vec(&card).unwrap();
+        d["history_card"]["bytes"] = json!(base64::engine::general_purpose::STANDARD.encode(&raw));
+        d["history_card"]["sha256"] = json!(hex::encode(Sha256::digest(&raw)));
+    })
 }
 
 #[test]
@@ -280,19 +297,23 @@ fn each_tampering_is_refused() {
         ),
         (
             "a staple presented by another",
-            resigned(&signed, |d| {
-                let mut card: Value = serde_json::from_slice(
-                    &base64::engine::general_purpose::STANDARD
-                        .decode(d["history_card"]["bytes"].as_str().unwrap())
-                        .unwrap(),
-                )
-                .unwrap();
-                card["responder"] = json!("ab".repeat(32));
-                let raw = serde_json::to_vec(&card).unwrap();
-                d["history_card"]["bytes"] =
-                    json!(base64::engine::general_purpose::STANDARD.encode(&raw));
-                d["history_card"]["sha256"] = json!(hex::encode(Sha256::digest(&raw)));
+            restapled(&signed, |card| card["responder"] = json!("ab".repeat(32))),
+        ),
+        (
+            "a staple with no artifact and no artifact_digest",
+            restapled(&signed, |card| {
+                let card = card.as_object_mut().unwrap();
+                card.remove("artifact");
+                card.remove("artifact_digest");
             }),
+        ),
+        (
+            "a staple whose artifact is not base64url",
+            restapled(&signed, |card| card["artifact"] = json!("!!")),
+        ),
+        (
+            "a staple whose artifact_digest is not a string",
+            restapled(&signed, |card| card["artifact_digest"] = json!(null)),
         ),
         (
             "a key_id that is not spki",
@@ -386,4 +407,13 @@ fn a_refusal_names_the_digest_of_the_policy_it_was_refused_under() {
     }
     let signed = built(&policy);
     assert_eq!(signed.commitment["lcap"]["policy_digest"], digest);
+}
+
+#[test]
+fn a_commitment_larger_than_a_peer_reads_is_not_offered() {
+    let mut signed = built(&defaults());
+    assert!(fits(&signed).is_ok());
+    signed.policy = vec![b' '; crate::mesh_evidence_bridge::MAX_SIDE_STREAM_BYTES as usize];
+    let err = fits(&signed).unwrap_err();
+    assert!(err.contains("larger than a peer reads"), "{err}");
 }

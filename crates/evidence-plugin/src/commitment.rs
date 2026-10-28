@@ -241,21 +241,33 @@ pub fn with_responder<T>(
     f(&responder, &policy)
 }
 
+/// This node's latest checkpoint statement and its anchor digest.
+fn latest_checkpoint(responder: &Responder<'_>) -> Result<(Vec<u8>, String), String> {
+    crate::evidence_log::with_index(
+        responder.ledger_dir,
+        &key_id(responder.signing_key),
+        |index| {
+            index
+                .chain
+                .last()
+                .map(|c| (c.statement.clone(), c.anchor_digest()))
+        },
+    )
+    .map_err(|e| format!("the ledger could not be read: {e}"))?
+    .ok_or_else(|| "this node has no checkpoint yet, so it has nothing to commit to".into())
+}
+
+/// The anchor digest of the checkpoint [`build`] would commit to now.
+pub fn latest_anchor(responder: &Responder<'_>) -> Result<String, String> {
+    latest_checkpoint(responder).map(|(_, anchor)| anchor)
+}
+
 /// Build and sign this node's commitment. `responder` is what this node
 /// answers with: the staple is its answer to a stranger.
 pub fn build(responder: &Responder<'_>, node_id: &str, policy: &Policy) -> Result<Signed, String> {
     let key = responder.signing_key;
     let key_id = key_id(key);
-    let checkpoint = crate::evidence_log::with_index(responder.ledger_dir, &key_id, |index| {
-        index
-            .chain
-            .last()
-            .map(|c| (c.statement.clone(), c.anchor_digest()))
-    })
-    .map_err(|e| format!("the ledger could not be read: {e}"))?;
-    let Some((statement, anchor)) = checkpoint else {
-        return Err("this node has no checkpoint yet, so it has nothing to commit to".into());
-    };
+    let (statement, anchor) = latest_checkpoint(responder)?;
     let staple_request = json!({
         "subject": {"full_history": null},
         "coverage": {"expected_pin": anchor},
@@ -296,10 +308,27 @@ pub fn build(responder: &Responder<'_>, node_id: &str, policy: &Policy) -> Resul
         "answers_within": ANSWERS_WITHIN,
         "history_card": {"derivation": "history_card/1", "sha256": sha(&staple), "bytes": b64(&staple)},
     });
-    Ok(Signed {
+    let signed = Signed {
         commitment: sign(doc, key),
         policy: policy_bytes,
-    })
+    };
+    fits(&signed)?;
+    Ok(signed)
+}
+
+/// A peer reads at most `MAX_SIDE_STREAM_BYTES` of a `commitment/1` reply,
+/// and the staple inside it is a whole answer, base64-encoded again: a
+/// commitment whose frame is larger could be built but never fetched, so it
+/// is not offered at all.
+pub(crate) fn fits(signed: &Signed) -> Result<(), String> {
+    let size = serde_json::to_vec(&signed.to_wire()).map_or(usize::MAX, |b| b.len());
+    let cap = crate::mesh_evidence_bridge::MAX_SIDE_STREAM_BYTES as usize;
+    if size > cap {
+        return Err(format!(
+            "the commitment would be {size} bytes, larger than a peer reads ({cap})"
+        ));
+    }
+    Ok(())
 }
 
 /// Every check loop's `check_commitment.py` makes on a commitment and its
@@ -696,14 +725,18 @@ fn staple_problems(raw: &[u8], key_id: &Value) -> Vec<String> {
             "history_card is not presented by its subject: its responder is not key_id".into(),
         );
     }
+    // Both must be present: a staple with neither has no history in it.
     let artifact = card.get("artifact").and_then(Value::as_str).and_then(|a| {
         base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(a)
             .ok()
     });
-    if artifact.map(|a| hex::encode(Sha256::digest(a))).as_deref()
-        != card.get("artifact_digest").and_then(Value::as_str)
-    {
+    let stated = card.get("artifact_digest").and_then(Value::as_str);
+    let matches = match (artifact, stated) {
+        (Some(artifact), Some(stated)) => hex::encode(Sha256::digest(artifact)) == stated,
+        _ => false,
+    };
+    if !matches {
         problems
             .push("history_card answer's artifact_digest is not the sha256 of its artifact".into());
     }
@@ -711,4 +744,4 @@ fn staple_problems(raw: &[u8], key_id: &Value) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
