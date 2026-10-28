@@ -126,7 +126,7 @@ halves() {
 }
 has_halves() { [ "$(halves "$1" "$2")" -ge "$EXCHANGES" ]; }
 
-# Record push is off by default; turned on at both ends here (a node with it
+# Record push is on by default; set explicitly at both ends here (a node with it
 # off does not take the other side's push either), so the run shows what a
 # node holds once the host names the other side.
 export CAPSULES_SHARE_RECORD_AT_COMPLETION=counterparty

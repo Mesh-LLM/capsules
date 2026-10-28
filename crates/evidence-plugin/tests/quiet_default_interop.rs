@@ -1,11 +1,12 @@
-//! A node with the default settings sends nothing to any peer on its own,
-//! idle or serving: the compiled `capsules` binary, driven over the real
-//! plugin wire protocol by a fake host, is handed a completed exchange with a
-//! known counterparty and must not open a mesh stream, send a channel message
-//! or a bulk transfer, or ask for a peer block. The control: the same run with
-//! `share_record_at_completion = counterparty` does open a mesh stream to the
-//! counterparty, so the quiet result is not just a test that cannot see a
-//! push.
+//! With `share_record_at_completion = off` a node sends nothing to any peer on
+//! its own, idle or serving: the compiled `capsules` binary, driven over the
+//! real plugin wire protocol by a fake host, is handed a completed exchange
+//! with a known counterparty and must not open a mesh stream, send a channel
+//! message or a bulk transfer, or ask for a peer block. With the default
+//! settings (the push is on, #68) the same exchange opens a mesh stream to
+//! the counterparty and nothing else: no stream to any other peer, no channel
+//! message, no bulk transfer, no peer block. The default run therefore also
+//! shows the quiet run can see a push when one happens.
 //!
 //! Besides a 5-second look while idle, no fixed window decides a result. The plugin handles channel
 //! messages strictly one at a time, in order, so once it has recorded a
@@ -234,24 +235,25 @@ impl Host {
 }
 
 #[tokio::test]
-async fn a_default_node_sends_nothing_to_peers_idle_or_serving() {
-    let mut host = Host::spawn(&[]).await;
+async fn a_node_with_the_push_off_sends_nothing_to_peers_idle_or_serving() {
+    let mut host = Host::spawn(&[("CAPSULES_SHARE_RECORD_AT_COMPLETION", "off")]).await;
     host.watch(Duration::from_secs(5), |_| false).await;
     assert!(host.sent.is_empty(), "idle: {:?}", host.sent);
     host.exchange_and_settle().await;
-    assert!(
-        host.sent.is_empty(),
-        "serving, default settings: {:?}",
-        host.sent
-    );
+    assert!(host.sent.is_empty(), "serving, push off: {:?}", host.sent);
     host.stop().await;
 }
 
-/// The control: with the push turned on, the same exchange does reach the
-/// counterparty, so the test above can see a push when one happens.
+/// With the default settings a node is quiet while idle, and a completed
+/// exchange reaches the counterparty and no one else.
 #[tokio::test]
-async fn with_the_push_turned_on_the_counterparty_is_contacted() {
-    let mut host = Host::spawn(&[("CAPSULES_SHARE_RECORD_AT_COMPLETION", "counterparty")]).await;
+async fn a_default_node_is_quiet_idle_and_pushes_a_completed_exchange_to_the_counterparty_only() {
+    let mut host = Host::spawn(&[]).await;
+    host.watch(Duration::from_secs(5), |_| false).await;
+    assert!(host.sent.is_empty(), "idle: {:?}", host.sent);
+    // The fake host never answers the push's stream, so the plugin stays on
+    // this exchange: wait for the push itself, then look a little longer for
+    // anything else.
     host.completed_exchange().await;
     let pushed = |host: &Host| {
         host.sent
@@ -266,6 +268,16 @@ async fn with_the_push_turned_on_the_counterparty_is_contacted() {
         host.sent
     );
     eprintln!("pushed after {:?}", started.elapsed());
+    host.watch(Duration::from_secs(5), |_| false).await;
+    let other: Vec<&String> = host
+        .sent
+        .iter()
+        .filter(|s| !(s.starts_with("open_mesh_stream") && s.contains(SERVING_PEER)))
+        .collect();
+    assert!(
+        other.is_empty(),
+        "only the push to the counterparty may leave this node: {other:?}"
+    );
     host.stop().await;
 }
 

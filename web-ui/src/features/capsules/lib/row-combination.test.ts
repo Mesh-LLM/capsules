@@ -27,10 +27,10 @@ describe('rowCombinationText -- what the badge and the chips say together', () =
     expect(rowCombinationText(input({ state: 'contradicted' }))).toMatch(/disagrees with it, or doesn’t match its own id/)
   })
 
-  it('not arrived: never "normally arrives" (record push is off by default); points to the ask the row offers', () => {
+  it('not arrived: never "normally arrives" (their record push may be off); points to the ask the row offers', () => {
     const text = rowCombinationText(input({ state: 'open_not_held' }))
     expect(text).not.toMatch(/normally arrives|usually/)
-    expect(text).toMatch(/off by default/)
+    expect(text).toMatch(/on by default/)
     expect(text).toMatch(/ask for it on this row/)
   })
 

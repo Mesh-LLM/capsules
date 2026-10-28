@@ -68,7 +68,7 @@ Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGEL
   `MESH_LLM_CONFIG=<path>` in its environment, or the plugin reads `~/.mesh-llm/config.toml`.
 
 - **Quiet by default.** Pushing this node's record to the counterparty, delivering verdicts, and
-  asking a referee are now **off by default**; turn each on under Configuration › Plugins (see
+  asking a referee are now **off by default** (record push is on by default again since #68); turn each on under Configuration › Plugins (see
   [What it sends](#what-it-sends-and-where-it-listens)). Answering a peer that asks for a record is
   unchanged.
 - **Stop routing after N goes through the host's plugin path.** The rule now asks mesh-llm to block
@@ -107,14 +107,18 @@ Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGEL
 
 ## What it sends, and where it listens
 
-Records are kept on this node. **With the default settings the plugin sends
-nothing to any peer on its own**, idle or serving: it only answers a peer that
-asks it for one of its records. Everything else that reaches a peer is off
-until you turn it on:
+Records are kept on this node. **With the default settings the only thing the
+plugin sends to a peer on its own is this node's sealed record of a completed
+exchange, to the other side of that exchange**; it also accepts that peer's
+record the same way. It sends nothing else while idle or serving, and answers a
+peer that asks it for one of its records. Everything else that reaches a peer
+is off until you turn it on. Set `share_record_at_completion = "off"` to send
+and accept no pushed record. The public checkpoint list shows when this node's
+exchanges ended; the record itself goes only to the counterparty:
 
 | What | To whom | Default | To turn it on (or off) |
 | --- | --- | --- | --- |
-| This node's own sealed record of a completed exchange (a push) | the peer in that exchange | **off** | `share_record_at_completion = "counterparty"` |
+| This node's own sealed record of a completed exchange (a push) | the peer in that exchange | **on** | `share_record_at_completion = "off"` |
 | A verdict a referee signed, delivered to the nodes it judges | those nodes | **off** | `share_adjudications = "deliver_to_subjects"` |
 | Asking a referee when two twins of a client-marked pair answered differently. **This sends the twins' request (the prompt's `messages`) and both twins' answers to the referee peer**, which answers the request with its own inference | one eligible peer | **off** | `adjudicate_differing_twins = "on"` |
 | Stopping routing to a peer after N contradictions | (a request to your own host) | **off** | set `stop_routing_after_contradictions`, and `allow_peer_blocks = true` for this plugin in mesh-llm's config |
@@ -219,9 +223,9 @@ and response digests on the event the requesting node sees for a request
 another peer served. mesh-llm 0.77 has neither, so there each node holds only
 its own record, and nothing is shown as confirmed.
 
-Confirmation is off by default, because it sends this node's record to the
-other side: turn on `share_record_at_completion` (`counterparty`) on both
-nodes, and give each node the other's key (below).
+Confirmation needs each node to send its record to the other side, which
+`share_record_at_completion` (`counterparty`) does by default: leave it on, on
+both nodes, and give each node the other's key (below).
 
 **Each node must know the other node's public key.** The plugin accepts a
 record only from a peer whose key it knows, and refuses the rest. It knows a

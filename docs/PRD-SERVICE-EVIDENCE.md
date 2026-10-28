@@ -120,7 +120,7 @@ network: payment legs record observations, they do not move money.
   rewrite is detectable (Link 7).
 - **R-5 Peer-confirmed halves.** An exchange is two-sided only when the other
   node's own signed half is held and verified under that node's key
-  (SHARING-POLICY, "The record at completion"). Push is off by default and
+  (SHARING-POLICY, "The record at completion"). Push is on by default (#68) and
   needs the peer's key: `CAPSULES_PEER_KEYS`, or keys announced by the host
   (mesh-llm #2299, merged 2026-10-08, after the latest mesh-llm release
   v0.78.1; exercised only against a test build of the host, CHANGELOG 0.1.4).

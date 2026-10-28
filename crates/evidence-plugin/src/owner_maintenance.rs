@@ -735,6 +735,16 @@ pub(crate) fn without_credentials(url: &str) -> String {
     }
 }
 
+/// `switch` reads a value that is not valid Unicode as unset, so it would show
+/// the default, on, while the plugin treats that value as off
+/// (`share_policy::record_at_completion_is_off`). Show what the plugin does.
+fn record_at_completion_status(shown: Value, plugin_is_off: bool) -> Value {
+    if plugin_is_off && shown["source"] == "default" {
+        return json!({ "value": "off", "source": "unreadable" });
+    }
+    shown
+}
+
 fn witness_switch() -> Value {
     let mut witness = switch("CAPSULES_CHECKPOINT_WITNESS_URLS", None);
     if let Some(value) = witness["value"].as_str() {
@@ -750,7 +760,10 @@ fn witness_switch() -> Value {
 
 fn sharing_status() -> Value {
     json!({
-        "record_at_completion": switch(crate::share_policy::ENV_RECORD_AT_COMPLETION, Some("off")),
+        "record_at_completion": record_at_completion_status(
+            switch(crate::share_policy::ENV_RECORD_AT_COMPLETION, Some("counterparty")),
+            crate::share_policy::record_at_completion_is_off(),
+        ),
         "history_segments": switch("CAPSULES_SHARE_HISTORY_SEGMENTS", Some("counterparties")),
         "standard_history": switch(crate::share_policy::ENV_STANDARD_HISTORY, Some("off")),
         "advertise_evidence_requests": switch(crate::share_policy::ENV_ADVERTISE_EVIDENCE_REQUESTS, Some("off")),
@@ -762,6 +775,20 @@ fn sharing_status() -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_unreadable_record_at_completion_value_is_shown_off_not_the_default() {
+        use super::record_at_completion_status as status;
+        use serde_json::json;
+        let default = json!({ "value": "counterparty", "source": "default" });
+        assert_eq!(status(default.clone(), false), default);
+        assert_eq!(
+            status(default, true),
+            json!({ "value": "off", "source": "unreadable" })
+        );
+        let set = json!({ "value": "off", "source": "env" });
+        assert_eq!(status(set.clone(), true), set);
+    }
+
     use super::*;
     use crate::producer::ledger::Ledger;
 

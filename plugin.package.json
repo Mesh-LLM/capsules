@@ -9,17 +9,17 @@
         "value_schema": {
           "kind": "enum",
           "enum_values": [
-            "off",
-            "counterparty"
+            "counterparty",
+            "off"
           ],
           "allow_additional_properties": false
         },
         "required": false,
-        "default_json": "\"off\"",
+        "default_json": "\"counterparty\"",
         "apply_mode": "static_on_load",
         "restart_scope": "none",
         "visibility": "user",
-        "description": "Push this node's own sealed record of a completed exchange to the counterparty (counterparty), or don't (off, the default). With checkpointing on, the push also carries a signed checkpoint of this node's log and the record's inclusion proof -- the checkpoint reveals the log's total size (records across all peers) and its time, never any other record's content. With checkpointing on, each push cuts a checkpoint, and any node can read the checkpoint list, so its times show when this node's exchanges ended. Symmetric: a node with this off also does not receive the other side's push. It governs pushes only: a record you ask the other side for is checked and held either way.",
+        "description": "Push this node's own sealed record of a completed exchange to the counterparty (counterparty, the default), or don't (off). The record goes only to the other side of that exchange, and you accept theirs the same way. With checkpointing on, the push also carries a signed checkpoint of this node's log and the record's inclusion proof -- the checkpoint reveals the log's total size (records across all peers) and its time, never any other record's content. With checkpointing on, each push cuts a checkpoint, and any node can read the checkpoint list, so its times show when this node's exchanges ended. Symmetric: a node with this off also does not receive the other side's push. It governs pushes only: a record you ask the other side for is checked and held either way.",
         "presentation": {
           "label": "Record at completion",
           "category_id": "share",

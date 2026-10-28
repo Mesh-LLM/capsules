@@ -55,20 +55,27 @@ pub const REFEREE_BAR_DAYS_KEY: &str = "referee_bar_days";
 /// node.
 pub const ENV_RECORD_AT_COMPLETION: &str = "CAPSULES_SHARE_RECORD_AT_COMPLETION";
 
-/// This process's runtime `share_record_at_completion` value: off unless
-/// the operator set it to `"counterparty"`. Unset, `off` or any other value
-/// is the default, off: a node pushes nothing to a peer unless its operator
-/// turned this on.
+/// Whether this process's `share_record_at_completion` is off. Unset or
+/// `counterparty` is the default, on (#68): a node pushes its
+/// sealed record of a completed exchange to the counterparty, and accepts the
+/// counterparty's push. `off`, and any value this plugin does not know, is off:
+/// a typo never widens what is shared.
 pub fn record_at_completion_is_off() -> bool {
-    record_at_completion_is_off_for(
-        crate::settings::var(ENV_RECORD_AT_COMPLETION)
-            .ok()
-            .as_deref(),
-    )
+    record_at_completion_is_off_from(crate::settings::var(ENV_RECORD_AT_COMPLETION))
+}
+
+fn record_at_completion_is_off_from(read: Result<String, std::env::VarError>) -> bool {
+    match read {
+        Ok(raw) => record_at_completion_is_off_for(Some(&raw)),
+        Err(std::env::VarError::NotPresent) => record_at_completion_is_off_for(None),
+        // A value that is not valid Unicode is a value the operator set and
+        // this plugin cannot read: off, never the default.
+        Err(std::env::VarError::NotUnicode(_)) => true,
+    }
 }
 
 fn record_at_completion_is_off_for(raw: Option<&str>) -> bool {
-    normalized(raw).as_deref() != Some("counterparty")
+    !matches!(normalized(raw).as_deref(), None | Some("counterparty"))
 }
 
 /// A switch's value as the operator meant it: trimmed and lower-cased;
@@ -236,11 +243,13 @@ const RULE_CATEGORY_SUMMARY: &str =
 pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
     config_schema(plugin_id)
         .setting(
-            config_setting(RECORD_AT_COMPLETION_KEY, config_enum(["off", "counterparty"]))
-                .default_value(&"off")
+            config_setting(RECORD_AT_COMPLETION_KEY, config_enum(["counterparty", "off"]))
+                .default_value(&"counterparty")
                 .description(
                     "Push this node's own sealed record of a completed exchange to the \
-                     counterparty (counterparty), or don't (off, the default). With checkpointing on, the \
+                     counterparty (counterparty, the default), or don't (off). The record goes \
+                     only to the other side of that exchange, and you accept theirs the same \
+                     way. With checkpointing on, the \
                      push also carries a signed checkpoint of this node's log and the record's \
                      inclusion proof -- the checkpoint reveals the log's total size (records \
                      across all peers) and its time, never any other record's content. \
@@ -529,12 +538,12 @@ mod tests {
     }
 
     #[test]
-    fn nothing_that_reaches_a_peer_on_its_own_is_on_by_default() {
+    fn only_the_record_at_completion_push_to_the_counterparty_is_on_by_default() {
         let schema = as_config_schema(share_policy_config_schema("capsules"));
         let by_key = |k: &str| schema.settings.iter().find(|s| s.key == k).unwrap();
         assert_eq!(
             by_key(RECORD_AT_COMPLETION_KEY).default_json.as_deref(),
-            Some("\"off\"")
+            Some("\"counterparty\"")
         );
         assert_eq!(
             by_key(HISTORY_SEGMENTS_KEY).default_json.as_deref(),
@@ -628,10 +637,23 @@ mod tests {
     }
 
     #[test]
-    fn record_at_completion_is_on_only_for_counterparty() {
+    fn an_unreadable_record_at_completion_value_is_off_not_the_default() {
+        use std::env::VarError;
+        use std::ffi::OsString;
+        assert!(!record_at_completion_is_off_from(Err(VarError::NotPresent)));
+        assert!(record_at_completion_is_off_from(Err(VarError::NotUnicode(
+            OsString::from("x")
+        ))));
+        assert!(!record_at_completion_is_off_from(Ok("counterparty".into())));
+        assert!(record_at_completion_is_off_from(Ok("off".into())));
+    }
+
+    #[test]
+    fn record_at_completion_is_on_unless_off_or_unknown() {
         assert!(!record_at_completion_is_off_for(Some("counterparty")));
         assert!(!record_at_completion_is_off_for(Some(" counterparty ")));
-        assert!(record_at_completion_is_off_for(None));
+        assert!(!record_at_completion_is_off_for(None));
+        assert!(!record_at_completion_is_off_for(Some("  ")));
         assert!(record_at_completion_is_off_for(Some("off")));
         assert!(record_at_completion_is_off_for(Some("garbage")));
     }

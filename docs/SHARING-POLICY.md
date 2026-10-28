@@ -7,7 +7,7 @@ other node), never on proximity, latency, or any computed standing. Nothing
 here is a score, and nothing here ranks anyone.
 
 ```
-share_record_at_completion:  counterparty | off                    # default: off
+share_record_at_completion:  counterparty | off                    # default: counterparty
 share_history_segments:      counterparties | peers | off          # default: counterparties
 share_standard_history:      on | off                              # default: off
 share_exchange_corroboration: on | off                             # default: off
@@ -16,8 +16,10 @@ share_adjudications:         deliver_to_subjects | off             # default: of
 witness:                     [] | [{endpoint, public_key?}, ...]   # default: [] (off)
 ```
 
-With these defaults a node sends nothing to a peer on its own: it pushes no
-record, delivers no verdict and advertises nothing. It answers any node that
+With these defaults the only thing a node sends to a peer on its own is its
+sealed record of a completed exchange, and only to the other side of that
+exchange (`share_record_at_completion`): it delivers no verdict and advertises
+nothing. Set `off` to send nothing. It answers any node that
 asks for its checkpoint list or `history_card/1` (below), and otherwise only
 a counterparty that asks: for one of its records (`share_history_segments`)
 or for the rest of its Standard History (`share_standard_history`). The
@@ -40,11 +42,14 @@ console: `CAPSULES_SHARE_RECORD_AT_COMPLETION`,
 `CAPSULES_ADVERTISE_EVIDENCE_REQUESTS`, `CAPSULES_SHARE_ADJUDICATIONS` and
 `CAPSULES_CHECKPOINT_WITNESS_URLS` (a comma list of witness URLs) with
 `CAPSULES_CHECKPOINT_WITNESS_KEYS` (a JSON object from witness URL to its key
-in hex). An unset or unknown value means the default.
+in hex). An unset value means the default; an unknown value means `off` for the
+switches that reach a peer.
 
 ## The record at completion (`share_record_at_completion`)
 
-Off by default. When it is on (`counterparty`) and an exchange ends, each side
+On by default (`counterparty`; this reverses the 0.1.3 default, which was off).
+Every node sends its record to the counterparty and accepts the counterparty's
+push; set `off` to do neither. When it is on and an exchange ends, each side
 sends its own **sealed record** to the other side over the plugin's
 `record-push/1` mesh stream: the provider's record to
 the requester, and the requester's to the provider. With the checkpoint
@@ -59,7 +64,11 @@ log and the record's position in it. No other record's content leaves: the
 proof is hashes only. With both records exchanged, each side holds the other's
 signed statement about the same exchange.
 
-**Symmetric by default:** a node with this switch `off` neither sends its
+**What it reveals:** the record goes only to the other side of that exchange,
+never to any other peer. The public checkpoint list (see Standard History)
+shows when exchanges ended, as the next paragraph says.
+
+**Symmetric:** a node with this switch `off` neither sends its
 record nor accepts the other side's push.
 
 **It shows when exchanges end:** with the checkpoint cadence on (the

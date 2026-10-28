@@ -35,7 +35,7 @@ repository, for macOS arm64 and Linux x86_64/arm64.
   the Evidence page.
 - Each node seals its own record of every exchange, and the log's checkpoints
   and integrity checks work.
-- When you turn it on (off by default), and mesh-llm identifies the other
+- By default (set `share_record_at_completion = off` to stop it), when mesh-llm identifies the other
   side of an exchange, the node sends it its own record at completion.
 - A record pushed by the other side is received and checked in-process: the
   sender's announced key, the signature, the claims, and a bundle's proof and
@@ -56,7 +56,7 @@ repository, for macOS arm64 and Linux x86_64/arm64.
 **An exchange confirmed by both sides** needs mesh-llm 0.78 or later, which
 tells the plugin which peer asked and which peer served (see
 [Host changes](#host-changes)), and record push turned on at both ends with
-each node's key configured (INSTALL.md). It is off by default; on mesh-llm
+each node's key configured (INSTALL.md). Push is on by default; on mesh-llm
 0.77, or with it off, each node holds only its own record.
 
 ## Host changes
