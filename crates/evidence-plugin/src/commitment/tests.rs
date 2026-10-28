@@ -85,7 +85,7 @@ fn every_switch_changes_the_policy_and_its_digest() {
     let key = key();
     let default_digest = defaults().digest(&key);
     for (env, value) in [
-        (share_policy::ENV_RECORD_AT_COMPLETION, "counterparty"),
+        (share_policy::ENV_RECORD_AT_COMPLETION, "off"),
         (share_policy::ENV_HISTORY_SEGMENTS, "peers"),
         (share_policy::ENV_HISTORY_SEGMENTS, "off"),
         (share_policy::ENV_STANDARD_HISTORY, "on"),

@@ -363,7 +363,7 @@ With the defaults, the policy's `policy` member is exactly
   "share_adjudications": "off",
   "share_exchange_corroboration": "off",
   "share_history_segments": "counterparties",
-  "share_record_at_completion": "off",
+  "share_record_at_completion": "counterparty",
   "share_standard_history": "off",
   "stranger_safe": ["checkpoints", "history_card/1"]
 }
