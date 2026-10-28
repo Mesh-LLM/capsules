@@ -97,9 +97,10 @@ the other joins its mesh and sends it three chat completions.
 in `crates/evidence-plugin/src/two_node_e2e.rs` run over what each node wrote:
 
 - each side sealed its own record of every exchange, and both logs verify;
-- a forged record is refused (changed after signing, or signed by a key no
-  one announced, under any sender id), with a signed refusal that names the
-  refused key, while the real record is received under any sender id;
+- a forged record is refused: one changed after signing is malformed, and
+  one signed by a key this node does not accept is refused from any sender
+  id with a signed refusal naming that key; the real record is received
+  under another sender id too;
 - attack A, a tampered record, and attack C, a dropped one, break the
   provider's log;
 - attack B, a record naming another server, and attack D, a record naming

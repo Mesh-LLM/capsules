@@ -41,6 +41,8 @@ use crate::record_push_receive::{
 
 const NOW: &str = "2026-01-01T00:00:00Z";
 const OTHER_WEIGHTS: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+/// A third node's id, which neither node knows a key for: a relay.
+const RELAY_PEER_ID: &str = "relay-node-with-no-announced-key";
 
 /// One node's plugin data directory, as the run left it.
 struct Node {
@@ -304,14 +306,14 @@ fn each_side_sealed_its_own_record_of_every_exchange() {
 /// A record that did not come, unchanged, from the provider's announced key
 /// is refused, whatever sender id carries it: the key is the identity and
 /// the sender id a hint (D-34). The control first: the provider's real half
-/// is received, from the provider and relayed under another id.
+/// is received, from the provider and relayed by a third node.
 #[test]
 #[ignore = "needs the data directories of a real two-node run (scripts/e2e-two-node.sh)"]
 fn a_forged_record_is_refused() {
     let run = Run::from_env();
     let keys = run.peer_keys();
     let provider = run.provider.peer_id();
-    let unannounced = run.requester.peer_id();
+    let relay = RELAY_PEER_ID.to_string();
     let (_, honest) = run.served_half_inside_the_chain();
 
     assert_eq!(
@@ -320,9 +322,9 @@ fn a_forged_record_is_refused() {
         "control: the provider's real half is received"
     );
     assert_eq!(
-        push_to_requester(&run.requester, &keys, &unannounced, &honest),
+        push_to_requester(&run.requester, &keys, &relay, &honest),
         None,
-        "control: the real half, relayed under an id with no announced key, is received"
+        "control: the real half, relayed by a third node with no announced key, is received"
     );
 
     // Changed after signing: the capsule_id no longer recomputes.
@@ -334,11 +336,11 @@ fn a_forged_record_is_refused() {
         "a record changed after signing"
     );
 
-    // Changed and signed again by a key no one announced, from the provider's
-    // id and from an id with no announced key.
+    // Changed and signed again by a key the requester does not accept, from
+    // the provider's id and from the relay's.
     let mut forged = edited.clone();
     reseal(&mut forged, &SigningKey::from_bytes(&[7; 32]));
-    for sender in [&provider, &unannounced] {
+    for sender in [&provider, &relay] {
         assert_refused_naming_its_key(&run.requester, &keys, sender, &forged);
     }
 }
