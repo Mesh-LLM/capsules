@@ -515,7 +515,7 @@ thread_local! {
 /// `f`, with this thread's responder answering anyone every subject, as no
 /// setting does. The artifact tests use it to have answers a requester must
 /// still check (a `range` or `full_history` from a responder that grants
-/// one) built by this node's own builder.
+/// one) built by this node's responder.
 #[cfg(test)]
 pub(crate) fn ungated<T>(f: impl FnOnce() -> T) -> T {
     struct Reset;

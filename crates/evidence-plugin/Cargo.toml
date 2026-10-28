@@ -137,7 +137,7 @@ cll = { package = "checkpointed-local-log", version = "0.3.1" }
 # `capsule-emit-evidence-request` became when it moved to
 # agent-action-capsule; so do the interop profile's signed envelope and its
 # check of Checkpointed Local Log material (`cll`) and witness receipts
-# (`receipt`). Building the artifact is this plugin's (`evidence_artifact`).
+# (`receipt`). The artifact is built by evidencebook (below).
 # Pinned exactly: a new release may change what verifies.
 evidence-request = { version = "=0.2.0", features = ["cll", "receipt"] }
 # The "asked of you" log (`evidence_answer::log_received`) is evidencebook's
@@ -145,10 +145,13 @@ evidence-request = { version = "=0.2.0", features = ["cll", "receipt"] }
 # (evidencebook#35); which directory the log may write, how a ledger line is
 # read (`evidence_log::leaf_facts`), the summary's labels and the witness
 # keys its receipts are checked under are this plugin's
-# (`evidence_artifact::served_summary`). 0.0.8 checks each receipt with
+# (`evidence_artifact::served_summary`). Every answer is built by its
+# `answer::build` over this plugin's index (`evidence_log`, a store of the
+# crate's); 0.0.9 carries a derivation of this node's own named by its
+# digest (exchange corroboration). Receipts are checked with
 # agent-action-capsule 0.4's witness verifier. Same checkpointed-local-log
 # and evidence-request lines as above.
-evidencebook = "0.0.8"
+evidencebook = "0.0.9"
 # The witness's own record of this log (`witness_status`): one blocking GET,
 # no redirects, a capped body. Already in the tree through capsule-emit.
 ureq = { version = "2", features = ["json"] }
