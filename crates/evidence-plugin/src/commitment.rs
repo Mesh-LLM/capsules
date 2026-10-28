@@ -241,6 +241,29 @@ pub fn with_responder<T>(
     f(&responder, &policy)
 }
 
+/// Why no commitment was built, and whether building it again from the same
+/// node id, policy and checkpoint would fail the same way (`lasting`): a
+/// refused staple or a frame too large would; a ledger that could not be
+/// read might not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unbuilt {
+    pub why: String,
+    pub lasting: bool,
+}
+
+impl Unbuilt {
+    fn lasting(why: String) -> Self {
+        Self { why, lasting: true }
+    }
+
+    fn passing(why: String) -> Self {
+        Self {
+            why,
+            lasting: false,
+        }
+    }
+}
+
 /// This node's latest checkpoint statement and its anchor digest.
 fn latest_checkpoint(responder: &Responder<'_>) -> Result<(Vec<u8>, String), String> {
     crate::evidence_log::with_index(
@@ -264,10 +287,10 @@ pub fn latest_anchor(responder: &Responder<'_>) -> Result<String, String> {
 
 /// Build and sign this node's commitment. `responder` is what this node
 /// answers with: the staple is its answer to a stranger.
-pub fn build(responder: &Responder<'_>, node_id: &str, policy: &Policy) -> Result<Signed, String> {
+pub fn build(responder: &Responder<'_>, node_id: &str, policy: &Policy) -> Result<Signed, Unbuilt> {
     let key = responder.signing_key;
     let key_id = key_id(key);
-    let (statement, anchor) = latest_checkpoint(responder)?;
+    let (statement, anchor) = latest_checkpoint(responder).map_err(Unbuilt::passing)?;
     let staple_request = json!({
         "subject": {"full_history": null},
         "coverage": {"expected_pin": anchor},
@@ -281,11 +304,11 @@ pub fn build(responder: &Responder<'_>, node_id: &str, policy: &Policy) -> Resul
             serde_json::to_vec(&wire).expect("a JSON value serializes")
         }
         Outcome::Refused { reason, .. } => {
-            return Err(format!(
+            return Err(Unbuilt::lasting(format!(
                 "this node refused its own history_card/1: {reason}"
-            ))
+            )))
         }
-        Outcome::Unanswerable(why) => return Err(why),
+        Outcome::Unanswerable(why) => return Err(Unbuilt::passing(why)),
     };
     let policy_bytes = policy.signed_bytes(key);
     let b64 = |raw: &[u8]| base64::engine::general_purpose::STANDARD.encode(raw);
@@ -312,7 +335,7 @@ pub fn build(responder: &Responder<'_>, node_id: &str, policy: &Policy) -> Resul
         commitment: sign(doc, key),
         policy: policy_bytes,
     };
-    fits(&signed)?;
+    fits(&signed).map_err(Unbuilt::lasting)?;
     Ok(signed)
 }
 

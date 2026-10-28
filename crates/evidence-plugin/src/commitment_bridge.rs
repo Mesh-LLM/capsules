@@ -64,15 +64,42 @@ fn requester_idle_timeout_ms() -> u64 {
     env_millis("CAPSULES_COMMITMENT_TIMEOUT_MS", 8_000).as_millis() as u64
 }
 
-/// The last commitment built, and what it was built from: this node's id,
-/// the policy's digest and the latest checkpoint's anchor. Anyone may open
-/// `commitment/1`, so a commitment is built (a history card answered and
-/// two signatures) only when one of those changed; every other ask is
-/// answered with the same bytes, and its `issued_at` is when it was built.
-static LAST: std::sync::Mutex<Option<(BuiltFrom, Signed)>> = std::sync::Mutex::new(None);
+/// The last commitment built, or why it could not be, and what it was built
+/// from. Anyone may open `commitment/1`, so a commitment is built (a history
+/// card answered and two signatures) only when what it is built from
+/// changed; every other ask gets the same bytes, and its `issued_at` is when
+/// it was built. A failure that would repeat ([`commitment::Unbuilt`]'s
+/// `lasting`) is kept the same way, so it is not rebuilt either.
+static LAST: Slot = std::sync::Mutex::new(None);
+
+type Slot = std::sync::Mutex<Option<(BuiltFrom, Result<Signed, String>)>>;
 
 /// This node's id, the policy's digest, the latest checkpoint's anchor.
 type BuiltFrom = (String, String, String);
+
+/// What `slot` holds for `key`, or `build`'s result, kept in `slot` unless
+/// it is a failure that might not repeat. The lock is held through `build`,
+/// so asks that arrive during a build wait for it rather than build again.
+fn cached(
+    slot: &Slot,
+    key: BuiltFrom,
+    build: impl FnOnce() -> Result<Signed, commitment::Unbuilt>,
+) -> Result<Signed, String> {
+    let mut last = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((built_from, result)) = last.as_ref() {
+        if *built_from == key {
+            return result.clone();
+        }
+    }
+    let result = build();
+    match &result {
+        Err(unbuilt) if !unbuilt.lasting => {}
+        _ => *last = Some((key, result.clone().map_err(|u| u.why.clone()))),
+    }
+    result.map_err(|u| u.why)
+}
 
 /// This node's commitment as it stands now, or why there is none.
 fn own(capsules: &CapsuleState, node_id: Option<&str>) -> Result<Signed, String> {
@@ -81,18 +108,9 @@ fn own(capsules: &CapsuleState, node_id: Option<&str>) -> Result<Signed, String>
     commitment::with_responder(capsules, &now, Some(node_id), |responder, policy| {
         let digest = responder.policy_digest.unwrap_or_default().to_string();
         let anchor = commitment::latest_anchor(responder)?;
-        let key = (node_id.to_string(), digest, anchor);
-        let mut last = LAST
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((built_from, signed)) = last.as_ref() {
-            if *built_from == key {
-                return Ok(signed.clone());
-            }
-        }
-        let signed = commitment::build(responder, node_id, policy)?;
-        *last = Some((key, signed.clone()));
-        Ok(signed)
+        cached(&LAST, (node_id.to_string(), digest, anchor), || {
+            commitment::build(responder, node_id, policy)
+        })
     })
 }
 
@@ -366,6 +384,56 @@ mod tests {
         let out = checked(&frame, peer, Announced::Unusable);
         assert_eq!(out["announced_key"], "unusable");
         assert_eq!(out["problems"].as_array().unwrap().len(), 1, "{out}");
+    }
+
+    #[test]
+    fn a_commitment_or_a_lasting_failure_is_built_once_per_key() {
+        let slot: Slot = std::sync::Mutex::new(None);
+        let key = |anchor: &str| ("n".to_string(), "d".to_string(), anchor.to_string());
+        let builds = std::sync::atomic::AtomicUsize::new(0);
+        let (signed, _) = frame();
+        let signed = Signed::from_wire(&signed).unwrap();
+        let ok = || {
+            builds.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(signed.clone())
+        };
+        let lasting = || {
+            builds.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(commitment::Unbuilt {
+                why: "too large".into(),
+                lasting: true,
+            })
+        };
+        let passing = || {
+            builds.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(commitment::Unbuilt {
+                why: "ledger".into(),
+                lasting: false,
+            })
+        };
+        let count = || builds.load(std::sync::atomic::Ordering::SeqCst);
+
+        assert_eq!(cached(&slot, key("a"), ok), Ok(signed.clone()));
+        assert_eq!(cached(&slot, key("a"), ok), Ok(signed.clone()));
+        assert_eq!(count(), 1, "the same key is not built again");
+
+        assert_eq!(cached(&slot, key("b"), lasting), Err("too large".into()));
+        assert_eq!(cached(&slot, key("b"), lasting), Err("too large".into()));
+        assert_eq!(count(), 2, "a lasting failure is not built again");
+
+        assert_eq!(cached(&slot, key("c"), passing), Err("ledger".into()));
+        assert_eq!(cached(&slot, key("c"), passing), Err("ledger".into()));
+        assert_eq!(count(), 4, "a passing failure is tried again");
+
+        // Concurrent asks for one key build it once.
+        let slot: Slot = std::sync::Mutex::new(None);
+        builds.store(0, std::sync::atomic::Ordering::SeqCst);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| cached(&slot, key("a"), ok).unwrap());
+            }
+        });
+        assert_eq!(count(), 1);
     }
 
     #[test]

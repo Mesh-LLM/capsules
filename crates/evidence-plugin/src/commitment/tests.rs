@@ -228,7 +228,8 @@ fn no_checkpoint_means_no_commitment() {
         policy_digest: None,
     };
     let err = build(&responder, NODE, &policy).unwrap_err();
-    assert!(err.contains("no checkpoint"), "{err}");
+    assert!(err.why.contains("no checkpoint"), "{err:?}");
+    assert!(!err.lasting);
 }
 
 #[test]
