@@ -525,16 +525,9 @@ impl LogView<'_> {
     }
 }
 
-/// One record, as an answer serves it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Record {
-    /// 0-based position in the log.
-    pub leaf_index: u64,
-    /// The `capsule_id`, the entry the log commits.
-    pub digest: String,
-    /// The record's line in the ledger.
-    pub body: Vec<u8>,
-}
+/// One record, as an answer serves it: evidencebook's, its `digest` the
+/// line's `capsule_id` and its `body` the line.
+pub use evidencebook::store::Record;
 
 /// A record's digest as a requester computes it from the body it was sent:
 /// the body's recomputed `capsule_id`, when that is the id the body states.
@@ -594,27 +587,16 @@ pub fn book_checkpoint(cp: &CheckpointRecord) -> evidencebook::substrate::Checkp
     }
 }
 
-impl LogView<'_> {
-    fn book_record(record: Record) -> evidencebook::store::Record {
-        evidencebook::store::Record {
-            leaf_index: record.leaf_index,
-            digest: record.digest,
-            body: record.body,
-        }
-    }
-}
-
 /// The record side of evidencebook's store, over this index (evidencebook#35):
 /// the crate reads the plugin's ledger through it and never opens a file the
 /// checkpointer owns. A line's committed entry is the `capsule_id` it states,
 /// the id this index keys it by.
 impl evidencebook::store::RecordSource for LogView<'_> {
     fn record_by_digest(&self, digest: &str) -> Option<evidencebook::store::Record> {
-        self.record_at(self.index.leaf_index_of(digest)?)
-            .map(Self::book_record)
+        LogView::record_at(self, self.index.leaf_index_of(digest)?)
     }
     fn record_at(&self, leaf_index: u64) -> Option<evidencebook::store::Record> {
-        LogView::record_at(self, leaf_index).map(Self::book_record)
+        LogView::record_at(self, leaf_index)
     }
     fn leaf_index_of(&self, digest: &str) -> Option<u64> {
         self.index.leaf_index_of(digest)
@@ -1097,8 +1079,9 @@ mod store_tests {
         with_index(dir.path(), &key_id, |index| f(&index.view().unwrap())).unwrap()
     }
 
-    /// The crate reads every record as this index serves it: by position, by
-    /// its `capsule_id`, and through the correlation and citation sets.
+    /// The crate reads every record as this index serves it: by position,
+    /// by its `capsule_id` (padding by none), and through the correlation
+    /// and citation sets.
     #[test]
     fn the_record_side_is_the_index() {
         over_corpus(|view| {
@@ -1107,23 +1090,63 @@ mod store_tests {
             for (i, line) in ledger.iter().enumerate() {
                 let i = i as u64;
                 let id = line["capsule_id"].as_str().unwrap();
-                let ours = view.record_at(i).unwrap();
                 let book = RecordSource::record_at(view, i).unwrap();
-                assert_eq!(
-                    (book.leaf_index, &book.digest, &book.body),
-                    (i, &ours.digest, &ours.body)
-                );
+                assert_eq!((book.leaf_index, book.digest.as_str()), (i, id));
                 assert_eq!(view.entry_of(&book.body).as_deref(), Some(id));
-                // The first occurrence of a capsule_id is the one indexed.
-                if let Some(at) = RecordSource::leaf_index_of(view, id) {
-                    assert_eq!(view.record_by_digest(id).unwrap().leaf_index, at);
+                if crate::producer::padding::is_padding(line) {
+                    assert_eq!(RecordSource::leaf_index_of(view, id), None, "padding {i}");
+                    assert_eq!(view.record_by_digest(id), None, "padding {i}");
+                } else {
+                    assert_eq!(RecordSource::leaf_index_of(view, id), Some(i), "{i}");
+                    assert_eq!(view.record_by_digest(id), Some(book), "{i}");
                 }
             }
             assert_eq!(view.correlation("n-1"), view.index.correlated("n-1"));
+            let half = crate::evidence_request_parity::foreign_half();
+            assert_eq!(view.citing(&half), vec![6]);
+            assert_eq!(view.citing(&"00".repeat(32)), Vec::<u64>::new());
             assert!(view.record_by_digest(&"00".repeat(32)).is_none());
             assert_eq!(view.entry_of(b"not json"), None);
             assert_eq!(view.entry_of(b"{\"no\":\"id\"}"), None);
         });
+    }
+
+    /// A `capsule_id` committed twice is found at its first leaf and read at
+    /// both; a line whose stated id is not the one its body recomputes to
+    /// is served by its stated id, as the index serves it today.
+    #[test]
+    fn a_repeated_line_and_a_stated_id_are_served_as_the_index_serves_them() {
+        use crate::evidence_request_parity::{corpus_checkpoints, write_jsonl};
+        let mut ledger = corpus_ledger();
+        ledger[20] = ledger[2].clone();
+        ledger[5]["extra"] = serde_json::json!("not in the capsule_id");
+        let dir = tempfile::tempdir().unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&NODE_KEY_SEED);
+        write_jsonl(&dir.path().join(CAPSULES_FILE), &ledger);
+        let lines: Vec<Value> = corpus_checkpoints(&ledger, &key)
+            .iter()
+            .map(|c| c.line())
+            .collect();
+        write_jsonl(&dir.path().join(CHECKPOINTS_FILE), &lines);
+        let key_id = hex::encode(key.verifying_key().to_bytes());
+        with_index(dir.path(), &key_id, |index| {
+            let view = index.view().unwrap();
+            let twice = ledger[2]["capsule_id"].as_str().unwrap();
+            assert_eq!(RecordSource::leaf_index_of(&view, twice), Some(2));
+            assert_eq!(view.record_by_digest(twice).unwrap().leaf_index, 2);
+            assert_eq!(RecordSource::record_at(&view, 20).unwrap().digest, twice);
+
+            let stated = ledger[5]["capsule_id"].as_str().unwrap();
+            let served = view.record_by_digest(stated).unwrap();
+            assert_eq!(served.leaf_index, 5);
+            assert_eq!(view.entry_of(&served.body).as_deref(), Some(stated));
+            assert_eq!(
+                record_digest(&served.body),
+                None,
+                "the recomputed id differs"
+            );
+        })
+        .unwrap();
     }
 
     /// The crate's checkpoints are this index's chain, statement and fields
