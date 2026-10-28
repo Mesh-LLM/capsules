@@ -128,7 +128,8 @@ payment.
 - `decade` is `floor(log10(value / 10^assetScale))`, signed. In exact integer arithmetic it is the
   number of digits of `value`, minus `assetScale`, minus one. So 1 msat is `BTC` decade -11, 1 sat
   is -8, 250 sats is -6, and 1 BTC is 0.
-- A zero amount has no decade, so it has no band.
+- A side whose settlements sum to zero has no decade: its band is `"decade": null`, still in its
+  currency, as #440 is to define it. A side with no terminal settlement has no band.
 
 The currency is part of the band. A band is never compared with, or converted to, another
 currency's band: a `BTC` band and a `USDC` band of the same decade are not comparable. A relying

@@ -234,14 +234,14 @@ fn lifecycle_event_ref(block: &Map<String, Value>) -> Check {
 /// `assetCode`, and `decade` is
 /// `floor(log10(value / 10^assetScale))`, signed, which in exact integer
 /// arithmetic is the digits of `value` minus `assetScale` minus one. So
-/// 250 sats is `BTC` decade -6 and 1 msat is decade -11. `None` for zero,
-/// which has no decade.
-pub fn band(amount_msat: u64) -> Option<Value> {
-    if amount_msat == 0 {
-        return None;
-    }
-    let decade = amount_msat.ilog10() as i64 - BAND_ASSET_SCALE;
-    Some(json!({"currency": BAND_CURRENCY, "decade": decade}))
+/// 250 sats is `BTC` decade -6 and 1 msat is decade -11. Zero has no
+/// decade: its band is `"decade": null`, still in its currency, so every
+/// amount has a band.
+pub fn band(amount_msat: u64) -> Value {
+    let decade = amount_msat
+        .checked_ilog10()
+        .map(|digits| digits as i64 - BAND_ASSET_SCALE);
+    json!({"currency": BAND_CURRENCY, "decade": decade})
 }
 
 /// The invoice a settlement is compared with: the one of the same side and
@@ -414,18 +414,27 @@ fn side_book(side: Side, observations: &[&Observation]) -> Value {
         .collect();
     // Distinct settlements (by hash; a hashless one counts once per record)
     // summed for the band: a job split into several payments is one band.
+    // A side with no terminal settlement has no amount, so no band.
     let mut seen: BTreeSet<Option<&str>> = BTreeSet::new();
-    let total: u64 = settled_objects
+    let counted: Vec<&Observation> = settled_objects
         .iter()
+        .copied()
         .filter(|s| {
             s.terminal && (s.payment_hash.is_none() || seen.insert(s.payment_hash.as_deref()))
         })
-        .fold(0u64, |sum, s| sum.saturating_add(s.amount_msat));
+        .collect();
+    let total_band = (!counted.is_empty()).then(|| {
+        band(
+            counted
+                .iter()
+                .fold(0u64, |sum, s| sum.saturating_add(s.amount_msat)),
+        )
+    });
     let settled = settled_predicate(&rows, &invoices, unsettled.is_empty());
     json!({
         "side": side.wire(),
         "settled": settled.report_predicate(),
-        "band": band(total),
+        "band": total_band,
         "settlements": settlements,
         "invoices": invoice_records,
         "invoices_without_settlement": unsettled,

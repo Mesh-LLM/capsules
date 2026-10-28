@@ -443,6 +443,19 @@ fn both_sides_of_one_payment_count_once() {
     }
 }
 
+/// A side whose settlements sum to zero has a band with no decade; a side
+/// with no terminal settlement has no band at all.
+#[test]
+fn a_zero_settlement_has_a_band_with_no_decade() {
+    let b = book(vec![
+        invoice("payer", 0, &hash("aa"), 0),
+        paid("payer", 0, Some(&hash("aa")), 0),
+    ]);
+    assert_eq!(b["band"], json!({"currency": "BTC", "decade": null}));
+    let b = book(vec![invoice("payer", 0, &hash("aa"), 1000)]);
+    assert_eq!(b["band"], Value::Null);
+}
+
 #[test]
 fn an_unreadable_settlement_record_is_counted_not_dropped() {
     let mut record = invoice("payer", 0, &hash("aa"), 1000);
@@ -454,14 +467,15 @@ fn an_unreadable_settlement_record_is_counted_not_dropped() {
     assert_eq!(r["exchanges"], json!([]));
 }
 
-fn btc(decade: i64) -> Option<Value> {
-    Some(json!({"currency": "BTC", "decade": decade}))
+fn btc(decade: i64) -> Value {
+    json!({"currency": "BTC", "decade": decade})
 }
 
 /// `decade` = floor(log10(msat / 10^11)): digits(msat) - 12.
 #[test]
 fn bands_are_signed_decades_of_the_amount_in_btc() {
-    assert_eq!(band(0), None);
+    // Zero has no decade, but still a band in its currency.
+    assert_eq!(band(0), json!({"currency": "BTC", "decade": null}));
     assert_eq!(band(1), btc(-11));
     assert_eq!(band(9), btc(-11));
     assert_eq!(band(10), btc(-10));
