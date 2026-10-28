@@ -420,6 +420,26 @@ fn one_payment_is_counted_once() {
     assert_eq!(book(records)["band"], "sat:e0");
 }
 
+/// A node that holds both sides of one payment counts it once; each side's
+/// book still checks it on its own.
+#[test]
+fn both_sides_of_one_payment_count_once() {
+    let records = vec![
+        invoice("payer", 0, &hash("aa"), 1000),
+        paid("payer", 0, Some(&hash("aa")), 1000),
+        invoice("provider", 0, &hash("aa"), 1000),
+        paid("provider", 0, Some(&hash("aa")), 1000),
+    ];
+    let r = report(records.clone(), None);
+    assert_eq!(r["disclosed_count"]["settlements"], 1);
+    let books = one(records)["books"].as_array().unwrap().clone();
+    assert_eq!(books.len(), 2);
+    for b in &books {
+        assert_eq!(settled(b), "PASS", "{b:#}");
+        assert_eq!(b["band"], "sat:e0");
+    }
+}
+
 #[test]
 fn an_unreadable_settlement_record_is_counted_not_dropped() {
     let mut record = invoice("payer", 0, &hash("aa"), 1000);

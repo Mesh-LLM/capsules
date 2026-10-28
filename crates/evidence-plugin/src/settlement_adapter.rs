@@ -175,12 +175,6 @@ impl Observation {
             held: lifecycle_event_ref(block),
         })
     }
-
-    /// The key a settlement is counted under: its payment hash, or, with
-    /// none, the record itself (each record is one event, sealed once).
-    fn settlement_key(&self) -> (Side, Option<&str>) {
-        (self.side, self.payment_hash.as_deref())
-    }
 }
 
 /// Rebuild the host's event from a sealed record's block and recompute its
@@ -488,7 +482,8 @@ pub fn check_exchange(exchange_id: &str, observations: &[&Observation]) -> Value
 /// order.
 ///
 /// - `disclosed_count`: this node's distinct terminal settlements, by
-///   payment hash per side (a hashless one counts once per record).
+///   payment hash, whichever side observed it (a hashless one counts once
+///   per record).
 /// - `public_ledger_count`: always `NOT_CHECKED`; Lightning has no public
 ///   ledger, so the node's count is never checked against itself.
 /// - `settlement_records`: every settlement record the book holds, and
@@ -515,14 +510,15 @@ pub fn report(records: impl IntoIterator<Item = Value>, exchange_id: Option<&str
             .or_default()
             .push(obs);
     }
-    let mut hashed: BTreeSet<(Side, Option<&str>)> = BTreeSet::new();
+    let mut hashed: BTreeSet<&str> = BTreeSet::new();
     let mut hashless = 0u64;
     for obs in by_exchange.values().flatten() {
         if obs.kind != Kind::Settlement || !obs.terminal {
             continue;
         }
-        if obs.payment_hash.is_some() {
-            hashed.insert(obs.settlement_key());
+        // One payment is one settlement, whichever side (or both) observed it.
+        if let Some(hash) = obs.payment_hash.as_deref() {
+            hashed.insert(hash);
         } else {
             hashless += 1;
         }

@@ -73,11 +73,13 @@ It reads `PASS` when all of the following hold:
 
 - at least one settlement is held;
 - every invoice is answered;
-- every record's `object_held` is `PASS`;
+- every settlement's and every invoice's `object_held` is `PASS`;
 - every settlement's `invoice_join` and `finality` are `PASS`;
 - every settlement's `amount` is `PASS`, or `NOT_PRESENT` because the joined invoice names no amount.
 
 It reads `FAIL` when any check is `FAIL`, and `INCONCLUSIVE` otherwise.
+
+The `terms_accepted`, `final_accounted` and `delivered` records are not part of the predicate.
 
 An invoice with no terminal settlement leaves the predicate `INCONCLUSIVE`. It never means
 "unpaid": the host emits nothing for a payment whose outcome it does not know.
@@ -126,13 +128,13 @@ payment. It is computed as follows:
 - A zero or missing amount has no band.
 
 The currency is part of the band. A `sat` band is never compared with, or converted to, another
-currency's band: `sat:e+2` is about ten cents, while `USDC:e+2` is a hundred dollars. A relying
+currency's band: a `sat` band and a `USDC` band of the same decade are not comparable. A relying
 party that maps currencies does so with its own pinned table.
 
 ## The count
 
 - **`disclosed_count`** is the number of distinct terminal settlements in this node's book,
-  deduplicated by `payment_hash`. A settlement with no hash counts once per record and is also
+  deduplicated by `payment_hash`, whichever side observed it. A settlement with no hash counts once per record and is also
   reported in `settlements_without_payment_hash`.
 - **`public_ledger_count`** is always `NOT_CHECKED`, with reason `no_public_ledger`. The check of a disclosed count
   compares it with an outside count. Lightning has no public ledger, and
