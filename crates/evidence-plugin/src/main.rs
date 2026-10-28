@@ -1091,7 +1091,7 @@ fn with_evidence_operations(
     builder = builder.mcp_item(
         mcp::tool(doctor::JOIN_OPERATION)
             .description(
-                "Join on this node, idempotently: check the key, the book, the first checkpoint, \
+                "Check that this node is ready to join, idempotently: check the key, the book, the first checkpoint, \
                  the commitment served on commitment/1 and both stranger probes, and list what is \
                  in place and what is not. Seals nothing, writes nothing and contacts nobody; a \
                  fresh node's first checkpoint follows its first exchange.",

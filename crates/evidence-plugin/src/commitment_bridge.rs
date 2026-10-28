@@ -102,7 +102,7 @@ fn cached(
 }
 
 /// This node's commitment as it stands now, or why there is none.
-fn own(capsules: &CapsuleState, node_id: Option<&str>) -> Result<Signed, String> {
+pub(crate) fn own(capsules: &CapsuleState, node_id: Option<&str>) -> Result<Signed, String> {
     let node_id = node_id.ok_or("this node's mesh id is not known yet")?;
     let now = crate::evidence_answer::now_utc();
     commitment::with_responder(capsules, &now, Some(node_id), |responder, policy| {

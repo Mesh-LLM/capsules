@@ -16,11 +16,13 @@
 //! commitment signs. A probe over the mesh needs a second node and stays the
 //! reporter's.
 //!
-//! **`join`** is idempotent and writes nothing: the key and the book exist
-//! from the first start, and the cadence cuts checkpoints over new activity.
-//! It reports what is in place (the key, the book, the first checkpoint, the
-//! commitment that `commitment/1` serves) and what is not, with `doctor`'s
-//! findings, probe included. It never seals a record to get a checkpoint: a
+//! **`join`** checks that this node is ready to join, idempotently, and
+//! writes nothing: the key and the book exist from the first start, and the
+//! cadence cuts checkpoints over new activity. It reports what is in place
+//! (the key, the book, the first checkpoint, the commitment that
+//! `commitment/1` serves) and what is not, with `doctor`'s findings, probe
+//! included. Listing the node is the evidence network's, by pull request to
+//! its commitment list. It never seals a record to get a checkpoint: a
 //! made-up record would be a false entry in the node's own history. A fresh
 //! node's join names the checkpoint missing, and a re-run after its first
 //! exchange completes it.
@@ -137,6 +139,9 @@ struct Book {
     anchors: Vec<String>,
     /// Leaves the latest checkpoint covers.
     covered: u64,
+    /// The latest checkpoint's `mmr_size`, which names its line in
+    /// `checkpoints.jsonl`.
+    latest_size: Option<u64>,
 }
 
 fn read_book(responder: &Responder<'_>) -> Result<Book, String> {
@@ -152,18 +157,20 @@ fn read_book(responder: &Responder<'_>) -> Result<Book, String> {
                 .last()
                 .and_then(|c| cll::mmr::leaf_count(c.record.mmr_size).ok())
                 .unwrap_or(0),
+            latest_size: index.chain.last().map(|c| c.record.mmr_size),
         },
     )
     .map_err(|e| format!("the ledger could not be read: {e}"))
 }
 
-/// The witness state of the latest checkpoint: the configured witness URLs
-/// and whether a receipt that checks is held for it (`witness_status`).
+/// The witness state of this node's checkpoints: the configured witness
+/// URLs and, per checkpoint (by `mmr_size`), the witnesses whose receipt for
+/// it checks (`witness_status`). Read apart from the book, so a checkpoint
+/// cut in between is simply not in `held`.
 #[derive(Clone, Debug, Default)]
 pub struct Witnesses {
     pub configured: Vec<String>,
-    /// Witnesses whose receipt for the latest checkpoint checks.
-    pub latest_held: Vec<String>,
+    pub held: BTreeMap<u64, Vec<String>>,
 }
 
 impl Witnesses {
@@ -189,52 +196,50 @@ impl Witnesses {
                 })
                 .unwrap_or_default();
         crate::witness_status::annotate(&mut lines, &configured, keys, ledger_dir);
-        let latest_held = lines
-            .last()
-            .and_then(|cp| cp.get("witnesses"))
-            .and_then(Value::as_array)
-            .map(|receipts| {
-                receipts
+        let held = lines
+            .iter()
+            .filter_map(|cp| {
+                let size = cp.get("mmr_size")?.as_u64()?;
+                let urls: Vec<String> = cp
+                    .get("witnesses")?
+                    .as_array()?
                     .iter()
                     .filter(|r| r.get("checked") == Some(&json!(true)))
                     .filter_map(|r| r.get("ts_url").and_then(Value::as_str))
                     .map(crate::witness_status::display_url)
-                    .collect()
+                    .collect();
+                (!urls.is_empty()).then_some((size, urls))
             })
-            .unwrap_or_default();
-        Self {
-            configured,
-            latest_held,
-        }
+            .collect();
+        Self { configured, held }
     }
 }
 
-/// The commitment this node would serve now, and what checking it found.
-fn own_commitment(
-    responder: &Responder<'_>,
-    policy: &Policy,
-    node_id: Option<&str>,
-) -> Result<Signed, String> {
-    let node_id = node_id
-        .ok_or("the host has not reported this node's mesh id yet, so no commitment can name it")?;
-    let signed = commitment::build(responder, node_id, policy).map_err(|u| u.why)?;
-    let problems = commitment::verify(&signed);
-    if problems.is_empty() {
-        Ok(signed)
+/// The commitment this node serves on `commitment/1`, as that channel
+/// serves it (`commitment_bridge::own`, built once per checkpoint and
+/// policy), or why it serves none.
+pub type Served = Result<Signed, String>;
+
+/// Why a log past [`MAX_ANSWER_CHECKPOINTS`] refuses `history_card/1`, when
+/// this book is one; empty otherwise.
+fn long_log_note(book: &Book) -> String {
+    if book.anchors.len() as u64 > MAX_ANSWER_CHECKPOINTS {
+        format!(
+            " (this book has {} checkpoints, past {MAX_ANSWER_CHECKPOINTS}: {LONG_LOG_ISSUE})",
+            book.anchors.len()
+        )
     } else {
-        Err(format!(
-            "the commitment does not verify: {}",
-            problems.join("; ")
-        ))
+        String::new()
     }
 }
 
 /// Every finding, the probe's included when `probe` is set. `responder` is
-/// what this node answers with now, under `policy`.
+/// what this node answers with now, under `policy`; `served` is the
+/// commitment it serves.
 pub fn findings(
     responder: &Responder<'_>,
     policy: &Policy,
-    node_id: Option<&str>,
+    served: &Served,
     witnesses: &Witnesses,
     probe: bool,
 ) -> Result<Vec<Finding>, String> {
@@ -245,11 +250,15 @@ pub fn findings(
         Finding::new(
             SELF_ATTESTED,
             STATE_SELF_ATTESTED,
-            format!(
-                "each of the {} records is sealed by this node's own key and by no other party; \
-                 its content is this node's own statement of its half of an exchange",
-                book.records
-            ),
+            if book.records == 0 {
+                "the book has no records yet".to_string()
+            } else {
+                format!(
+                    "each of the {} records is sealed by this node's own key and by no other \
+                     party; its content is this node's own statement of its half of an exchange",
+                    book.records
+                )
+            },
         ),
         Finding::new(
             CONTROLLER_BINDING,
@@ -287,7 +296,7 @@ pub fn findings(
         )
         .with(anchor),
     });
-    out.push(witness(latest.is_some(), witnesses, book.anchors.len()));
+    out.push(witness(book.latest_size, witnesses, book.anchors.len()));
     out.push(Finding::new(
         NOT_CHECKED,
         STATE_NOT_CHECKED,
@@ -326,21 +335,7 @@ pub fn findings(
         if sharing_off { STATE_OFF } else { STATE_ON },
         switches,
     ));
-    let signed = own_commitment(responder, policy, node_id);
-    out.push(match &signed {
-        Ok(s) => Finding::new(
-            POLICY_IN_COMMITMENT,
-            STATE_PRESENT,
-            "the commitment this node serves on commitment/1 verifies and its lcap.policy_digest \
-             is the digest of the policy it answers under",
-        )
-        .with(
-            s.commitment["lcap"]["policy_digest"]
-                .as_str()
-                .unwrap_or_default(),
-        ),
-        Err(why) => Finding::new(POLICY_IN_COMMITMENT, STATE_MISSING, why.clone()),
-    });
+    out.push(policy_in_commitment(responder, served, &book));
     out.push(Finding::new(
         STRANGER_VIEW,
         STATE_ANSWERED,
@@ -384,7 +379,7 @@ pub fn findings(
         },
     ));
     if probe {
-        let advertised = signed.as_ref().ok();
+        let advertised = served.as_ref().ok();
         for (check, request) in probe_requests() {
             out.push(probe_one(check, &request, responder, &book, advertised));
         }
@@ -392,12 +387,23 @@ pub fn findings(
     Ok(out)
 }
 
-fn witness(has_checkpoint: bool, witnesses: &Witnesses, checkpoints: usize) -> Finding {
-    if !has_checkpoint {
+fn witness(latest_size: Option<u64>, witnesses: &Witnesses, checkpoints: usize) -> Finding {
+    let Some(size) = latest_size else {
         return Finding::new(
             WITNESS,
             STATE_UNWITNESSED,
             "there is no checkpoint to witness",
+        );
+    };
+    if let Some(held) = witnesses.held.get(&size) {
+        return Finding::new(
+            WITNESS,
+            STATE_WITNESSED,
+            format!(
+                "a receipt that checks is held for the latest checkpoint (checkpoint \
+                 {checkpoints}) from {}",
+                held.join(", ")
+            ),
         );
     }
     if witnesses.configured.is_empty() {
@@ -407,28 +413,20 @@ fn witness(has_checkpoint: bool, witnesses: &Witnesses, checkpoints: usize) -> F
             "no witness is configured: no checkpoint is delivered to one",
         );
     }
-    if witnesses.latest_held.is_empty() {
-        return Finding::new(
-            WITNESS,
-            STATE_UNWITNESSED,
-            format!("no witness receipt that checks is held for the latest checkpoint (checkpoint {checkpoints})"),
-        );
-    }
     Finding::new(
         WITNESS,
-        STATE_WITNESSED,
+        STATE_UNWITNESSED,
         format!(
-            "a receipt that checks is held for the latest checkpoint (checkpoint {checkpoints}) \
-             from {}",
-            witnesses.latest_held.join(", ")
+            "no witness receipt that checks is held for the latest checkpoint (checkpoint \
+             {checkpoints})"
         ),
     )
 }
 
 /// One stranger request to this node's own responder, its answer verified
-/// under the advertised key and compared with what the advertised policy
-/// answers a stranger: an artifact anchored at a checkpoint of this book.
-/// It records nothing.
+/// under the advertised key (this node's own when it serves no commitment)
+/// and compared with what the advertised policy answers a stranger: an
+/// artifact anchored at a checkpoint of this book. It records nothing.
 fn probe_one(
     check: &'static str,
     request: &[u8],
@@ -442,50 +440,67 @@ fn probe_one(
         "history_card/1"
     };
     let mismatch = |detail: String| Finding::new(check, STATE_MISMATCH, detail);
-    let Some(signed) = advertised else {
-        // Nothing advertised to match against: with no checkpoint, a
-        // refusal is what the stranger view predicts, and nothing is checked.
+    if book.anchors.is_empty() {
+        // With no checkpoint, a refusal is what the stranger view
+        // predicts, and the probe would check nothing.
         return Finding::new(
             check,
             STATE_NOT_CHECKED,
-            format!("this node advertises no commitment, so the {asked} answer is matched against nothing"),
+            format!("there is no checkpoint, so a stranger asking {asked} is refused and nothing is checked"),
         );
-    };
+    }
     let wire = match evidence_answer::answer(request, responder) {
         Outcome::Answered { wire, .. } | Outcome::Refused { wire, .. } => wire,
         Outcome::Unanswerable(why) => {
             return mismatch(format!("the responder did not answer {asked}: {why}"))
         }
     };
-    let key = signed.commitment["key_id"]
-        .as_str()
-        .and_then(|k| hex::decode(k).ok())
+    let (key_id, under) = match advertised {
+        Some(signed) => (
+            signed.commitment["key_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            "the advertised key",
+        ),
+        None => (
+            commitment::key_id(responder.signing_key),
+            "this node's own key (it serves no commitment)",
+        ),
+    };
+    let key = hex::decode(&key_id)
+        .ok()
         .and_then(|b| <[u8; 32]>::try_from(b).ok())
         .and_then(|b| VerifyingKey::from_bytes(&b).ok());
     let Some(key) = key else {
         return mismatch("the commitment's key_id is not an Ed25519 key".into());
     };
-    let verified = evidence_answer::verify_response(request, &wire, &key, &BTreeMap::new());
-    let policy_digest = signed.commitment["lcap"]["policy_digest"].as_str();
-    if responder.policy_digest != policy_digest {
-        return mismatch(format!(
-            "this node answers under policy {}, not the {} its commitment advertises",
-            responder.policy_digest.unwrap_or("(none)"),
-            policy_digest.unwrap_or("(none)")
-        ));
+    if let Some(signed) = advertised {
+        let policy_digest = signed.commitment["lcap"]["policy_digest"].as_str();
+        if responder.policy_digest != policy_digest {
+            return mismatch(format!(
+                "this node answers under policy {}, not the {} its commitment advertises",
+                responder.policy_digest.unwrap_or("(none)"),
+                policy_digest.unwrap_or("(none)")
+            ));
+        }
     }
+    let verified = evidence_answer::verify_response(request, &wire, &key, &BTreeMap::new());
     match verified["state"].as_str() {
         Some("artifact") => {
             let anchor = verified["anchor"].as_str().unwrap_or_default();
-            if book.anchors.iter().any(|a| a == anchor) {
+            // The cadence may have cut a checkpoint since `book` was read,
+            // and the answer may be anchored at it: read the chain again.
+            let anchored = book.anchors.iter().any(|a| a == anchor)
+                || read_book(responder).is_ok_and(|now| now.anchors.iter().any(|a| a == anchor));
+            if anchored {
                 Finding::new(
                     check,
                     STATE_MATCH,
                     format!(
-                        "a stranger asking {asked} gets an artifact that verifies under the \
-                         advertised key {} and is anchored at a checkpoint of this book, as the \
-                         advertised policy answers a stranger",
-                        signed.commitment["key_id"].as_str().unwrap_or_default()
+                        "a stranger asking {asked} gets an artifact that verifies under {under} \
+                         {key_id} and is anchored at a checkpoint of this book, as the \
+                         advertised policy answers a stranger"
                     ),
                 )
                 .with(anchor)
@@ -498,26 +513,59 @@ fn probe_one(
         }
         Some("refusal") => {
             let reason = verified["reason"].as_str().unwrap_or_default();
-            let long_log =
-                reason == "policy_declined" && book.anchors.len() as u64 > MAX_ANSWER_CHECKPOINTS;
             mismatch(format!(
-                "a stranger asking {asked} is refused {reason}, though the advertised policy \
-                 answers it to anyone{}",
-                if long_log {
-                    format!(
-                        " (this book has {} checkpoints, past {MAX_ANSWER_CHECKPOINTS}: {LONG_LOG_ISSUE})",
-                        book.anchors.len()
-                    )
+                "a stranger asking {asked} is refused {reason}, though the policy answers it to \
+                 anyone{}",
+                if reason == "policy_declined" {
+                    long_log_note(book)
                 } else {
                     String::new()
                 }
             ))
         }
         _ => mismatch(format!(
-            "the {asked} answer does not verify under the advertised key: {}",
+            "the {asked} answer does not verify under {under}: {}",
             verified["why"].as_str().unwrap_or_default()
         )),
     }
+}
+
+/// Whether the commitment served carries the policy this node answers
+/// under, and verifies.
+fn policy_in_commitment(responder: &Responder<'_>, served: &Served, book: &Book) -> Finding {
+    let missing = |detail: String| Finding::new(POLICY_IN_COMMITMENT, STATE_MISSING, detail);
+    let signed = match served {
+        Ok(signed) => signed,
+        Err(why) => {
+            return missing(format!(
+                "no commitment is served: {why}{}",
+                long_log_note(book)
+            ))
+        }
+    };
+    let problems = commitment::verify(signed);
+    if !problems.is_empty() {
+        return missing(format!(
+            "the commitment served on commitment/1 does not verify: {}",
+            problems.join("; ")
+        ));
+    }
+    let digest = signed.commitment["lcap"]["policy_digest"].as_str();
+    if digest != responder.policy_digest {
+        return missing(format!(
+            "the commitment served on commitment/1 advertises policy {}, but this node answers \
+             under {}",
+            digest.unwrap_or("(none)"),
+            responder.policy_digest.unwrap_or("(none)")
+        ));
+    }
+    Finding::new(
+        POLICY_IN_COMMITMENT,
+        STATE_PRESENT,
+        "the commitment this node serves on commitment/1 verifies and its lcap.policy_digest is \
+         the digest of the policy it answers under",
+    )
+    .with(digest.unwrap_or_default())
 }
 
 /// What `join` found: done (in place) and pending (not yet), each a line,
@@ -525,10 +573,10 @@ fn probe_one(
 pub fn join_report(
     responder: &Responder<'_>,
     policy: &Policy,
-    node_id: Option<&str>,
+    served: &Served,
     witnesses: &Witnesses,
 ) -> Result<Value, String> {
-    let findings = findings(responder, policy, node_id, witnesses, true)?;
+    let findings = findings(responder, policy, served, witnesses, true)?;
     let state = |check: &str| {
         findings
             .iter()
@@ -551,12 +599,14 @@ pub fn join_report(
                 .into(),
         );
     }
-    let signed = own_commitment(responder, policy, node_id);
-    match &signed {
-        Ok(_) => {
-            done.push("the commitment is built, verifies and is served on commitment/1".into())
-        }
-        Err(why) => pending.push(format!("the commitment: {why}")),
+    let commitment = findings
+        .iter()
+        .find(|f| f.check == POLICY_IN_COMMITMENT)
+        .expect("findings always holds policy_in_commitment");
+    if commitment.state == STATE_PRESENT {
+        done.push("the commitment served on commitment/1 verifies".into());
+    } else {
+        pending.push(format!("the commitment: {}", commitment.detail));
     }
     for check in [PROBE_CHECKPOINTS, PROBE_HISTORY_CARD] {
         if state(check) != STATE_MATCH {
@@ -580,7 +630,7 @@ pub fn join_report(
             .map(|f| json!({"check": f.check, "detail": f.detail})).collect::<Vec<_>>(),
         "unbound": named(CONTROLLER_BINDING, &[STATE_UNBOUND]),
         "not_shared": named(SHARING, &[STATE_OFF]),
-        "commitment": signed.ok().map(|s| s.to_wire()),
+        "commitment": served.as_ref().ok().map(Signed::to_wire),
         "findings": findings,
     }))
 }
@@ -609,15 +659,10 @@ pub async fn handle_doctor(
     blocking(move || {
         let now = evidence_answer::now_utc();
         let witnesses = Witnesses::read(capsules.ledger_dir());
+        let served = crate::commitment_bridge::own(&capsules, node_id.as_deref());
         commitment::with_responder(&capsules, &now, node_id.as_deref(), |responder, policy| {
-            findings(
-                responder,
-                policy,
-                node_id.as_deref(),
-                &witnesses,
-                args.probe,
-            )
-            .map(|f| json!({"findings": f}))
+            findings(responder, policy, &served, &witnesses, args.probe)
+                .map(|f| json!({"findings": f}))
         })
     })
     .await
@@ -631,8 +676,9 @@ pub async fn handle_join(
     blocking(move || {
         let now = evidence_answer::now_utc();
         let witnesses = Witnesses::read(capsules.ledger_dir());
+        let served = crate::commitment_bridge::own(&capsules, node_id.as_deref());
         commitment::with_responder(&capsules, &now, node_id.as_deref(), |responder, policy| {
-            join_report(responder, policy, node_id.as_deref(), &witnesses)
+            join_report(responder, policy, &served, &witnesses)
         })
     })
     .await
@@ -665,11 +711,9 @@ pub const QUICKSTART_END: &str = "<!-- /join-quickstart -->";
 pub fn quickstart(plugin_id: &str) -> String {
     let tool = |op: &str| format!("$CONSOLE/api/plugins/{plugin_id}/tools/{op}");
     format!(
-        "### Join and check your node\n\
+        "`CONSOLE` is your mesh-llm console, for example `http://127.0.0.1:3131`.\n\
          \n\
-         `CONSOLE` is your mesh-llm console, for example `http://127.0.0.1:3131`.\n\
-         \n\
-         1. **Join.** Nothing to set up by hand: the plugin creates its key and its book on\n\
+         1. **Get ready.** Nothing to set up by hand: the plugin creates its key and its book on\n\
          first start, and cuts its first checkpoint after the node's first exchange. `join`\n\
          checks all of it and lists what is in place and what is not:\n\
          \n\
@@ -677,10 +721,10 @@ pub fn quickstart(plugin_id: &str) -> String {
          curl -s -X POST -H 'content-type: application/json' -d '{{}}' {join}\n\
          ```\n\
          \n\
-         `joined` is true once the book has a checkpoint, the commitment the node serves on\n\
-         `{channel}` verifies, and both stranger probes match. Before the first exchange,\n\
-         `pending` names the missing checkpoint; run `join` again after it. Running it again\n\
-         changes nothing.\n\
+         `joined` is true once this node is ready to be listed: the book has a checkpoint, the\n\
+         commitment it serves on `{channel}` verifies, and both stranger probes match. Before\n\
+         the first exchange, `pending` names the missing checkpoint; run `join` again after it.\n\
+         Running it again changes nothing.\n\
          \n\
          2. **Check.** `doctor` lists what is self-attested, unwitnessed, unchecked, unbound or\n\
          not shared, one finding per line, never a score. With `probe`, it also asks the\n\
@@ -692,8 +736,9 @@ pub fn quickstart(plugin_id: &str) -> String {
          curl -s -X POST -H 'content-type: application/json' -d '{{\"probe\": true}}' {doctor}\n\
          ```\n\
          \n\
-         3. **Publish the commitment.** This returns the signed commitment and its policy, to\n\
-         publish as the evidence network's join instructions say:\n\
+         3. **Publish the commitment.** This returns the signed commitment and its policy; then\n\
+         add it to the commitment list by pull request:\n\
+         https://github.com/evidence-network/loop/blob/main/nodes/README.md\n\
          \n\
          ```bash\n\
          curl -s -X POST -H 'content-type: application/json' -d '{{}}' {commitment}\n\

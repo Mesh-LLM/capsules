@@ -483,6 +483,13 @@ async fn allowed_exchange_emits_a_signed_chained_ledgered_capsule_and_publishes_
 #[ignore = "requires MESH_LLM_HOST_BIN; see docs/REAL-HOST-VERIFICATION.md"]
 async fn doctor_and_join_answer_through_the_real_hosts_console() {
     let host = RealHost::spawn().await;
+    let ledger = host.capsule_data_dir().join("ledger");
+    assert!(
+        ledger.is_dir(),
+        "the plugin opened its ledger at {ledger:?}"
+    );
+    let sealed = || std::fs::read(ledger.join("capsules.jsonl")).ok();
+    let before = sealed();
     let doctor = host
         .post_tool("doctor", &serde_json::json!({"probe": true}))
         .await;
@@ -514,10 +521,5 @@ async fn doctor_and_join_answer_through_the_real_hosts_console() {
         .as_str()
         .unwrap()
         .starts_with("the first checkpoint"));
-    let ledger = host
-        .capsule_data_dir()
-        .join("ledger")
-        .join("capsules.jsonl");
-    let sealed = std::fs::read_to_string(&ledger).unwrap_or_default();
-    assert_eq!(sealed.lines().count(), 0, "doctor and join seal nothing");
+    assert_eq!(sealed(), before, "doctor and join seal nothing");
 }
