@@ -140,6 +140,11 @@ cll = { package = "checkpointed-local-log", version = "0.3.1" }
 # (`receipt`). Building the artifact is this plugin's (`evidence_artifact`).
 # Pinned exactly: a new release may change what verifies.
 evidence-request = { version = "=0.2.0", features = ["cll", "receipt"] }
+# The "asked of you" log (`evidence_answer::log_received`) is evidencebook's
+# `received` (evidencebook#35); which directory it may write is this
+# plugin's (`data_dir`). Same checkpointed-local-log and evidence-request
+# lines as above.
+evidencebook = "0.0.7"
 # The witness's own record of this log (`witness_status`): one blocking GET,
 # no redirects, a capped body. Already in the tree through capsule-emit.
 ureq = { version = "2", features = ["json"] }

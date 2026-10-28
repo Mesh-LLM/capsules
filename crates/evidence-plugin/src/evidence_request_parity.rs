@@ -1042,7 +1042,7 @@ fn logged(
     problems: &mut Vec<String>,
 ) -> Value {
     let lines: Vec<Value> =
-        std::fs::read_to_string(log_dir.join(crate::received_log::RECEIVED_LOG_FILE))
+        std::fs::read_to_string(log_dir.join(evidencebook::received::RECEIVED_LOG_FILE))
             .unwrap_or_default()
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
