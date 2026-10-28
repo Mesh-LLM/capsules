@@ -231,6 +231,7 @@ fn narrowest() -> std::collections::BTreeMap<String, String> {
         "advertise_evidence_requests",
         "share_adjudications",
         "adjudicate_differing_twins",
+        crate::network_join::JOIN_NETWORK_KEY,
     ]
     .into_iter()
     .map(|key| (key.to_string(), "off".to_string()))

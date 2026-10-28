@@ -24,6 +24,7 @@ mod exchange_text;
 mod ledger_fetch_bridge;
 mod lifecycle_channel;
 mod mesh_evidence_bridge;
+mod network_join;
 mod owner_maintenance;
 mod peer_blocks_seen;
 mod peer_keys;
@@ -1258,6 +1259,7 @@ fn plugin_builder(admission: Option<&str>) -> DeclarativePluginBuilder {
     .mesh_item(mesh_channel(record_push_bridge::RECORD_PUSH_CHANNEL))
     .mesh_item(mesh_channel(LEDGER_FETCH_CHANNEL))
     .mesh_item(mesh_channel(commitment_bridge::COMMITMENT_CHANNEL))
+    .mesh_item(mesh_channel(network_join::JOIN_CHANNEL))
     .mesh_item(mesh_channel(settlement_channel::PAYMENT_LIFECYCLE_CHANNEL))
     // The host's routing choices (blocks and unblocks), so a blocked peer is
     // never chosen as a referee or asked to be blocked again.
@@ -1385,6 +1387,10 @@ async fn main() -> anyhow::Result<()> {
     // `CapsuleState`, shared by Arc, never a second writer.
     let capsules_for_stream = capsules.clone();
     let self_peer_for_stream = self_peer.clone();
+    let data_dir_for_stream = Arc::new(data_dir.clone());
+    let self_peer_for_join = self_peer.clone();
+    let data_dir_for_join = data_dir.clone();
+    let signing_key_for_join = own_signing_key.clone();
     let admission_address = match admission {
         Some((listener, address)) => {
             let app_state = AppState {
@@ -1555,6 +1561,7 @@ async fn main() -> anyhow::Result<()> {
             let capsules = capsules_for_stream.clone();
             let self_peer = self_peer_for_stream.clone();
             let collector = splits_for_stream.collector.clone();
+            let data_dir = data_dir_for_stream.clone();
             Box::pin(async move {
                 // Seam A1: `OpenStreamRequest`
                 // carries no channel name (see `record_push_bridge`'s module
@@ -1566,6 +1573,9 @@ async fn main() -> anyhow::Result<()> {
                 } else if commitment_bridge::is_commitment_request(&request) {
                     // Tagged in `metadata_json`, as ledger-fetch is.
                     commitment_bridge::handle_open_stream(request, capsules.clone(), self_peer.clone()).await
+                } else if network_join::is_join_request(&request) {
+                    // Tagged in `metadata_json`, as commitment/1 is.
+                    network_join::handle_open_stream(request, self_peer.clone(), data_dir).await
                 } else if ledger_fetch_bridge::is_ledger_fetch_request(&request) {
                     // See `ledger_fetch_bridge`'s module doc for why
                     // `metadata_json` is its dispatch key.
@@ -1600,6 +1610,14 @@ async fn main() -> anyhow::Result<()> {
         plugin.on_initialized(move |context| {
             let announces = context.host_supports(peer_keys::announced::CAPABILITY);
             let own_signing_key = own_signing_key.clone();
+            // The join switch's sender (`network_join`), for the life of the
+            // process.
+            network_join::start(
+                context.owned(),
+                signing_key_for_join.clone(),
+                self_peer_for_join.clone(),
+                data_dir_for_join.clone(),
+            );
             Box::pin(async move {
                 peer_keys::announced::start(announces, PLUGIN_ID);
                 announce_own_key(

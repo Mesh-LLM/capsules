@@ -639,3 +639,77 @@ fn the_settlement_adapter_counts_every_settlement_record() {
         }
     }
 }
+
+/// What `join` returned on the requester, saved by the script as `name`.
+fn join_output(name: &str) -> Value {
+    let dir =
+        std::env::var("E2E_JOIN_DIR").expect("E2E_JOIN_DIR must name the run's output directory");
+    let raw = std::fs::read(Path::new(&dir).join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+    serde_json::from_slice(&raw).expect("join returns JSON")
+}
+
+/// Sherlock2's acceptance of #53: `join` on a fresh node names the missing
+/// first checkpoint, and run again after the first exchange it has joined.
+#[test]
+#[ignore = "needs the data directories of a real two-node run (scripts/e2e-two-node.sh)"]
+fn join_on_a_fresh_node_completes_after_its_first_exchange() {
+    let before = join_output("join-before.json");
+    assert_eq!(before["joined"], false, "{before:#}");
+    assert!(
+        before["pending"][0]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("the first checkpoint"),
+        "{before:#}"
+    );
+    let after = join_output("join-after.json");
+    assert_eq!(after["joined"], true, "{after:#}");
+    assert_eq!(after["pending"], json!([]), "{after:#}");
+    assert!(after["commitment"].is_object(), "{after:#}");
+    // The switch was on, and the reporter had taken the join by then.
+    assert_eq!(after["network"]["switch"], "on", "{after:#}");
+    assert_eq!(
+        after["network"]["acknowledged"]["kind"], "join/1",
+        "{after:#}"
+    );
+}
+
+/// The switch over the real mesh: on, the requester signed a join and the
+/// provider, as the reporter, kept it; off, a leave under the same key.
+#[test]
+#[ignore = "needs the data directories of a real two-node run (scripts/e2e-two-node.sh)"]
+fn the_switch_joins_over_the_mesh_and_off_leaves() {
+    use crate::network_join::{self, JOINS_DIR, KIND_JOIN, KIND_LEAVE};
+    let run = Run::from_env();
+    let (requester_id, provider_id) = (run.requester.peer_id(), run.provider.peer_id());
+    let joins = run.provider.data_dir.join(JOINS_DIR);
+    let held = |kind: &str| -> Value {
+        let path = joins.join(format!("{requester_id}.{kind}.json"));
+        serde_json::from_slice(&std::fs::read(&path).unwrap_or_else(|e| panic!("{path:?}: {e}")))
+            .unwrap()
+    };
+    let (join, leave) = (held("join"), held("leave"));
+    let now = chrono::Utc::now();
+    for (doc, kind) in [(&join, KIND_JOIN), (&leave, KIND_LEAVE)] {
+        assert_eq!(
+            network_join::problems(doc, now),
+            Vec::<String>::new(),
+            "{doc:#}"
+        );
+        assert_eq!(doc["kind"], kind);
+        assert_eq!(doc["node_id"], json!(requester_id));
+        assert_eq!(doc["key_id"], json!(run.requester.key_id()));
+        assert_eq!(doc["consent_sha256"], json!(network_join::consent_sha256()));
+    }
+    assert!(
+        join["at"].as_str() <= leave["at"].as_str(),
+        "the leave follows its join"
+    );
+    // The requester recorded the leave as the reporter's last acknowledgement.
+    let acked = network_join::load(&run.requester.data_dir).expect("the requester's join state");
+    assert_eq!(acked.record, leave);
+    assert!(acked.acknowledged);
+    assert_eq!(acked.reporter, provider_id);
+    // Nothing else reached the reporter's list.
+    assert_eq!(std::fs::read_dir(&joins).unwrap().count(), 2);
+}

@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-27T20:00:00Z",
+  "consent_sha256": "86c106c3080912e6b6e6a25fb86f804621ffd82c91dab1db8119b69fb72f5be6",
+  "key_id": "5c1572a4ab7f7501f5244fc6101dcf2f80aa71e7fc6425417837628d3dab4ea8",
+  "kind": "join/1",
+  "node_id": "5c1572a4ab7f7501f5244fc6101dcf2f80aa71e7fc6425417837628d3dab4ea8",
+  "sig": {
+    "alg": "Ed25519",
+    "canon": "jcs",
+    "value": "Y1Q5TOrc3vg356mbByqJ2lkUf-SaDiejWHUDxvyZYKj-cqyw8q6QmRx6x7W7JhfEKP1H2sJ_xmTb36d6w6Y7BA"
+  },
+  "spki": "MCowBQYDK2VwAyEAWQJ4St3+35OFbhJVPjYPPpuLbBDxiUH3vJmn6mal66k="
+}

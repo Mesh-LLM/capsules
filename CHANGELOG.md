@@ -26,6 +26,19 @@
   first checkpoint follows its first exchange. The quickstart in INSTALL.md is printed by
   `capsules --print-join-quickstart`, and a test holds the two together.
   Mesh-LLM/capsules-plugin#53.
+- **The join switch (`join_network`, off by default).** Turned on in the capsules configuration
+  pane, under the statement the evidence network publishes (shown word for word), the node signs
+  one `join/1` with its plugin key, exactly as evidence-network/loop's `joins/README.md` defines
+  it, with no handle or operator name, and sends it to the network's reporter node over the new
+  `join/1` plugin channel. Turned off, it sends a signed `leave/1`. It joins once, and again only
+  when the statement, the key or the reporter changes. A join that fails is tried again after
+  each of the reporter's waits, then not until the switch changes or the plugin restarts; a leave
+  is tried again at the last wait until the reporter takes it. The
+  reporter is the node loop's `reporter/reporter.json` names (`CAPSULES_JOIN_REPORTER`
+  overrides it); while that is all zeros, as now, nothing is sent. A node that is the reporter
+  checks each record as loop's `check_join.py` does and keeps each node's latest join and the
+  leave that ends it. `join` now shows under `network` the switch, what the reporter
+  acknowledged and what it has not yet. Mesh-LLM/capsules-plugin#53.
 
 ### Changed
 

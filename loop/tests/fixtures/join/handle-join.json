@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-27T20:00:00Z",
+  "consent_sha256": "86c106c3080912e6b6e6a25fb86f804621ffd82c91dab1db8119b69fb72f5be6",
+  "handle": "alice-test",
+  "key_id": "5c1572a4ab7f7501f5244fc6101dcf2f80aa71e7fc6425417837628d3dab4ea8",
+  "kind": "join/1",
+  "node_id": "5c1572a4ab7f7501f5244fc6101dcf2f80aa71e7fc6425417837628d3dab4ea8",
+  "sig": {
+    "alg": "Ed25519",
+    "canon": "jcs",
+    "value": "mKKaB4l4frc9TRTsNiufRPCl_Tn_RN5YT1BByZka1jiXoEErSqVordDxIhgIVWmnT9Qm4CfQzAMWVk4Hi1lXAg"
+  },
+  "spki": "MCowBQYDK2VwAyEAXBVypKt/dQH1JE/GEB3PL4Cqcef8ZCVBeDdijT2rTqg="
+}
