@@ -404,10 +404,19 @@ async fn standard_history_is_one_signed_refusal_to_every_non_counterparty_by_def
         let members = response.as_object_mut().unwrap();
         let mut names: Vec<&str> = members.keys().map(String::as_str).collect();
         names.sort_unstable();
+        // The -00 refusal's members, and the digest of the policy it was
+        // refused under (unsigned, the same for every asker).
         assert_eq!(
             names,
-            ["issued_at", "key_id", "reason", "request_digest", "sig"],
-            "nothing beside the -00 refusal's members"
+            [
+                "issued_at",
+                "key_id",
+                "policy_digest",
+                "reason",
+                "request_digest",
+                "sig"
+            ],
+            "nothing beside the -00 refusal's members and the policy digest"
         );
         for bound in ["request_digest", "issued_at", "sig"] {
             members.remove(bound).expect("a refusal binds its request");

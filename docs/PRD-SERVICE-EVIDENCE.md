@@ -156,6 +156,13 @@ separate operator settings. Each is its own switch; none implies another.
 | Protected exchange records (§5.3) | Any subject carrying record bodies | Authenticated **and** authorized requesters only; never on a stated id alone |
 | `public_summary_policy` | A broad, public-safe summary any requester may read | **none**; only under an explicit policy with bounded periods and anti-differencing controls (R-9) |
 
+The defaults of the shipped sharing switches are pinned in
+`policies/disclosure-default.json` (`public_summary_policy` is not built, and
+protected records follow §5.3). The node signs the policy its switches are
+(`disclosure-policy/0`), its commitment carries the digest of that signed
+policy, and every evidence refusal names the digest it was refused under
+(SHARING-POLICY, "The signed policy and the commitment").
+
 - **R-7 Opt-in advertisement.** A node that has not enabled
   `advertise_evidence_requests` advertises no evidence capability. It may still
   answer a counterparty that asks, under the other settings.
@@ -180,11 +187,11 @@ separate operator settings. Each is its own switch; none implies another.
   request gets the same bytes), the floor applies per period and per cell, and
   a cell whose value could be derived from published cells and totals is
   suppressed with it. The summary carries the policy's identifier and digest.
-- **R-10 `prospective` resolved first.** SHARING-POLICY's table gives
-  `prospective` (the default) the same behaviour as `counterparties`. Before
-  any public A2A capability advertisement, either define what `prospective`
-  adds, or rename or remove it, so that no external description relies on a
-  distinction the code does not make.
+- **R-10 `prospective` resolved first.** Resolved in 0.1.5: the default is
+  `counterparties`, and `prospective`, which never served anyone
+  `counterparties` does not, is deprecated and read as `counterparties`
+  (SHARING-POLICY), so no external description relies on a distinction the
+  code does not make.
 - **R-11 Two different authorization cases.** The M1 gate (§5.3) remains
   release-blocking for protected records. An operator's deliberate broad public
   summary under R-9 is a distinct, recorded authorization case: the disclosure

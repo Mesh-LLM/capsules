@@ -4,6 +4,8 @@ mod adjudication_records;
 // yet by a live path of this binary.
 mod capsule_emit;
 mod checkpoint_cadence;
+mod commitment;
+mod commitment_bridge;
 mod controller_binding;
 mod data_dir;
 mod decision;
@@ -1050,6 +1052,33 @@ fn with_evidence_operations(
             }),
     );
     builder = builder.mcp_item(
+        mcp::tool(commitment_bridge::OWN_COMMITMENT_OPERATION)
+            .description(
+                "This node's signed commitment (evidence-commitment/0) and the signed disclosure \
+                 policy it commits to: what this node can be asked and how, never what it has done. \
+                 The policy is base64 bytes, published beside the commitment as \
+                 policies/<node_id>.json.",
+            )
+            .input::<commitment_bridge::OwnCommitmentArgs>()
+            .handle({
+                let capsules = capsules_for_delivery.clone();
+                let self_peer = self_peer.clone();
+                move |_args, _context| {
+                    Box::pin(commitment_bridge::handle_own(capsules.clone(), self_peer.current()))
+                }
+            }),
+    );
+    builder = builder.mcp_item(
+        mcp::tool(commitment_bridge::FETCH_COMMITMENT_OPERATION)
+            .description(
+                "Fetch a mesh peer's signed commitment and disclosure policy over the commitment/1 \
+                 channel, with what checking them found: the signatures, the policy digest, the \
+                 stapled history_card/1's bytes, no counts, and the peer's announced key.",
+            )
+            .input::<commitment_bridge::MeshCommitmentFetchArgs>()
+            .handle(move |args, context| Box::pin(commitment_bridge::handle_fetch(args, context))),
+    );
+    builder = builder.mcp_item(
         mcp::tool(LEDGER_FETCH_OPERATION)
             .description(
                 "Ask a mesh peer's capsules plugin for one of ITS sealed ledger entries by \
@@ -1169,6 +1198,7 @@ fn plugin_builder(admission: Option<&str>) -> DeclarativePluginBuilder {
     .mesh_item(mesh_channel(EVIDENCE_REQUEST_CHANNEL))
     .mesh_item(mesh_channel(record_push_bridge::RECORD_PUSH_CHANNEL))
     .mesh_item(mesh_channel(LEDGER_FETCH_CHANNEL))
+    .mesh_item(mesh_channel(commitment_bridge::COMMITMENT_CHANNEL))
     .mesh_item(mesh_channel(settlement_channel::PAYMENT_LIFECYCLE_CHANNEL))
     // The host's routing choices (blocks and unblocks), so a blocked peer is
     // never chosen as a referee or asked to be blocked again.
@@ -1469,6 +1499,9 @@ async fn main() -> anyhow::Result<()> {
                 // distinct, stable value for exactly this purpose.
                 let answered = if request.content_type.as_deref() == Some(record_push_bridge::RECORD_PUSH_CONTENT_TYPE) {
                     record_push_bridge::handle_open_stream(request, context, capsules.clone(), collector).await
+                } else if commitment_bridge::is_commitment_request(&request) {
+                    // Tagged in `metadata_json`, as ledger-fetch is.
+                    commitment_bridge::handle_open_stream(request, capsules.clone(), self_peer.clone()).await
                 } else if ledger_fetch_bridge::is_ledger_fetch_request(&request) {
                     // See `ledger_fetch_bridge`'s module doc for why
                     // `metadata_json` is its dispatch key.

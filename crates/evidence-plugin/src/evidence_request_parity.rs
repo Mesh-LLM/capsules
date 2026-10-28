@@ -1118,6 +1118,7 @@ fn run() -> (BTreeMap<String, Value>, Vec<String>) {
             },
             replay: &replay,
             node_id: Some(RESPONDER_NODE),
+            policy_digest: None,
         };
         let busy = case.get("busy").and_then(Value::as_bool).unwrap_or(false);
         let outcome = evidence_answer::answer_and_log(&bytes, busy, &responder, Some(&log_dir));
@@ -1239,6 +1240,7 @@ fn answer_openly(dir: &Path, bytes: &[u8]) -> Outcome {
             },
             replay: &replay,
             node_id: Some(RESPONDER_NODE),
+            policy_digest: None,
         },
         None,
     )

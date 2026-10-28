@@ -109,6 +109,7 @@ fn ask_as(
             },
             replay: &ReplayCache::default(),
             node_id: Some(RESPONDER_NODE),
+            policy_digest: None,
         },
     )
 }

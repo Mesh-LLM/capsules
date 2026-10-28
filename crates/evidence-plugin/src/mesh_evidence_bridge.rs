@@ -330,33 +330,22 @@ async fn answer_in_process(
                 return (verdict_or_refusal, adjudicate);
             }
         }
-        let announced = crate::peer_keys::announced::snapshot();
-        let configured = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
-        let own_key = hex::encode(capsules.public_key());
-        let responder = crate::evidence_answer::Responder {
-            ledger_dir: capsules.ledger_dir(),
-            signing_key: capsules.signing_key(),
-            now: &now,
-            history_segments: crate::share_policy::history_segments(),
-            share_standard_history: crate::share_policy::shares_standard_history(),
-            share_exchange_corroboration: crate::share_policy::shares_exchange_corroboration(),
-            keys: crate::requester_auth::Keys {
-                announced: &announced,
-                configured: configured.as_deref(),
-                own_key: Some(&own_key),
-            },
-            replay: crate::requester_auth::replay_cache(),
-            node_id: own_node.as_deref(),
-        };
         let log_dir = capsules
             .ledger_dir()
             .parent()
             .and_then(crate::evidence_routes::EvidenceSource::received_log_dir);
-        let outcome = crate::evidence_answer::answer_and_log(
-            &request_bytes,
-            permit.is_err(),
-            &responder,
-            log_dir.as_deref(),
+        let outcome = crate::commitment::with_responder(
+            &capsules,
+            &now,
+            own_node.as_deref(),
+            |responder, _| {
+                crate::evidence_answer::answer_and_log(
+                    &request_bytes,
+                    permit.is_err(),
+                    responder,
+                    log_dir.as_deref(),
+                )
+            },
         );
         drop(permit);
         if let crate::evidence_answer::Outcome::Unanswerable(why) = &outcome {

@@ -1068,6 +1068,7 @@ mod tests {
                         },
                         replay: &replay,
                         node_id: Some(RESPONDER_NODE),
+                        policy_digest: None,
                     },
                     None,
                 )
@@ -1790,6 +1791,7 @@ mod tests {
                     },
                     replay: &replay,
                     node_id: Some(RESPONDER_NODE),
+                    policy_digest: None,
                 },
                 None,
             )
@@ -1890,6 +1892,7 @@ mod tests {
                 },
                 replay: &replay,
                 node_id: Some(RESPONDER_NODE),
+                policy_digest: None,
             },
             None,
         );
