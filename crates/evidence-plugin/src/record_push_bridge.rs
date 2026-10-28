@@ -444,7 +444,9 @@ async fn receive_record_via(
     let capsules = capsules.clone();
     let sender_peer_id = sender_peer_id.to_string();
     let body = body.to_vec();
-    let peer_keys = crate::peer_keys::registry();
+    // One read of each source: the receiver merges them, so a host answer
+    // landing between two reads cannot pose as an operator entry.
+    let peer_keys = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
     let announced = crate::peer_keys::announced::snapshot();
     // `share_record_at_completion` governs records pushed at completion; a
     // record this node asked for is held because its operator asked.

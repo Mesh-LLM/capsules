@@ -91,7 +91,8 @@ carries (a `controller-binding/0` record both keys signed). The key is the
 sender's identity, not the peer id the push arrives under: a known key is
 accepted under any id, and a known id with an unknown key is refused. A
 refusal for an unknown key names that key under this node's signature. A
-declaration binding the sender's key to this node's own key is never used.
+key that a carried declaration binds to this node's own key is refused,
+however else it is known.
 The citing record this node seals for a held record names the sender's key
 and how it was accepted (`accepted_via`: `host_announced`,
 `operator_stopgap` or `controller_declaration`). That is provenance only:
@@ -168,13 +169,16 @@ Before it looks anything up, the answering node checks, in order:
   replay found in the pool is refused, but while the pool is full of live
   nonces a new one is not held, and the request goes on unchecked (it can then
   only be answered as an unsigned request would be, below);
-- the key is bound to a node: a host announced it for that node, an entry in
-  `CAPSULES_PEER_KEYS` gives it under that name (the stopgap), or the request
-  carries a controller declaration (`controller_binding`, covered by the
-  signature) binding it to a key bound one of those ways. An entry that
-  disagrees with the host's vetoes both. If the key is bound to several
-  nodes, the request's `requester_id` must be one of them. If to only one,
-  the request's `requester_id`, when given, must be that node.
+- the key is bound to a node: a host announced it for that node, or, when no
+  host announced it, an entry in `CAPSULES_PEER_KEYS` gives it under that
+  name (the stopgap), or the request carries a controller declaration
+  (`controller_binding`, covered by the signature) binding it to a key bound
+  one of those ways. An entry that disagrees with the host's vetoes both. A
+  key that a carried declaration binds to this node's own key is bound to
+  no node. If the key is bound to several nodes, the request's
+  `requester_id` must be one of them. If to only one, the request's
+  `requester_id`, when given, must be that node. The nonces of keys a
+  declaration binds count against the 4,096 of the key it binds them to.
 
 The asker is every node the key is bound to: the key, not the peer id it
 asks under, is its identity. Under `counterparties`:

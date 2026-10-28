@@ -1114,6 +1114,7 @@ fn run() -> (BTreeMap<String, Value>, Vec<String>) {
             keys: crate::requester_auth::Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: Some(RESPONDER_NODE),
@@ -1234,6 +1235,7 @@ fn answer_openly(dir: &Path, bytes: &[u8]) -> Outcome {
             keys: crate::requester_auth::Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: Some(RESPONDER_NODE),

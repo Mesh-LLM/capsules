@@ -256,6 +256,18 @@ fn cases() -> Vec<Value> {
         "ephemeral-91c2",
         &on_own,
     ));
+
+    let mut announced_and_own = own.clone();
+    announced_and_own.insert("node-n".to_string(), key_id(&node_key));
+    out.push(case(
+        "known_key_declared_on_receivers_own_key",
+        "a key a host announced, carrying a declaration that binds it to the receiver's own key, is refused signature_unverified: the two keys stated one controller, so it is never a different counterparty",
+        &receiver,
+        None,
+        &announced_and_own,
+        "node-n",
+        &on_own,
+    ));
     out
 }
 
@@ -308,7 +320,9 @@ fn assert_case_holds(case: &Value) {
                 applied.other(half["key_id"].as_str().unwrap())
             );
         }
-        "known_transport_id_unknown_key" | "controller_declaration_on_receivers_own_key" => {
+        "known_transport_id_unknown_key"
+        | "controller_declaration_on_receivers_own_key"
+        | "known_key_declared_on_receivers_own_key" => {
             assert_eq!(reply["reason"], REASON_SIGNATURE_UNVERIFIED, "{name}");
             assert_eq!(reply["refused_key_id"], half["key_id"], "{name}");
             assert!(refusal_verifies(reply, receiver_key), "{name}: {reply}");
@@ -321,7 +335,7 @@ fn assert_case_holds(case: &Value) {
 #[test]
 fn every_acceptance_case_holds_on_a_fresh_run() {
     let cases = cases();
-    assert_eq!(cases.len(), 5);
+    assert_eq!(cases.len(), 6);
     for case in &cases {
         assert_case_holds(case);
     }
@@ -428,13 +442,14 @@ fn the_committed_fixtures_verify() {
     let doc: Value =
         serde_json::from_str(&std::fs::read_to_string(fixture_path()).unwrap()).unwrap();
     let cases = doc["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 5);
+    assert_eq!(cases.len(), 6);
     for name in [
         "known_key_other_transport_id",
         "known_transport_id_unknown_key",
         "operator_stopgap_key",
         "controller_declaration",
         "controller_declaration_on_receivers_own_key",
+        "known_key_declared_on_receivers_own_key",
     ] {
         assert_case_holds(by_name(cases, name));
     }

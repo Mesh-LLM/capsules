@@ -7,10 +7,10 @@
       "name": "known_key_other_transport_id",
       "covers": "a half signed by the key a host announced for node-b, pushed under another id, is held: accepted_via host_announced",
       "receiver": {
-        "key_id": "d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07c",
+        "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9",
         "peer_keys_env": null,
         "announced": {
-          "node-b": "da802eae912f5d85980c7f8fd29788841e2148f6f7cb8d82e13279efeaa4392b"
+          "node-b": "5f882c165276bcbaca68e1be4d54bdbfe059079f7440a2d8b72dccb63e6e2468"
         }
       },
       "push": {
@@ -18,13 +18,13 @@
         "body": {
           "spec_version": "draft-mih-scitt-agent-action-capsule-05",
           "format_version": "4",
-          "capsule_id": "9c68caf1956179e34b72db5fe1a2f8e15f8952bfd2a4ec9fdeb89c883582fac0",
+          "capsule_id": "0d042eb8ba3ece29e97a3d5ca8dd10fe4074a8ba6973374c9935a2fe2751a483",
           "canonicalization_id": "jcs",
           "action_id": "mesh-poc/capsule-emit-mesh-integration/6d139f1403cd84518768857efed6c375c0e3fe1af3f250cd3a5c59ea87a0323c",
           "action_type": "decide",
           "operator": "capsule-emit-mesh-poc-rust",
           "developer": "capsule-emit-mesh/0.1.5",
-          "timestamp": "2026-10-28T08:04:00Z",
+          "timestamp": "2026-10-28T08:19:00Z",
           "domain": "action",
           "provenance": "collector",
           "model_attestation": {
@@ -35,7 +35,7 @@
               "agent_output_digest": "a8461110d26a1ceb91765128a3f8a648e86238810f4bdf27a330deb8681f9d87",
               "runtime": {
                 "name": "capsule-emit-mesh/mesh-llm-host-runtime",
-                "runtime_digest": "e9678f73f1d1cb308a74c9282993a2c8364f4110b432e0756c53a5736a87bf78",
+                "runtime_digest": "b42d96058355c245782219555422d087f9b1fbaa6fccb2ccd6700e07113ed3f3",
                 "measurement_class": "os_measured",
                 "platform_integrity": {
                   "sip_enabled": true,
@@ -105,15 +105,15 @@
                   "binary_attestation": {
                     "type": "binary_attestation",
                     "measurement_class": "os_measured",
-                    "digest": "e9678f73f1d1cb308a74c9282993a2c8364f4110b432e0756c53a5736a87bf78",
+                    "digest": "b42d96058355c245782219555422d087f9b1fbaa6fccb2ccd6700e07113ed3f3",
                     "digest_alg": "sha256",
                     "binary_path": "capsules-ab986d1ee5375c1f",
-                    "binary_size_bytes": 57249768,
-                    "signature": "8747f9eabcdee2cacb974bdb6b815da2a3811712160a829a9a7624779131fd02c0097c46e260628157cc03613c7799740c70375d5985c561e73bc46fd9087b08",
+                    "binary_size_bytes": 57300376,
+                    "signature": "c3aa0841ab50747c462361a0add855cbdc7109d257431fcbe9e9561b19d553c46129b929c592a29c4d0a935ade3a782f2f0ae242705a63ad5ef0f0735c5ee60d",
                     "signature_algorithm": "ed25519",
-                    "signer_key_id": "a3e17d2818de9511",
-                    "measured_at": "2026-10-28T08:04:00Z",
-                    "code_directory_hash": "925fded38e875f17a4600292b76230f326dd8e30",
+                    "signer_key_id": "7554e18d7f437de7",
+                    "measured_at": "2026-10-28T08:19:00Z",
+                    "code_directory_hash": "30c9bf6df45fc57959834e49af1a13e649227ebf",
                     "cdhash_source": "csops(CS_OPS_CDHASH)",
                     "kernel_valid": true,
                     "kernel_signed": true,
@@ -125,7 +125,7 @@
                   }
                 }
               },
-              "store_nonce": "ca091105634dd490bdffbfc3612687e6aca5cbdf2420f84baf947b25ed8d484d"
+              "store_nonce": "489f31170a0d134349b680f9c4377e2b3e338928655f9c558c673461a287f381"
             }
           },
           "effect": {
@@ -146,23 +146,23 @@
             "human_disposed": false,
             "verdict_class": "executed"
           },
-          "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d6964045820da802eae912f5d85980c7f8fd29788841e2148f6f7cb8d82e13279efeaa4392ba058209c68caf1956179e34b72db5fe1a2f8e15f8952bfd2a4ec9fdeb89c883582fac05840d2fffc258a83bac00c303d1002fe7688454af57b8fdfdca9fe2573534c943551dda8dfb84c0fb921f1e9900d2e7aab4cabe9f115d4718c80dfb49327ca1dbe0a",
-          "key_id": "da802eae912f5d85980c7f8fd29788841e2148f6f7cb8d82e13279efeaa4392b"
+          "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d69640458205f882c165276bcbaca68e1be4d54bdbfe059079f7440a2d8b72dccb63e6e2468a058200d042eb8ba3ece29e97a3d5ca8dd10fe4074a8ba6973374c9935a2fe2751a483584098ed75474b9c68276a8c56322a2109207af6586900416a5d73c6c8c5f831e3c466ff6b784881ad3aa22e6994c0e2de62d0e85cf07c200e7d0a3b91af86f03c0b",
+          "key_id": "5f882c165276bcbaca68e1be4d54bdbfe059079f7440a2d8b72dccb63e6e2468"
         }
       },
       "reply": {
         "status": "received"
       },
       "citing_record": {
-        "capsule_id": "6dc2b785cfcaff306136a4ca73679d0b2eea6b8ce95fca4fd29ce73aa2a77e86",
+        "capsule_id": "7c6acfeec8e56d9031659d577532521ac08ce974a840a6f6859c7fac4c2586a4",
         "spec_version": "draft-mih-scitt-agent-action-capsule-05",
         "format_version": "4",
         "canonicalization_id": "jcs",
-        "action_id": "mesh-poc/received-half-citation/9c68caf1956179e34b72db5fe1a2f8e15f8952bfd2a4ec9fdeb89c883582fac0",
+        "action_id": "mesh-poc/received-half-citation/0d042eb8ba3ece29e97a3d5ca8dd10fe4074a8ba6973374c9935a2fe2751a483",
         "action_type": "fyi",
         "operator": "capsule-emit-mesh-poc-rust",
         "developer": "capsule-emit-mesh/0.1.5",
-        "timestamp": "2026-10-28T08:04:00Z",
+        "timestamp": "2026-10-28T08:19:00Z",
         "domain": "action",
         "provenance": "collector",
         "model_attestation": {
@@ -170,15 +170,15 @@
           "provider": "mesh-llm",
           "compute_attestation": {
             "received_half": {
-              "cited_capsule_id": "9c68caf1956179e34b72db5fe1a2f8e15f8952bfd2a4ec9fdeb89c883582fac0",
+              "cited_capsule_id": "0d042eb8ba3ece29e97a3d5ca8dd10fe4074a8ba6973374c9935a2fe2751a483",
               "received_from": "node-b-restarted",
               "via": "push",
               "received_at": "2026-10-28T12:00:00Z",
               "signature_ok": true,
-              "sender_key_id": "da802eae912f5d85980c7f8fd29788841e2148f6f7cb8d82e13279efeaa4392b",
+              "sender_key_id": "5f882c165276bcbaca68e1be4d54bdbfe059079f7440a2d8b72dccb63e6e2468",
               "accepted_via": "host_announced"
             },
-            "store_nonce": "92cded46da62def8e67c3cb82ed1367178ba4c049059cae6e2a7a50792501124"
+            "store_nonce": "57d012fc71f9a42216ba998e23575110727c14e9c7dc28edcceb2576d41b45f0"
           }
         },
         "assurance": {
@@ -196,22 +196,22 @@
           {
             "type": "capsule",
             "digest_alg": "SHA-256",
-            "digest": "9c68caf1956179e34b72db5fe1a2f8e15f8952bfd2a4ec9fdeb89c883582fac0",
+            "digest": "0d042eb8ba3ece29e97a3d5ca8dd10fe4074a8ba6973374c9935a2fe2751a483",
             "citation_purpose": "counterparty_half"
           }
         ],
-        "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d6964045820d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07ca058206dc2b785cfcaff306136a4ca73679d0b2eea6b8ce95fca4fd29ce73aa2a77e8658402d75bf6d901cb32ce9a70c557b126f1d69f6d4321440c1d938fbd110115915a029a68cd8535694a83caaa172b8a1dc63e5370dc39e8dc23772d10726f6c71c09",
-        "key_id": "d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07c"
+        "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d69640458206cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9a058207c6acfeec8e56d9031659d577532521ac08ce974a840a6f6859c7fac4c2586a45840cb92c38fd1d3a0db81ea0f42917fd090e2266cacd1adc82993c03fe5ae666f24b9c5b3b36c275f8f44a9d0071987849177ba16887637b949ec85bab55486b106",
+        "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9"
       }
     },
     {
       "name": "known_transport_id_unknown_key",
       "covers": "a push under node-b's id signed by a key nobody announced is refused signature_unverified, signed, naming the refused key",
       "receiver": {
-        "key_id": "d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07c",
+        "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9",
         "peer_keys_env": null,
         "announced": {
-          "node-b": "a37cd6d809f96b69beef253ae75513b76dfc05a4dbde0cb1ffacd747c37e24ca"
+          "node-b": "44a522bbc0814689c180d8ce7b028f8a5e6f26c1bb051961135301f5fcfdd012"
         }
       },
       "push": {
@@ -219,13 +219,13 @@
         "body": {
           "spec_version": "draft-mih-scitt-agent-action-capsule-05",
           "format_version": "4",
-          "capsule_id": "9c68caf1956179e34b72db5fe1a2f8e15f8952bfd2a4ec9fdeb89c883582fac0",
+          "capsule_id": "0d042eb8ba3ece29e97a3d5ca8dd10fe4074a8ba6973374c9935a2fe2751a483",
           "canonicalization_id": "jcs",
           "action_id": "mesh-poc/capsule-emit-mesh-integration/6d139f1403cd84518768857efed6c375c0e3fe1af3f250cd3a5c59ea87a0323c",
           "action_type": "decide",
           "operator": "capsule-emit-mesh-poc-rust",
           "developer": "capsule-emit-mesh/0.1.5",
-          "timestamp": "2026-10-28T08:04:00Z",
+          "timestamp": "2026-10-28T08:19:00Z",
           "domain": "action",
           "provenance": "collector",
           "model_attestation": {
@@ -236,7 +236,7 @@
               "agent_output_digest": "a8461110d26a1ceb91765128a3f8a648e86238810f4bdf27a330deb8681f9d87",
               "runtime": {
                 "name": "capsule-emit-mesh/mesh-llm-host-runtime",
-                "runtime_digest": "e9678f73f1d1cb308a74c9282993a2c8364f4110b432e0756c53a5736a87bf78",
+                "runtime_digest": "b42d96058355c245782219555422d087f9b1fbaa6fccb2ccd6700e07113ed3f3",
                 "measurement_class": "os_measured",
                 "platform_integrity": {
                   "sip_enabled": true,
@@ -306,15 +306,15 @@
                   "binary_attestation": {
                     "type": "binary_attestation",
                     "measurement_class": "os_measured",
-                    "digest": "e9678f73f1d1cb308a74c9282993a2c8364f4110b432e0756c53a5736a87bf78",
+                    "digest": "b42d96058355c245782219555422d087f9b1fbaa6fccb2ccd6700e07113ed3f3",
                     "digest_alg": "sha256",
                     "binary_path": "capsules-ab986d1ee5375c1f",
-                    "binary_size_bytes": 57249768,
-                    "signature": "8747f9eabcdee2cacb974bdb6b815da2a3811712160a829a9a7624779131fd02c0097c46e260628157cc03613c7799740c70375d5985c561e73bc46fd9087b08",
+                    "binary_size_bytes": 57300376,
+                    "signature": "c3aa0841ab50747c462361a0add855cbdc7109d257431fcbe9e9561b19d553c46129b929c592a29c4d0a935ade3a782f2f0ae242705a63ad5ef0f0735c5ee60d",
                     "signature_algorithm": "ed25519",
-                    "signer_key_id": "a3e17d2818de9511",
-                    "measured_at": "2026-10-28T08:04:00Z",
-                    "code_directory_hash": "925fded38e875f17a4600292b76230f326dd8e30",
+                    "signer_key_id": "7554e18d7f437de7",
+                    "measured_at": "2026-10-28T08:19:00Z",
+                    "code_directory_hash": "30c9bf6df45fc57959834e49af1a13e649227ebf",
                     "cdhash_source": "csops(CS_OPS_CDHASH)",
                     "kernel_valid": true,
                     "kernel_signed": true,
@@ -326,7 +326,7 @@
                   }
                 }
               },
-              "store_nonce": "ca091105634dd490bdffbfc3612687e6aca5cbdf2420f84baf947b25ed8d484d"
+              "store_nonce": "489f31170a0d134349b680f9c4377e2b3e338928655f9c558c673461a287f381"
             }
           },
           "effect": {
@@ -347,17 +347,17 @@
             "human_disposed": false,
             "verdict_class": "executed"
           },
-          "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d6964045820da802eae912f5d85980c7f8fd29788841e2148f6f7cb8d82e13279efeaa4392ba058209c68caf1956179e34b72db5fe1a2f8e15f8952bfd2a4ec9fdeb89c883582fac05840d2fffc258a83bac00c303d1002fe7688454af57b8fdfdca9fe2573534c943551dda8dfb84c0fb921f1e9900d2e7aab4cabe9f115d4718c80dfb49327ca1dbe0a",
-          "key_id": "da802eae912f5d85980c7f8fd29788841e2148f6f7cb8d82e13279efeaa4392b"
+          "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d69640458205f882c165276bcbaca68e1be4d54bdbfe059079f7440a2d8b72dccb63e6e2468a058200d042eb8ba3ece29e97a3d5ca8dd10fe4074a8ba6973374c9935a2fe2751a483584098ed75474b9c68276a8c56322a2109207af6586900416a5d73c6c8c5f831e3c466ff6b784881ad3aa22e6994c0e2de62d0e85cf07c200e7d0a3b91af86f03c0b",
+          "key_id": "5f882c165276bcbaca68e1be4d54bdbfe059079f7440a2d8b72dccb63e6e2468"
         }
       },
       "reply": {
-        "request_digest": "b6c375ae5a14655383a4f5d42a0a701e1204c38cce580662fb8ca41e8ecf2910",
+        "request_digest": "3a3d82b18af1e78bb55a41c96fa05a12e3a2113a1b724c876329c6ee8fc2d637",
         "reason": "signature_unverified",
         "issued_at": "2026-10-28T12:00:00Z",
-        "key_id": "d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07c",
-        "sig": "4ffda98cd9bce261b68f0ccc05db9fd02f07276588f98a153189fbf694c683e60f43bac9e4c3a0343a2195c880ba6950b989667bb0ead3fafb007e5931c96303",
-        "refused_key_id": "da802eae912f5d85980c7f8fd29788841e2148f6f7cb8d82e13279efeaa4392b"
+        "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9",
+        "sig": "772e2b5f59eae5833ae8599a85333c08a59a7d334ab8ae449788516b80f2c1af46de9a925c8dca51b0153f88b92026ade9f883fcaf9d660c84314c8b25342f0f",
+        "refused_key_id": "5f882c165276bcbaca68e1be4d54bdbfe059079f7440a2d8b72dccb63e6e2468"
       },
       "citing_record": null
     },
@@ -365,8 +365,8 @@
       "name": "operator_stopgap_key",
       "covers": "a key only CAPSULES_PEER_KEYS lists, for a host with no stable transport id, is held under any id: accepted_via operator_stopgap",
       "receiver": {
-        "key_id": "d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07c",
-        "peer_keys_env": "{\"muse-vm\": \"da802eae912f5d85980c7f8fd29788841e2148f6f7cb8d82e13279efeaa4392b\"}",
+        "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9",
+        "peer_keys_env": "{\"muse-vm\": \"5f882c165276bcbaca68e1be4d54bdbfe059079f7440a2d8b72dccb63e6e2468\"}",
         "announced": {}
       },
       "push": {
@@ -374,13 +374,13 @@
         "body": {
           "spec_version": "draft-mih-scitt-agent-action-capsule-05",
           "format_version": "4",
-          "capsule_id": "b62181565aef0387a39b8888f195731f75087b4f10904a27570516bac9002b21",
+          "capsule_id": "e8f233bb5c22b8c95f4855dbbeede2b34d6e1930d2985130ff9bb980f7af962b",
           "canonicalization_id": "jcs",
           "action_id": "mesh-poc/capsule-emit-mesh-integration/6d139f1403cd84518768857efed6c375c0e3fe1af3f250cd3a5c59ea87a0323c",
           "action_type": "decide",
           "operator": "capsule-emit-mesh-poc-rust",
           "developer": "capsule-emit-mesh/0.1.5",
-          "timestamp": "2026-10-28T08:04:00Z",
+          "timestamp": "2026-10-28T08:19:00Z",
           "domain": "action",
           "provenance": "collector",
           "model_attestation": {
@@ -391,7 +391,7 @@
               "agent_output_digest": "a8461110d26a1ceb91765128a3f8a648e86238810f4bdf27a330deb8681f9d87",
               "runtime": {
                 "name": "capsule-emit-mesh/mesh-llm-host-runtime",
-                "runtime_digest": "e9678f73f1d1cb308a74c9282993a2c8364f4110b432e0756c53a5736a87bf78",
+                "runtime_digest": "b42d96058355c245782219555422d087f9b1fbaa6fccb2ccd6700e07113ed3f3",
                 "measurement_class": "os_measured",
                 "platform_integrity": {
                   "sip_enabled": true,
@@ -461,15 +461,15 @@
                   "binary_attestation": {
                     "type": "binary_attestation",
                     "measurement_class": "os_measured",
-                    "digest": "e9678f73f1d1cb308a74c9282993a2c8364f4110b432e0756c53a5736a87bf78",
+                    "digest": "b42d96058355c245782219555422d087f9b1fbaa6fccb2ccd6700e07113ed3f3",
                     "digest_alg": "sha256",
                     "binary_path": "capsules-ab986d1ee5375c1f",
-                    "binary_size_bytes": 57249768,
-                    "signature": "8747f9eabcdee2cacb974bdb6b815da2a3811712160a829a9a7624779131fd02c0097c46e260628157cc03613c7799740c70375d5985c561e73bc46fd9087b08",
+                    "binary_size_bytes": 57300376,
+                    "signature": "c3aa0841ab50747c462361a0add855cbdc7109d257431fcbe9e9561b19d553c46129b929c592a29c4d0a935ade3a782f2f0ae242705a63ad5ef0f0735c5ee60d",
                     "signature_algorithm": "ed25519",
-                    "signer_key_id": "a3e17d2818de9511",
-                    "measured_at": "2026-10-28T08:04:00Z",
-                    "code_directory_hash": "925fded38e875f17a4600292b76230f326dd8e30",
+                    "signer_key_id": "7554e18d7f437de7",
+                    "measured_at": "2026-10-28T08:19:00Z",
+                    "code_directory_hash": "30c9bf6df45fc57959834e49af1a13e649227ebf",
                     "cdhash_source": "csops(CS_OPS_CDHASH)",
                     "kernel_valid": true,
                     "kernel_signed": true,
@@ -481,7 +481,7 @@
                   }
                 }
               },
-              "store_nonce": "e2675538a95e051d46bd8e41e8c966b936d2acb9ed8d68d164b7cefcafbc38a8"
+              "store_nonce": "ff1ff5c3e698ccb1ee7729ae31a52ead0a6cd75e283517516bf44b7a54eb3acb"
             }
           },
           "effect": {
@@ -503,26 +503,26 @@
             "verdict_class": "executed"
           },
           "chain": {
-            "parent_capsule_id": "9c68caf1956179e34b72db5fe1a2f8e15f8952bfd2a4ec9fdeb89c883582fac0",
+            "parent_capsule_id": "0d042eb8ba3ece29e97a3d5ca8dd10fe4074a8ba6973374c9935a2fe2751a483",
             "relation": "follows"
           },
-          "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d6964045820da802eae912f5d85980c7f8fd29788841e2148f6f7cb8d82e13279efeaa4392ba05820b62181565aef0387a39b8888f195731f75087b4f10904a27570516bac9002b215840a80569e682f0536b8d4366316d5658faa40985e959a68589e51c5bf14a8556cc2a95b6c5ec38b5cdb42970821a2029bf262a419251d2a8d319873a4a8ca3ae0c",
-          "key_id": "da802eae912f5d85980c7f8fd29788841e2148f6f7cb8d82e13279efeaa4392b"
+          "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d69640458205f882c165276bcbaca68e1be4d54bdbfe059079f7440a2d8b72dccb63e6e2468a05820e8f233bb5c22b8c95f4855dbbeede2b34d6e1930d2985130ff9bb980f7af962b5840ac83663b708c1ece1e5d19ddaa813fb4482860120cbccd56a3a06ab596468c6b26b2a6603efb1d84329176647364366f1f59f75f46e36153725579eec233df0e",
+          "key_id": "5f882c165276bcbaca68e1be4d54bdbfe059079f7440a2d8b72dccb63e6e2468"
         }
       },
       "reply": {
         "status": "received"
       },
       "citing_record": {
-        "capsule_id": "72da83bc3cbbe692119bb2bf0f2c5ff2e0beeb82076471241033daa7f4c86bd3",
+        "capsule_id": "afbc781b1c9f72bee7ffcf3b24ee06c7ad4164343bcc133038099155431d8751",
         "spec_version": "draft-mih-scitt-agent-action-capsule-05",
         "format_version": "4",
         "canonicalization_id": "jcs",
-        "action_id": "mesh-poc/received-half-citation/b62181565aef0387a39b8888f195731f75087b4f10904a27570516bac9002b21",
+        "action_id": "mesh-poc/received-half-citation/e8f233bb5c22b8c95f4855dbbeede2b34d6e1930d2985130ff9bb980f7af962b",
         "action_type": "fyi",
         "operator": "capsule-emit-mesh-poc-rust",
         "developer": "capsule-emit-mesh/0.1.5",
-        "timestamp": "2026-10-28T08:04:00Z",
+        "timestamp": "2026-10-28T08:19:00Z",
         "domain": "action",
         "provenance": "collector",
         "model_attestation": {
@@ -530,15 +530,15 @@
           "provider": "mesh-llm",
           "compute_attestation": {
             "received_half": {
-              "cited_capsule_id": "b62181565aef0387a39b8888f195731f75087b4f10904a27570516bac9002b21",
+              "cited_capsule_id": "e8f233bb5c22b8c95f4855dbbeede2b34d6e1930d2985130ff9bb980f7af962b",
               "received_from": "ephemeral-7f3a",
               "via": "push",
               "received_at": "2026-10-28T12:00:00Z",
               "signature_ok": true,
-              "sender_key_id": "da802eae912f5d85980c7f8fd29788841e2148f6f7cb8d82e13279efeaa4392b",
+              "sender_key_id": "5f882c165276bcbaca68e1be4d54bdbfe059079f7440a2d8b72dccb63e6e2468",
               "accepted_via": "operator_stopgap"
             },
-            "store_nonce": "d632cb116931673859971792fd11b4493628f81e54620570f26838851fc14614"
+            "store_nonce": "e9c5d4b01a1d7bbfb9c7d1d1b654641fa5684c4f10e7afe238e76a5e6f5af8fa"
           }
         },
         "assurance": {
@@ -553,26 +553,26 @@
           "verdict_class": "executed"
         },
         "chain": {
-          "parent_capsule_id": "6dc2b785cfcaff306136a4ca73679d0b2eea6b8ce95fca4fd29ce73aa2a77e86",
+          "parent_capsule_id": "7c6acfeec8e56d9031659d577532521ac08ce974a840a6f6859c7fac4c2586a4",
           "relation": "follows"
         },
         "references": [
           {
             "type": "capsule",
             "digest_alg": "SHA-256",
-            "digest": "b62181565aef0387a39b8888f195731f75087b4f10904a27570516bac9002b21",
+            "digest": "e8f233bb5c22b8c95f4855dbbeede2b34d6e1930d2985130ff9bb980f7af962b",
             "citation_purpose": "counterparty_half"
           }
         ],
-        "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d6964045820d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07ca0582072da83bc3cbbe692119bb2bf0f2c5ff2e0beeb82076471241033daa7f4c86bd358407cf856ac1c44bd5b62ba0f27e08c90180e42a3da42bac4323d6a132d3e9666522147f6c11d584437ebdfa2b66661830e19dfda50f1f1009d593ce8053af4a906",
-        "key_id": "d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07c"
+        "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d69640458206cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9a05820afbc781b1c9f72bee7ffcf3b24ee06c7ad4164343bcc133038099155431d875158400d7bbf60c3a0fb3f7898ef57888e38263dd333df1d0782f195e7d15b083e042e6badc9c768365e8bb474860135f172eec9b6acf72423889f7277180f4fb7930c",
+        "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9"
       }
     },
     {
       "name": "controller_declaration",
       "covers": "a bundle whose half's key a carried controller-binding/0 binds to an accepted key is held: accepted_via controller_declaration, with the binding digest",
       "receiver": {
-        "key_id": "d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07c",
+        "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9",
         "peer_keys_env": "{\"muse-controller\": \"2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12\"}",
         "announced": {}
       },
@@ -583,13 +583,13 @@
           "capsule": {
             "spec_version": "draft-mih-scitt-agent-action-capsule-05",
             "format_version": "4",
-            "capsule_id": "6ca524fa502d6cbb3a368ed9938eecb1f27a07a944a562165d8defb45fcb6423",
+            "capsule_id": "ba40ca2397e425cab5f92e5040b36dff7bdc3a7a61fe3a8afdae825ae42e4ec1",
             "canonicalization_id": "jcs",
             "action_id": "mesh-poc/capsule-emit-mesh-integration/6d139f1403cd84518768857efed6c375c0e3fe1af3f250cd3a5c59ea87a0323c",
             "action_type": "decide",
             "operator": "capsule-emit-mesh-poc-rust",
             "developer": "capsule-emit-mesh/0.1.5",
-            "timestamp": "2026-10-28T08:04:00Z",
+            "timestamp": "2026-10-28T08:19:00Z",
             "domain": "action",
             "provenance": "collector",
             "model_attestation": {
@@ -600,7 +600,7 @@
                 "agent_output_digest": "a8461110d26a1ceb91765128a3f8a648e86238810f4bdf27a330deb8681f9d87",
                 "runtime": {
                   "name": "capsule-emit-mesh/mesh-llm-host-runtime",
-                  "runtime_digest": "e9678f73f1d1cb308a74c9282993a2c8364f4110b432e0756c53a5736a87bf78",
+                  "runtime_digest": "b42d96058355c245782219555422d087f9b1fbaa6fccb2ccd6700e07113ed3f3",
                   "measurement_class": "os_measured",
                   "platform_integrity": {
                     "sip_enabled": true,
@@ -670,15 +670,15 @@
                     "binary_attestation": {
                       "type": "binary_attestation",
                       "measurement_class": "os_measured",
-                      "digest": "e9678f73f1d1cb308a74c9282993a2c8364f4110b432e0756c53a5736a87bf78",
+                      "digest": "b42d96058355c245782219555422d087f9b1fbaa6fccb2ccd6700e07113ed3f3",
                       "digest_alg": "sha256",
                       "binary_path": "capsules-ab986d1ee5375c1f",
-                      "binary_size_bytes": 57249768,
-                      "signature": "c01f8f6ce44b13f88ef371eb6c25b55cd2e49f7e4f5829abea204fb48288fc0d775df0435b9fa9155b7288fa7b5a0ae0003b4cd56095e90018f0edd73aaaf20d",
+                      "binary_size_bytes": 57300376,
+                      "signature": "188e9ad5b056e0940a89d154ded7f6b6a7ae0c6a8bc60c60eb96ab9248ab145a60ee1e6494e527cd12764ad74da4b60cc0382afe2de43b2ac1d534e0bbaf3f06",
                       "signature_algorithm": "ed25519",
-                      "signer_key_id": "434753de282f75c4",
-                      "measured_at": "2026-10-28T08:04:00Z",
-                      "code_directory_hash": "925fded38e875f17a4600292b76230f326dd8e30",
+                      "signer_key_id": "80f636a03886fbeb",
+                      "measured_at": "2026-10-28T08:19:00Z",
+                      "code_directory_hash": "30c9bf6df45fc57959834e49af1a13e649227ebf",
                       "cdhash_source": "csops(CS_OPS_CDHASH)",
                       "kernel_valid": true,
                       "kernel_signed": true,
@@ -690,7 +690,7 @@
                     }
                   }
                 },
-                "store_nonce": "9741825d166dc655ce12482a3b13ba0ae57803d55de9b8a18d99a410a0afde18"
+                "store_nonce": "7273616763edaa00a0602bc2af8f8dcfd7f888f65594d8f7ad8ee53c07d16de8"
               }
             },
             "effect": {
@@ -712,11 +712,11 @@
               "verdict_class": "executed"
             },
             "chain": {
-              "parent_capsule_id": "7fa4ab115c34cc1a3c0b35261cb9c604faf67103a0aa57f71f230ab5dc2c8999",
+              "parent_capsule_id": "912cfbc27f9dfc016d9a5cfb7b5497cd2e53d361ce25426293308cf8a9d44765",
               "relation": "follows"
             },
-            "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d6964045820f55813d7a1e7341765c969c0efd1a2f8ccb1a8260508c202fc0fe05e78140593a058206ca524fa502d6cbb3a368ed9938eecb1f27a07a944a562165d8defb45fcb6423584078f94ce44dd0a1f65a7dee34e61d87cd5076c4a13e595d102a1eef4994c4ec92f0742e43a119b20ba8869d1530866c5d80aa01b87cf0afc1978b3ba6e7868507",
-            "key_id": "f55813d7a1e7341765c969c0efd1a2f8ccb1a8260508c202fc0fe05e78140593"
+            "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d69640458202e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4a05820ba40ca2397e425cab5f92e5040b36dff7bdc3a7a61fe3a8afdae825ae42e4ec158406dddabb3a82c2b23199a496446a1f77c16994dd3bb8910215c31f8be7bd9eeaab6d07a337f9f4b4edd58af932da53f3b0626fbb66026ac2a7357487da1c6f907",
+            "key_id": "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4"
           },
           "inclusion": {
             "leaf_index": 1,
@@ -726,7 +726,7 @@
               "size": 3,
               "leaf_index": 1,
               "witness": [
-                "8508ceb1cc426b000b0783febc2de239b25487f38cb9a949b58b1208ffa50ad1"
+                "85bc42107cc449bfb840f6f06faf32582a93a6c4e026d751904197ca3e32fbe9"
               ],
               "peaks_left": [],
               "peaks_right": []
@@ -737,12 +737,12 @@
             "kind": "mmr_checkpoint",
             "log_id": "rust-node",
             "mmr_size": 3,
-            "root": "e3bda46737c5bcca8eb89868b1d1ec36adcd3954c78cb092f95ff32b0b5137af",
+            "root": "018677eaeacd0e3e22f73e2ea08fb1c7945b9945555a2a6ce1a09b46c1e089a1",
             "prev_size": 0,
             "prev_root": "",
-            "key_id": "f55813d7a1e7341765c969c0efd1a2f8ccb1a8260508c202fc0fe05e78140593",
-            "timestamp": "2026-10-28T08:04:00Z",
-            "signature": "da0325e495c4d62e0269776a9ba558818907ae64410d1ea18a416b50caa0410418da1a8bbdf379ef7b57f7baa3afc83dacea2f16ccb0464e73cbbefaf07ad60e"
+            "key_id": "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4",
+            "timestamp": "2026-10-28T08:19:00Z",
+            "signature": "8fd66c7a0a95e115bd1005549aa3a3c011bd067bbed504ddbc6c020428176566e3ca202630097485c5e052c8708300a40f6fd37871ef3b0b05f1dbde1deadc07"
           },
           "controller_binding": {
             "binding_version": "controller-binding/0",
@@ -750,7 +750,7 @@
             "method": "dual_signature/0",
             "keys": [
               "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
-              "f55813d7a1e7341765c969c0efd1a2f8ccb1a8260508c202fc0fe05e78140593"
+              "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4"
             ],
             "issued_at": "2026-10-01T00:00:00Z",
             "not_before": "2026-10-01T00:00:00Z",
@@ -760,11 +760,11 @@
             "sigs": [
               {
                 "key_id": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
-                "sig": "e4395a4a3823a9ae4d676f0abc63d7060d76cdffd412996d44e08524efd3d5fd8a6911851e330364d30785a632cfbbb5dc4e95a006d4235cc2c4ed33b0995d02"
+                "sig": "5c73696e49a80eb32e03b3a812438970208220a42ad0707f79d0c5d54f2737410cb58a78034f0aa3289e4670fd8c97c2eb005433fac992abf2599a62136bb507"
               },
               {
-                "key_id": "f55813d7a1e7341765c969c0efd1a2f8ccb1a8260508c202fc0fe05e78140593",
-                "sig": "bf2b24185e5b5dc5c1c6778e32b09b4c3bd89e570839add58aab69af8588bb53c8dfa5dbc3ecd6dac714054534ba451aa82ec8104e9cafe3df1925d9a7033003"
+                "key_id": "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4",
+                "sig": "edc291a9b4a44b5f874f0f8652168d473ec286e8da2c76564581f91d754d91c4fda2d9a08b793ec09ef3b5e2edc9f66ce2f0d4ae23ec864d8084077addc6bf08"
               }
             ]
           }
@@ -773,24 +773,24 @@
       "reply": {
         "status": "received",
         "inclusion": {
-          "half_capsule_id": "6ca524fa502d6cbb3a368ed9938eecb1f27a07a944a562165d8defb45fcb6423",
+          "half_capsule_id": "ba40ca2397e425cab5f92e5040b36dff7bdc3a7a61fe3a8afdae825ae42e4ec1",
           "leaf_index": 1,
           "mmr_size": 3,
-          "checkpoint_digest": "bb3f80350f1669763e7c753a2a059556384903bef3e79020c348bb3c87b272d9",
-          "inclusion_proof_digest": "0b697ed0625112ced6a9d1201e484f8c45dc6c847b702fe97eed8881d38879d7",
+          "checkpoint_digest": "15aeb0a0f5d670b63d89bef3392e8a2689249c34edd977052f8ce56bbe46e8b3",
+          "inclusion_proof_digest": "5b1cc588d27e07b4f69a39670e315d81bae79b5bed0ef4823e1d996e49583e09",
           "received_at": "2026-10-28T12:00:00Z"
         }
       },
       "citing_record": {
-        "capsule_id": "48917970c565408044da65abe7069c65f5c4d73ed29d461200bb510730c5e474",
+        "capsule_id": "19395e361efd8be71e96113bd57581c0bb3e6595f738d2f1188a4627c12e85e4",
         "spec_version": "draft-mih-scitt-agent-action-capsule-05",
         "format_version": "4",
         "canonicalization_id": "jcs",
-        "action_id": "mesh-poc/received-half-citation/6ca524fa502d6cbb3a368ed9938eecb1f27a07a944a562165d8defb45fcb6423",
+        "action_id": "mesh-poc/received-half-citation/ba40ca2397e425cab5f92e5040b36dff7bdc3a7a61fe3a8afdae825ae42e4ec1",
         "action_type": "fyi",
         "operator": "capsule-emit-mesh-poc-rust",
         "developer": "capsule-emit-mesh/0.1.5",
-        "timestamp": "2026-10-28T08:04:00Z",
+        "timestamp": "2026-10-28T08:19:00Z",
         "domain": "action",
         "provenance": "collector",
         "model_attestation": {
@@ -798,17 +798,17 @@
           "provider": "mesh-llm",
           "compute_attestation": {
             "received_half": {
-              "cited_capsule_id": "6ca524fa502d6cbb3a368ed9938eecb1f27a07a944a562165d8defb45fcb6423",
+              "cited_capsule_id": "ba40ca2397e425cab5f92e5040b36dff7bdc3a7a61fe3a8afdae825ae42e4ec1",
               "received_from": "ephemeral-91c2",
               "via": "push",
               "received_at": "2026-10-28T12:00:00Z",
               "signature_ok": true,
-              "sender_key_id": "f55813d7a1e7341765c969c0efd1a2f8ccb1a8260508c202fc0fe05e78140593",
+              "sender_key_id": "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4",
               "accepted_via": "controller_declaration",
-              "controller_binding_digest": "a49e5431f1378bb242c686c2165477f9648c36f5cf623c869981334d8069d654",
+              "controller_binding_digest": "61302f51c1d14a94c77e7e19397258493c3cbbf767d5b88e9024146fc2c574bb",
               "controller_anchor_key_id": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
             },
-            "store_nonce": "52a96b681ddcf2c2a8690b141800947c045a65a47fbdd8108cacdc35e8676bb5"
+            "store_nonce": "024be544f10bdea844796ed917c704f133e97b7bf2fe849bdc1c2827e41f2a6a"
           }
         },
         "assurance": {
@@ -823,29 +823,29 @@
           "verdict_class": "executed"
         },
         "chain": {
-          "parent_capsule_id": "72da83bc3cbbe692119bb2bf0f2c5ff2e0beeb82076471241033daa7f4c86bd3",
+          "parent_capsule_id": "afbc781b1c9f72bee7ffcf3b24ee06c7ad4164343bcc133038099155431d8751",
           "relation": "follows"
         },
         "references": [
           {
             "type": "capsule",
             "digest_alg": "SHA-256",
-            "digest": "6ca524fa502d6cbb3a368ed9938eecb1f27a07a944a562165d8defb45fcb6423",
+            "digest": "ba40ca2397e425cab5f92e5040b36dff7bdc3a7a61fe3a8afdae825ae42e4ec1",
             "citation_purpose": "counterparty_half"
           }
         ],
-        "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d6964045820d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07ca0582048917970c565408044da65abe7069c65f5c4d73ed29d461200bb510730c5e47458407ca7b4726ba998833c259d577e9b5401ffa774f11b0175f2ae6aab792e0dfa3faf9c49067b383a57e202507176c3a42fbf8b68a6ba0cfad7c1cb26af2901e80c",
-        "key_id": "d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07c"
+        "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d69640458206cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9a0582019395e361efd8be71e96113bd57581c0bb3e6595f738d2f1188a4627c12e85e458405b7b838aa4877b569e37f71ed2c5634f8b9b75d520c51f200430a4c9c1c1497c712c02d051d5a1be1b822b05eb46799db1fc3ed27a71cc3a2138bf0dae93740a",
+        "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9"
       }
     },
     {
       "name": "controller_declaration_on_receivers_own_key",
       "covers": "a declaration binding the half's key to the receiver's own key is never used, so it cannot make a different counterparty: refused signature_unverified",
       "receiver": {
-        "key_id": "d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07c",
+        "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9",
         "peer_keys_env": null,
         "announced": {
-          "receiver": "d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07c"
+          "receiver": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9"
         }
       },
       "push": {
@@ -855,13 +855,13 @@
           "capsule": {
             "spec_version": "draft-mih-scitt-agent-action-capsule-05",
             "format_version": "4",
-            "capsule_id": "6ca524fa502d6cbb3a368ed9938eecb1f27a07a944a562165d8defb45fcb6423",
+            "capsule_id": "ba40ca2397e425cab5f92e5040b36dff7bdc3a7a61fe3a8afdae825ae42e4ec1",
             "canonicalization_id": "jcs",
             "action_id": "mesh-poc/capsule-emit-mesh-integration/6d139f1403cd84518768857efed6c375c0e3fe1af3f250cd3a5c59ea87a0323c",
             "action_type": "decide",
             "operator": "capsule-emit-mesh-poc-rust",
             "developer": "capsule-emit-mesh/0.1.5",
-            "timestamp": "2026-10-28T08:04:00Z",
+            "timestamp": "2026-10-28T08:19:00Z",
             "domain": "action",
             "provenance": "collector",
             "model_attestation": {
@@ -872,7 +872,7 @@
                 "agent_output_digest": "a8461110d26a1ceb91765128a3f8a648e86238810f4bdf27a330deb8681f9d87",
                 "runtime": {
                   "name": "capsule-emit-mesh/mesh-llm-host-runtime",
-                  "runtime_digest": "e9678f73f1d1cb308a74c9282993a2c8364f4110b432e0756c53a5736a87bf78",
+                  "runtime_digest": "b42d96058355c245782219555422d087f9b1fbaa6fccb2ccd6700e07113ed3f3",
                   "measurement_class": "os_measured",
                   "platform_integrity": {
                     "sip_enabled": true,
@@ -942,15 +942,15 @@
                     "binary_attestation": {
                       "type": "binary_attestation",
                       "measurement_class": "os_measured",
-                      "digest": "e9678f73f1d1cb308a74c9282993a2c8364f4110b432e0756c53a5736a87bf78",
+                      "digest": "b42d96058355c245782219555422d087f9b1fbaa6fccb2ccd6700e07113ed3f3",
                       "digest_alg": "sha256",
                       "binary_path": "capsules-ab986d1ee5375c1f",
-                      "binary_size_bytes": 57249768,
-                      "signature": "c01f8f6ce44b13f88ef371eb6c25b55cd2e49f7e4f5829abea204fb48288fc0d775df0435b9fa9155b7288fa7b5a0ae0003b4cd56095e90018f0edd73aaaf20d",
+                      "binary_size_bytes": 57300376,
+                      "signature": "188e9ad5b056e0940a89d154ded7f6b6a7ae0c6a8bc60c60eb96ab9248ab145a60ee1e6494e527cd12764ad74da4b60cc0382afe2de43b2ac1d534e0bbaf3f06",
                       "signature_algorithm": "ed25519",
-                      "signer_key_id": "434753de282f75c4",
-                      "measured_at": "2026-10-28T08:04:00Z",
-                      "code_directory_hash": "925fded38e875f17a4600292b76230f326dd8e30",
+                      "signer_key_id": "80f636a03886fbeb",
+                      "measured_at": "2026-10-28T08:19:00Z",
+                      "code_directory_hash": "30c9bf6df45fc57959834e49af1a13e649227ebf",
                       "cdhash_source": "csops(CS_OPS_CDHASH)",
                       "kernel_valid": true,
                       "kernel_signed": true,
@@ -962,7 +962,7 @@
                     }
                   }
                 },
-                "store_nonce": "9741825d166dc655ce12482a3b13ba0ae57803d55de9b8a18d99a410a0afde18"
+                "store_nonce": "7273616763edaa00a0602bc2af8f8dcfd7f888f65594d8f7ad8ee53c07d16de8"
               }
             },
             "effect": {
@@ -984,11 +984,11 @@
               "verdict_class": "executed"
             },
             "chain": {
-              "parent_capsule_id": "7fa4ab115c34cc1a3c0b35261cb9c604faf67103a0aa57f71f230ab5dc2c8999",
+              "parent_capsule_id": "912cfbc27f9dfc016d9a5cfb7b5497cd2e53d361ce25426293308cf8a9d44765",
               "relation": "follows"
             },
-            "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d6964045820f55813d7a1e7341765c969c0efd1a2f8ccb1a8260508c202fc0fe05e78140593a058206ca524fa502d6cbb3a368ed9938eecb1f27a07a944a562165d8defb45fcb6423584078f94ce44dd0a1f65a7dee34e61d87cd5076c4a13e595d102a1eef4994c4ec92f0742e43a119b20ba8869d1530866c5d80aa01b87cf0afc1978b3ba6e7868507",
-            "key_id": "f55813d7a1e7341765c969c0efd1a2f8ccb1a8260508c202fc0fe05e78140593"
+            "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d69640458202e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4a05820ba40ca2397e425cab5f92e5040b36dff7bdc3a7a61fe3a8afdae825ae42e4ec158406dddabb3a82c2b23199a496446a1f77c16994dd3bb8910215c31f8be7bd9eeaab6d07a337f9f4b4edd58af932da53f3b0626fbb66026ac2a7357487da1c6f907",
+            "key_id": "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4"
           },
           "inclusion": {
             "leaf_index": 1,
@@ -998,7 +998,7 @@
               "size": 3,
               "leaf_index": 1,
               "witness": [
-                "8508ceb1cc426b000b0783febc2de239b25487f38cb9a949b58b1208ffa50ad1"
+                "85bc42107cc449bfb840f6f06faf32582a93a6c4e026d751904197ca3e32fbe9"
               ],
               "peaks_left": [],
               "peaks_right": []
@@ -1009,20 +1009,20 @@
             "kind": "mmr_checkpoint",
             "log_id": "rust-node",
             "mmr_size": 3,
-            "root": "e3bda46737c5bcca8eb89868b1d1ec36adcd3954c78cb092f95ff32b0b5137af",
+            "root": "018677eaeacd0e3e22f73e2ea08fb1c7945b9945555a2a6ce1a09b46c1e089a1",
             "prev_size": 0,
             "prev_root": "",
-            "key_id": "f55813d7a1e7341765c969c0efd1a2f8ccb1a8260508c202fc0fe05e78140593",
-            "timestamp": "2026-10-28T08:04:00Z",
-            "signature": "da0325e495c4d62e0269776a9ba558818907ae64410d1ea18a416b50caa0410418da1a8bbdf379ef7b57f7baa3afc83dacea2f16ccb0464e73cbbefaf07ad60e"
+            "key_id": "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4",
+            "timestamp": "2026-10-28T08:19:00Z",
+            "signature": "8fd66c7a0a95e115bd1005549aa3a3c011bd067bbed504ddbc6c020428176566e3ca202630097485c5e052c8708300a40f6fd37871ef3b0b05f1dbde1deadc07"
           },
           "controller_binding": {
             "binding_version": "controller-binding/0",
             "claim": "same_controller_asserted",
             "method": "dual_signature/0",
             "keys": [
-              "d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07c",
-              "f55813d7a1e7341765c969c0efd1a2f8ccb1a8260508c202fc0fe05e78140593"
+              "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4",
+              "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9"
             ],
             "issued_at": "2026-10-01T00:00:00Z",
             "not_before": "2026-10-01T00:00:00Z",
@@ -1031,24 +1031,239 @@
             "nonce": "test-ceremony",
             "sigs": [
               {
-                "key_id": "d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07c",
-                "sig": "be11a94681b50a9bdb151ae81769fd6abbef1234f250f22e1bd483b97489a697eb7bcd1695dd39dbe06a543feda4cfcb3939930cf42d331c7413a0999592e90d"
+                "key_id": "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4",
+                "sig": "fc37948daa3454af93623b38a894352ea24e1b7ea2ac83d85a28a6e77b3c14bf3179bde19031884df2c04f6d287e1a7bbe2a7085a6e68cdb52b444d3f751ba05"
               },
               {
-                "key_id": "f55813d7a1e7341765c969c0efd1a2f8ccb1a8260508c202fc0fe05e78140593",
-                "sig": "f1314ade7d9a90f4b886c0bd2b4a0369c272f1223f11b3ff812f91ec7ac178a31901c7466e39123bd7c6abc3fe5906e0db6eb3c3f87a823635750f744f1c2a02"
+                "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9",
+                "sig": "75a3a407ad9cf9e5aeaf087a095aa9092f022cb6bb00ebefdd0f7fdf620b6e5a63e9c3bab8f831283d15c0c7da7eff8b063dcc3d333d9ce327f4fefe5267b304"
               }
             ]
           }
         }
       },
       "reply": {
-        "request_digest": "1fb148b06bcdac67471eb7c7b4a7430ca7e722d4f82c5bcaae551dc4b946d357",
+        "request_digest": "f0dde6521507e7fc249349dad8635c29be7c8e42408c9233f0f0a081e6253ae5",
         "reason": "signature_unverified",
         "issued_at": "2026-10-28T12:00:00Z",
-        "key_id": "d64b54f193b9072120ac4dcc80778964ae1f2ee5115536ace92709fb03aaa07c",
-        "sig": "61ff429844547d8d09cb907c3af011878547b570187175686de9a77fe2037e52de1e6b733b023d6a983ce50dffa77b26da8ed08d7097a4943232b323f2d57d01",
-        "refused_key_id": "f55813d7a1e7341765c969c0efd1a2f8ccb1a8260508c202fc0fe05e78140593"
+        "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9",
+        "sig": "b9ed09f4a35a34eee0033fbb96c346c1bb154d4247183e9fdefb44148ce1c793b38fac8acf0e8cfe8f2c34e012a688e9128e7eace4d404a88e21aa821b25c602",
+        "refused_key_id": "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4"
+      },
+      "citing_record": null
+    },
+    {
+      "name": "known_key_declared_on_receivers_own_key",
+      "covers": "a key a host announced, carrying a declaration that binds it to the receiver's own key, is refused signature_unverified: the two keys stated one controller, so it is never a different counterparty",
+      "receiver": {
+        "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9",
+        "peer_keys_env": null,
+        "announced": {
+          "node-n": "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4",
+          "receiver": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9"
+        }
+      },
+      "push": {
+        "sender": "node-n",
+        "body": {
+          "record_push_bundle": 1,
+          "capsule": {
+            "spec_version": "draft-mih-scitt-agent-action-capsule-05",
+            "format_version": "4",
+            "capsule_id": "ba40ca2397e425cab5f92e5040b36dff7bdc3a7a61fe3a8afdae825ae42e4ec1",
+            "canonicalization_id": "jcs",
+            "action_id": "mesh-poc/capsule-emit-mesh-integration/6d139f1403cd84518768857efed6c375c0e3fe1af3f250cd3a5c59ea87a0323c",
+            "action_type": "decide",
+            "operator": "capsule-emit-mesh-poc-rust",
+            "developer": "capsule-emit-mesh/0.1.5",
+            "timestamp": "2026-10-28T08:19:00Z",
+            "domain": "action",
+            "provenance": "collector",
+            "model_attestation": {
+              "model_id": "m",
+              "provider": "mesh-llm",
+              "compute_attestation": {
+                "agent_input_digest": "6d139f1403cd84518768857efed6c375c0e3fe1af3f250cd3a5c59ea87a0323c",
+                "agent_output_digest": "a8461110d26a1ceb91765128a3f8a648e86238810f4bdf27a330deb8681f9d87",
+                "runtime": {
+                  "name": "capsule-emit-mesh/mesh-llm-host-runtime",
+                  "runtime_digest": "b42d96058355c245782219555422d087f9b1fbaa6fccb2ccd6700e07113ed3f3",
+                  "measurement_class": "os_measured",
+                  "platform_integrity": {
+                    "sip_enabled": true,
+                    "source": {
+                      "sip_enabled": "os_reported"
+                    }
+                  }
+                },
+                "attestation_refs": [],
+                "invocation": {
+                  "requested_model_id": "m",
+                  "resolved_model_id": "m",
+                  "source": {
+                    "requested_model_id": "self_reported",
+                    "resolved_model_id": "self_reported"
+                  }
+                },
+                "epistemic_type": "producer_claim",
+                "x-mesh-poc-v1": {
+                  "client_nonce": "n",
+                  "client_nonce_source": "client_supplied",
+                  "model_name_digest": "62c66a7a5dd70c3146618063c344e531e6d4b59e379808443ce962b3abd63c5a",
+                  "serving_provenance": {
+                    "served_by_node_id": "unknown",
+                    "dispatch_path": null,
+                    "requesting_party": "party-1",
+                    "exchange_id": "e-1",
+                    "quantization": "unknown",
+                    "model": {
+                      "architecture": null,
+                      "context_length": null,
+                      "parameter_size": null,
+                      "layer_count": null,
+                      "identity_hash": null,
+                      "weights_digest": null,
+                      "canonical_ref": null,
+                      "revision": null
+                    },
+                    "hardware": {
+                      "gpu": null,
+                      "vram_bytes": null,
+                      "device": null,
+                      "is_soc": null
+                    },
+                    "usage": null,
+                    "seq": 2,
+                    "prev_seq": 1,
+                    "peer_capsule_id": null,
+                    "peer_capsule_id_provenance": null
+                  },
+                  "role": "served",
+                  "observation_point": null,
+                  "generation_parameters": {},
+                  "latency_ms": "100.000",
+                  "evidence_refs": {
+                    "statistical_fingerprint": {
+                      "type": "statistical_fingerprint",
+                      "digest": null,
+                      "context": null
+                    },
+                    "tee_attestation": {
+                      "type": "tee_attestation",
+                      "measurement_class": null,
+                      "digest": null,
+                      "context": "no TEE quote measured (no TDX hardware on this host, or the producer leg has not run here); recorded absent, never fabricated"
+                    },
+                    "binary_attestation": {
+                      "type": "binary_attestation",
+                      "measurement_class": "os_measured",
+                      "digest": "b42d96058355c245782219555422d087f9b1fbaa6fccb2ccd6700e07113ed3f3",
+                      "digest_alg": "sha256",
+                      "binary_path": "capsules-ab986d1ee5375c1f",
+                      "binary_size_bytes": 57300376,
+                      "signature": "188e9ad5b056e0940a89d154ded7f6b6a7ae0c6a8bc60c60eb96ab9248ab145a60ee1e6494e527cd12764ad74da4b60cc0382afe2de43b2ac1d534e0bbaf3f06",
+                      "signature_algorithm": "ed25519",
+                      "signer_key_id": "80f636a03886fbeb",
+                      "measured_at": "2026-10-28T08:19:00Z",
+                      "code_directory_hash": "30c9bf6df45fc57959834e49af1a13e649227ebf",
+                      "cdhash_source": "csops(CS_OPS_CDHASH)",
+                      "kernel_valid": true,
+                      "kernel_signed": true,
+                      "platform_binary": false,
+                      "ad_hoc_signature": true,
+                      "signing_authority": "unknown_local_or_ad_hoc",
+                      "sip_enabled": true,
+                      "context": "os_measured: the KERNEL (AMFI) reported this process's code-directory hash (cdhash) at exec time via csops(2) CS_OPS_CDHASH — an independent measurer beneath the process, so a compromised process cannot repoint this hash at a decoy file the way self-measurement can; the signature also binds this cdhash to the self-measured digest, so tampering with either after signing breaks verification. Trustworthy only up to: SIP enabled, a NON-ROOT attacker (root can disable SIP / bypass AMFI), and this binary's signing strength — signing_authority=unknown_local_or_ad_hoc, ad-hoc signed (no Developer-ID / notarization / library validation). Does NOT prove hardware-rooted measurement: no TEE and no hardware register are involved, so this is NOT tee_measured. A root attacker with SIP disabled is the named residual, closed only by tee_measured (out of scope here)."
+                    }
+                  }
+                },
+                "store_nonce": "7273616763edaa00a0602bc2af8f8dcfd7f888f65594d8f7ad8ee53c07d16de8"
+              }
+            },
+            "effect": {
+              "status": "confirmed",
+              "type": "inference_completion",
+              "effect_attestation": "gate_executed",
+              "request_digest": "6d139f1403cd84518768857efed6c375c0e3fe1af3f250cd3a5c59ea87a0323c",
+              "response_digest": "a8461110d26a1ceb91765128a3f8a648e86238810f4bdf27a330deb8681f9d87"
+            },
+            "assurance": {
+              "attestation_mode": "self_attested",
+              "effect_mode": "confirmed",
+              "ledger_mode": "chained"
+            },
+            "disposition": {
+              "decision": "accept",
+              "approver": "policy",
+              "human_disposed": false,
+              "verdict_class": "executed"
+            },
+            "chain": {
+              "parent_capsule_id": "912cfbc27f9dfc016d9a5cfb7b5497cd2e53d361ce25426293308cf8a9d44765",
+              "relation": "follows"
+            },
+            "signature": "d284584ca301270378236170706c69636174696f6e2f6167656e742d616374696f6e2d63617073756c652d69640458202e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4a05820ba40ca2397e425cab5f92e5040b36dff7bdc3a7a61fe3a8afdae825ae42e4ec158406dddabb3a82c2b23199a496446a1f77c16994dd3bb8910215c31f8be7bd9eeaab6d07a337f9f4b4edd58af932da53f3b0626fbb66026ac2a7357487da1c6f907",
+            "key_id": "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4"
+          },
+          "inclusion": {
+            "leaf_index": 1,
+            "proof": {
+              "v": 1,
+              "kind": "inclusion",
+              "size": 3,
+              "leaf_index": 1,
+              "witness": [
+                "85bc42107cc449bfb840f6f06faf32582a93a6c4e026d751904197ca3e32fbe9"
+              ],
+              "peaks_left": [],
+              "peaks_right": []
+            }
+          },
+          "checkpoint": {
+            "v": 1,
+            "kind": "mmr_checkpoint",
+            "log_id": "rust-node",
+            "mmr_size": 3,
+            "root": "018677eaeacd0e3e22f73e2ea08fb1c7945b9945555a2a6ce1a09b46c1e089a1",
+            "prev_size": 0,
+            "prev_root": "",
+            "key_id": "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4",
+            "timestamp": "2026-10-28T08:19:00Z",
+            "signature": "8fd66c7a0a95e115bd1005549aa3a3c011bd067bbed504ddbc6c020428176566e3ca202630097485c5e052c8708300a40f6fd37871ef3b0b05f1dbde1deadc07"
+          },
+          "controller_binding": {
+            "binding_version": "controller-binding/0",
+            "claim": "same_controller_asserted",
+            "method": "dual_signature/0",
+            "keys": [
+              "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4",
+              "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9"
+            ],
+            "issued_at": "2026-10-01T00:00:00Z",
+            "not_before": "2026-10-01T00:00:00Z",
+            "not_after": "2027-10-01T00:00:00Z",
+            "revocation": "revocation_statement/0",
+            "nonce": "test-ceremony",
+            "sigs": [
+              {
+                "key_id": "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4",
+                "sig": "fc37948daa3454af93623b38a894352ea24e1b7ea2ac83d85a28a6e77b3c14bf3179bde19031884df2c04f6d287e1a7bbe2a7085a6e68cdb52b444d3f751ba05"
+              },
+              {
+                "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9",
+                "sig": "75a3a407ad9cf9e5aeaf087a095aa9092f022cb6bb00ebefdd0f7fdf620b6e5a63e9c3bab8f831283d15c0c7da7eff8b063dcc3d333d9ce327f4fefe5267b304"
+              }
+            ]
+          }
+        }
+      },
+      "reply": {
+        "request_digest": "f0dde6521507e7fc249349dad8635c29be7c8e42408c9233f0f0a081e6253ae5",
+        "reason": "signature_unverified",
+        "issued_at": "2026-10-28T12:00:00Z",
+        "key_id": "6cd23568d3990e0fdc480e71a4e408ce5e6a39738286d81ab73b91a9e79131d9",
+        "sig": "b9ed09f4a35a34eee0033fbb96c346c1bb154d4247183e9fdefb44148ce1c793b38fac8acf0e8cfe8f2c34e012a688e9128e7eace4d404a88e21aa821b25c602",
+        "refused_key_id": "2e6b614fe73623f6519e3db47feb0baf04508133f8bfa48114d01b7edf37cfd4"
       },
       "citing_record": null
     }

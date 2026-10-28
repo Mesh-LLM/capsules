@@ -331,9 +331,11 @@ pub struct Accepted {
 /// Whether this node accepts `key_id`, from the operator's map
 /// (`configured`, raw) and the host's announced keys, or through
 /// `declaration`, a carried `controller-binding/0` record that applies at
-/// `now` (no time: no declaration is used) and binds `key_id` to a key accepted those ways. `own_key` (this
-/// node's) is never accepted, nor used as a declaration's anchor: a key
-/// bound to this node's own is this node's side, never a counterparty.
+/// `now` (no time: no declaration is used) and binds `key_id` to a key
+/// accepted those ways. `own_key` (this node's) is never accepted, nor used
+/// as a declaration's anchor, and a key
+/// a carried declaration binds to it is not accepted however else it is
+/// known ([`binds_to_own`]): it is this node's side, never a counterparty.
 pub fn accepted_via(
     configured: Option<&str>,
     announced: &std::collections::BTreeMap<String, String>,
@@ -361,7 +363,7 @@ pub fn accepted_via(
         };
         Some(Accepted { via, peers })
     };
-    if key_id == own_key {
+    if key_id == own_key || binds_to_own(declaration, key_id, own_key, now) {
         return None;
     }
     if let Some(accepted) = direct(key_id) {
@@ -377,6 +379,25 @@ pub fn accepted_via(
         },
         peers: anchored.peers,
     })
+}
+
+/// Whether `declaration` is a controller declaration that applies at `now`
+/// and binds `key_id` to `own_key`, this node's own key. Its holders signed
+/// that the two keys have one controller (CB v0 §6.2): a key so bound is
+/// this node's side, so it is accepted from no one, however else it is
+/// known.
+pub fn binds_to_own(
+    declaration: Option<&serde_json::Value>,
+    key_id: &str,
+    own_key: &str,
+    now: Option<evidence_request::time::UtcTime>,
+) -> bool {
+    let (Some(declaration), Some(now)) = (declaration, now) else {
+        return false;
+    };
+    !own_key.is_empty()
+        && crate::controller_binding::applies(declaration, now)
+            .is_some_and(|applied| applied.other(key_id) == Some(own_key))
 }
 
 /// The one announced peer whose key is `key_id` in `registry`: this node's
@@ -536,6 +557,13 @@ mod tests {
             accepted_via(None, &with_self, &km, &ko, Some(&on_own), now),
             None,
             "anchored on this node's own key"
+        );
+        let member_announced = keys_of(&[("self", ko.as_str()), ("node-m", km.as_str())]);
+        assert!(accepted_via(None, &member_announced, &km, &ko, None, now).is_some());
+        assert_eq!(
+            accepted_via(None, &member_announced, &km, &ko, Some(&on_own), now),
+            None,
+            "a known key declared one controller with this node is refused"
         );
     }
 

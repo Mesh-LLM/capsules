@@ -34,7 +34,7 @@
 //!    names the half's `key_id`, under the node's signature.
 //! 7. What a served half claims about the exchange agrees with this node's
 //!    own record of it, else `served_by_mismatch` / `model_mismatch`. The
-//!    server it names may be any peer its key is bound to, or the sender id.
+//!    server it names must be a peer its key is bound to.
 //! 8. A split's carried stage records are each valid and named by the main
 //!    record's receipt, else `bundle_malformed`.
 //! 9. A bundle's checkpoint is signed by the same accepted key and its proof
@@ -366,8 +366,9 @@ fn receive_checked(
     // From here on the record is signed by a key this node accepts.
     let reject = |reason: &str, exchange: Option<&str>| reject(logged_id, reason, exchange, true);
 
-    let mut servers: Vec<&str> = accepted.peers.iter().map(String::as_str).collect();
-    servers.push(sender);
+    // The server a half names must be a peer its key is bound to: the
+    // sender id is the pusher's own word, so it vouches for nothing.
+    let servers: Vec<&str> = accepted.peers.iter().map(String::as_str).collect();
     if let Some(reason) = claims_verdict(node.ledger_dir, half, &servers)? {
         let exchange = half
             .pointer("/effect/request_digest")
@@ -1418,6 +1419,31 @@ mod tests {
         assert_eq!(reply["reason"], REASON_SERVED_BY_MISMATCH);
         let logged = json_lines(dir.path(), REJECTED_PUSHES_FILENAME).unwrap();
         assert_eq!(logged.last().unwrap()["reason"], REASON_SERVED_BY_MISMATCH);
+    }
+
+    /// The server a served half names must be a peer its key is bound to:
+    /// pushing it under the named server's id does not make that true.
+    #[test]
+    fn a_served_half_naming_another_server_is_refused_under_that_servers_id() {
+        let corpus = corpus();
+        let lie = case(&corpus, "claims_served_by_other");
+        let dir = tempfile::tempdir().unwrap();
+        let own: String = lie["node"]["own_records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.to_string() + "\n")
+            .collect();
+        std::fs::write(dir.path().join("capsules.jsonl"), own).unwrap();
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let node = receiver(dir.path(), &key, lie, MAX_REJECTED_LOG_BYTES);
+        let push = &lie["pushes"][0];
+        let body = body_bytes(push);
+        let half: Value = serde_json::from_slice(&body).unwrap();
+        let named = named_server(&half).expect("the half names a server");
+        assert_ne!(Some(named.as_str()), push["sender"].as_str());
+        let reply = receive(&node, &body, Some(&named), NOW).unwrap();
+        assert_eq!(reply["reason"], REASON_SERVED_BY_MISMATCH, "{reply}");
     }
 
     /// An unknown key is refused before its record's bytes are checked:

@@ -21,7 +21,8 @@
   carries a controller declaration: a `controller-binding/0` record (Controller Binding v0,
   `same_controller_asserted` under `dual_signature/0`, inside its window) binding its key to a key
   known one of the other two ways, in a push bundle's or a signed request's `controller_binding`
-  member. A declaration that binds the sender's key to the receiving node's own key is never used.
+  member. A key that a carried declaration binds to the receiving node's own key is refused,
+  however else it is known. A served half's named server must be a peer its key is bound to.
   The `counterparty_half` citing record names the sender's key and how it was accepted
   (`sender_key_id`, `accepted_via`: `host_announced`, `operator_stopgap` or
   `controller_declaration`, with the binding's digest); nothing decides on it. A receiver on an

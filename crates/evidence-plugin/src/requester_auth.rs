@@ -271,10 +271,12 @@ pub fn form(map: &Map<String, Value>) -> Form {
 
 /// The nodes `key_id` is bound to: each peer whose key for this plugin the
 /// host announced as `key_id`, after checking that peer's binding against
-/// its node key (`peer_keys::announced`), and each entry of the operator's
-/// map (`CAPSULES_PEER_KEYS`) that gives `key_id`: the stopgap for a node
-/// with no stable peer id (D-34). An operator entry that gives an announced
-/// peer another key vetoes it, as for pushed records (`peer_keys::merged`).
+/// its node key (`peer_keys::announced`); or, when no host announced it,
+/// each entry of the operator's map (`CAPSULES_PEER_KEYS`) that gives
+/// `key_id`: the stopgap for a node with no stable peer id (D-34), which
+/// never adds a second name to a key a host binds. An operator entry that
+/// gives an announced peer another key vetoes it, as for pushed records
+/// (`peer_keys::merged`).
 ///
 /// A host binds a key to a node by the node's signature alone, without
 /// proof that the node holds the key, so a node can announce another's
@@ -287,42 +289,80 @@ pub fn claimants(
     key_id: &str,
 ) -> Vec<String> {
     let merged = crate::peer_keys::merged(configured, announced);
-    crate::peer_keys::peers_for_key_in(merged.as_deref(), key_id)
+    let peers = crate::peer_keys::peers_for_key_in(merged.as_deref(), key_id);
+    let hosted: Vec<String> = peers
+        .iter()
+        .filter(|peer| announced.get(*peer).map(String::as_str) == Some(key_id))
+        .cloned()
+        .collect();
+    if hosted.is_empty() {
+        peers
+    } else {
+        hosted
+    }
+}
+
+/// Who a request's key is, for [`check`]: the nodes it is bound to, and the
+/// key whose replay budget its nonces draw on.
+struct Claimed {
+    nodes: Vec<String>,
+    /// The request's own key, or, for a key a declaration binds, the
+    /// declaration's anchor: an anchor's holder can bind any number of new
+    /// keys, and they share its [`MAX_NONCES_PER_KEY`].
+    replay_key: String,
 }
 
 /// [`claimants`] of `key_id`, or, when it has none, the claimants of the key
 /// a controller declaration carried in the request (`controller_binding`,
 /// covered by its signature) binds it to, when that binding applies at
-/// `now` (`peer_keys::accepted_via`). A declaration anchored on this node's
-/// own key (the one the registry gives `own_node`) binds nothing.
+/// `now` (`peer_keys::accepted_via`). A declaration that binds `key_id` to
+/// this node's own key ([`Keys::own_key`], else the key the registry gives
+/// `own_node`) makes it bound to no node, even one a host announced: it is
+/// this node's side, never another node asking.
 fn request_claimants(
     keys: Keys<'_>,
     map: &Map<String, Value>,
     key_id: &str,
     now: UtcTime,
     own_node: Option<&str>,
-) -> Vec<String> {
-    let direct = claimants(keys.announced, keys.configured, key_id);
-    if !direct.is_empty() {
-        return direct;
-    }
-    let Some(declaration) = map.get(crate::controller_binding::MEMBER) else {
-        return Vec::new();
+) -> Claimed {
+    let own = |nodes: Vec<String>| Claimed {
+        nodes,
+        replay_key: key_id.to_string(),
     };
+    let declaration = map.get(crate::controller_binding::MEMBER);
     let merged = crate::peer_keys::merged(keys.configured, keys.announced);
-    let own_key = own_node
-        .and_then(|node| crate::peer_keys::announced_key_in(merged.as_deref(), node))
+    let own_key = keys
+        .own_key
+        .map(str::to_string)
+        .or_else(|| {
+            own_node.and_then(|node| crate::peer_keys::announced_key_in(merged.as_deref(), node))
+        })
         .unwrap_or_default();
-    crate::peer_keys::accepted_via(
+    if crate::peer_keys::binds_to_own(declaration, key_id, &own_key, Some(now)) {
+        return own(Vec::new());
+    }
+    let direct = claimants(keys.announced, keys.configured, key_id);
+    if !direct.is_empty() || declaration.is_none() {
+        return own(direct);
+    }
+    match crate::peer_keys::accepted_via(
         keys.configured,
         keys.announced,
         key_id,
         &own_key,
-        Some(declaration),
+        declaration,
         Some(now),
-    )
-    .map(|accepted| accepted.peers)
-    .unwrap_or_default()
+    ) {
+        Some(crate::peer_keys::Accepted {
+            via: crate::peer_keys::AcceptedVia::ControllerDeclaration { anchor_key, .. },
+            peers,
+        }) => Claimed {
+            nodes: peers,
+            replay_key: anchor_key,
+        },
+        _ => own(Vec::new()),
+    }
 }
 
 /// What a key's [`claimants`] and a request's stated id make of who asks.
@@ -428,6 +468,9 @@ pub struct Keys<'a> {
     pub announced: &'a BTreeMap<String, String>,
     /// `CAPSULES_PEER_KEYS`, raw.
     pub configured: Option<&'a str>,
+    /// This node's own key (`key_id`), never a declaration's anchor. `None`:
+    /// the key the registry gives this node's id.
+    pub own_key: Option<&'a str>,
 }
 
 /// The requester a signed request proved to be.
@@ -535,19 +578,29 @@ pub fn check(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|id| !id.is_empty());
-    let claimants = request_claimants(keys, map, key_id, now, own_node);
+    let Claimed {
+        nodes: claimants,
+        replay_key,
+    } = request_claimants(keys, map, key_id, now, own_node);
     let nonce = map.get("nonce").and_then(Value::as_str).unwrap_or_default();
-    let bound = !claimants.is_empty();
-    let replay_checked = match replay.first_use(key_id, nonce, deadline.seconds, now.seconds, bound)
-    {
-        Use::First => true,
-        Use::Unchecked => false,
-        Use::Replayed => {
-            return Err(Failure::Replayed {
-                key_id: key_id.to_string(),
-            })
-        }
+    // A key a declaration binds draws on its anchor's budget, its nonces
+    // kept apart from the anchor's own and from other bound keys'.
+    let nonce = if replay_key == key_id {
+        nonce.to_string()
+    } else {
+        format!("{key_id}/{nonce}")
     };
+    let bound = !claimants.is_empty();
+    let replay_checked =
+        match replay.first_use(&replay_key, &nonce, deadline.seconds, now.seconds, bound) {
+            Use::First => true,
+            Use::Unchecked => false,
+            Use::Replayed => {
+                return Err(Failure::Replayed {
+                    key_id: key_id.to_string(),
+                })
+            }
+        };
     let node_id = match bound_node(&claimants, stated) {
         Binding::Node(node_id) => node_id,
         Binding::Mismatch(node_id) => {
@@ -655,7 +708,7 @@ pub fn proves_principal(
         && audience_matches(map.get(AUDIENCE).and_then(Value::as_str), own_node)
         && matches!(
             bound_node(
-                &request_claimants(keys, map, &key_id, now, own_node),
+                &request_claimants(keys, map, &key_id, now, own_node).nodes,
                 stated
             ),
             Binding::Node(_)
@@ -796,6 +849,7 @@ mod tests {
         let keys = Keys {
             announced: &announced,
             configured: None,
+            own_key: None,
         };
         for signed_for in Channel::ALL {
             // One body every channel reads: a fetch's capsule_id, an
@@ -907,6 +961,87 @@ mod tests {
         assert_eq!(form(&audience_not_text), Form::Malformed);
     }
 
+    /// A key a declaration binds asks as its anchor's nodes and draws on its
+    /// anchor's nonce budget. A declaration binding a key to this node's own
+    /// key, however this node's key is listed, leaves it bound to no node.
+    #[test]
+    fn a_declared_key_shares_its_anchors_budget_and_never_anchors_on_this_node() {
+        let now = evidence_request::time::parse_utc("2026-10-28T00:00:00Z").unwrap();
+        let (anchor, member, own) = (key(1), key(2), key(3));
+        let hex_of = |k: &SigningKey| hex::encode(k.verifying_key().to_bytes());
+        let (ka, km, ko) = (hex_of(&anchor), hex_of(&member), hex_of(&own));
+        let declared = |a: &SigningKey| {
+            let mut map = Map::new();
+            map.insert(
+                crate::controller_binding::MEMBER.into(),
+                crate::controller_binding::bind_for_test(
+                    a,
+                    &member,
+                    "2026-10-01T00:00:00Z",
+                    "2027-10-01T00:00:00Z",
+                ),
+            );
+            map
+        };
+        let announced = BTreeMap::from([("node-a".to_string(), ka.clone())]);
+        let keys = Keys {
+            announced: &announced,
+            configured: None,
+            own_key: Some(&ko),
+        };
+        let claimed = request_claimants(keys, &declared(&anchor), &km, now, Some("self"));
+        assert_eq!(claimed.nodes, ["node-a"]);
+        assert_eq!(claimed.replay_key, ka, "the anchor's budget");
+        let plain = request_claimants(keys, &Map::new(), &ka, now, Some("self"));
+        assert_eq!(plain.replay_key, ka);
+
+        // This node's key listed under a label that is not its id.
+        let labelled = format!(r#"{{"my-label": "{ko}"}}"#);
+        let keys = Keys {
+            announced: &BTreeMap::new(),
+            configured: Some(&labelled),
+            own_key: Some(&ko),
+        };
+        assert!(
+            request_claimants(keys, &declared(&own), &km, now, Some("self"))
+                .nodes
+                .is_empty()
+        );
+        // A key a host announced, declared one controller with this node.
+        let both = BTreeMap::from([("node-m".to_string(), km.clone())]);
+        let keys = Keys {
+            announced: &both,
+            configured: None,
+            own_key: Some(&ko),
+        };
+        assert_eq!(
+            request_claimants(keys, &Map::new(), &km, now, None).nodes,
+            ["node-m"]
+        );
+        assert!(request_claimants(keys, &declared(&own), &km, now, None)
+            .nodes
+            .is_empty());
+    }
+
+    /// Fresh keys an anchor's holder binds cannot widen its nonce budget.
+    #[test]
+    fn declared_keys_cannot_widen_the_anchors_nonce_budget() {
+        let cache = ReplayCache::default();
+        let anchor = "aa".repeat(32);
+        for i in 0..MAX_NONCES_PER_KEY {
+            let nonce = format!("k{i}/n");
+            assert_eq!(
+                cache.first_use(&anchor, &nonce, 2_000, 1_000, true),
+                Use::First
+            );
+        }
+        assert_eq!(
+            cache.first_use(&anchor, "fresh-key/n", 2_000, 1_000, true),
+            Use::Replayed,
+            "the anchor's budget is spent, whichever key asks"
+        );
+    }
+
     #[test]
     fn a_key_binds_through_the_host_or_the_operators_stopgap_and_a_disagreeing_entry_vetoes() {
         let k = "ab".repeat(32);
@@ -917,6 +1052,12 @@ mod tests {
             claimants(&BTreeMap::new(), Some(&configured_only), &k),
             ["muse-vm"],
             "the stopgap names a node with no stable peer id"
+        );
+        let both = format!(r#"{{"muse-vm": "{k}", "node-a": "{k}"}}"#);
+        assert_eq!(
+            claimants(&announced, Some(&both), &k),
+            ["node-a"],
+            "a label never adds a second name to a key a host binds"
         );
         let disagrees = format!(r#"{{"node-a": "{}"}}"#, "cd".repeat(32));
         assert!(claimants(&announced, Some(&disagrees), &k).is_empty());
@@ -1091,6 +1232,7 @@ mod tests {
         let keys = Keys {
             announced: &announced,
             configured: None,
+            own_key: None,
         };
         let proves = |map: &Map<String, Value>, own: Option<&str>| {
             proves_principal(Channel::EvidenceRequest, map, now, keys, own)

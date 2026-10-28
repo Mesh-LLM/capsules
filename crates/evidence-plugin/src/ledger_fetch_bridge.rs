@@ -192,11 +192,13 @@ async fn bridge_inbound_ledger_fetch_stream(
     let now = crate::evidence_answer::now_utc();
     let announced = crate::peer_keys::announced::snapshot();
     let configured = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
+    let own_key = hex::encode(capsules.public_key());
     let door = Door {
         now: &now,
         keys: crate::requester_auth::Keys {
             announced: &announced,
             configured: configured.as_deref(),
+            own_key: Some(&own_key),
         },
         replay: crate::requester_auth::replay_cache(),
         own_node: own_node.as_deref(),
@@ -502,6 +504,7 @@ mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay,
             own_node: Some(RESPONDER_NODE),

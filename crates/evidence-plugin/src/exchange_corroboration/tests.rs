@@ -105,6 +105,7 @@ fn ask_as(
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &ReplayCache::default(),
             node_id: Some(RESPONDER_NODE),

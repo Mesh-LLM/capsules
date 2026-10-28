@@ -1032,6 +1032,7 @@ pub(crate) mod tests {
                 keys: Keys {
                     announced: &announced,
                     configured: None,
+                    own_key: None,
                 },
                 replay,
                 node_id: Some(RESPONDER),
@@ -1250,6 +1251,7 @@ pub(crate) mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: Some(RESPONDER),
@@ -1277,6 +1279,7 @@ pub(crate) mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: Some(RESPONDER),
@@ -1729,6 +1732,7 @@ pub(crate) mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: Some(RESPONDER),
@@ -1878,6 +1882,7 @@ pub(crate) mod tests {
                 keys: Keys {
                     announced,
                     configured,
+                    own_key: None,
                 },
                 replay: &ReplayCache::default(),
                 node_id: Some(RESPONDER),
@@ -2071,6 +2076,7 @@ pub(crate) mod tests {
                     keys: Keys {
                         announced: &announced,
                         configured: None,
+                        own_key: None,
                     },
                     replay: &ReplayCache::default(),
                     node_id: Some(RESPONDER),
@@ -2280,6 +2286,7 @@ pub(crate) mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: Some(RESPONDER),
@@ -2325,6 +2332,7 @@ pub(crate) mod tests {
                 keys: Keys {
                     announced: &announced,
                     configured: None,
+                    own_key: None,
                 },
                 replay: &replay,
                 node_id: Some(RESPONDER),
@@ -2515,6 +2523,7 @@ pub(crate) mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: None,
@@ -2639,6 +2648,7 @@ pub(crate) mod tests {
                     keys: Keys {
                         announced: &announced,
                         configured: None,
+                        own_key: None,
                     },
                     replay: &replay,
                     node_id: Some(RESPONDER),
@@ -3067,6 +3077,7 @@ pub(crate) mod tests {
             keys: Keys {
                 announced: &announced,
                 configured: None,
+                own_key: None,
             },
             replay: &replay,
             node_id: Some(RESPONDER),

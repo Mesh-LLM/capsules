@@ -228,6 +228,7 @@ fn proves_principal(
     adjudicate: bool,
     now: &str,
     own_node: Option<&str>,
+    own_key: &str,
 ) -> bool {
     let (Some(serde_json::Value::Object(map)), Some(now)) =
         (parsed, evidence_request::time::parse_utc(now))
@@ -248,6 +249,7 @@ fn proves_principal(
         crate::requester_auth::Keys {
             announced: &announced,
             configured: configured.as_deref(),
+            own_key: Some(own_key),
         },
         own_node,
     )
@@ -310,7 +312,13 @@ async fn answer_in_process(
         // The pool is chosen by what the request proves; classifying costs a
         // signature check, so it is skipped when both pools are full.
         let permit = IN_FLIGHT.get_or_init(InFlight::new).try_acquire_with(|| {
-            proves_principal(parsed.as_ref(), adjudicate, &now, own_node.as_deref())
+            proves_principal(
+                parsed.as_ref(),
+                adjudicate,
+                &now,
+                own_node.as_deref(),
+                &hex::encode(capsules.public_key()),
+            )
         });
         // Past the in-flight cap, an adjudicate request is declined like any
         // other (below), before any work on it.
@@ -324,6 +332,7 @@ async fn answer_in_process(
         }
         let announced = crate::peer_keys::announced::snapshot();
         let configured = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
+        let own_key = hex::encode(capsules.public_key());
         let responder = crate::evidence_answer::Responder {
             ledger_dir: capsules.ledger_dir(),
             signing_key: capsules.signing_key(),
@@ -334,6 +343,7 @@ async fn answer_in_process(
             keys: crate::requester_auth::Keys {
                 announced: &announced,
                 configured: configured.as_deref(),
+                own_key: Some(&own_key),
             },
             replay: crate::requester_auth::replay_cache(),
             node_id: own_node.as_deref(),
@@ -464,10 +474,12 @@ fn referee_answer(
     };
     let announced = crate::peer_keys::announced::snapshot();
     let configured = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
+    let own_key = hex::encode(capsules.public_key());
     let asked = crate::referee::service::Asked {
         keys: crate::requester_auth::Keys {
             announced: &announced,
             configured: configured.as_deref(),
+            own_key: Some(&own_key),
         },
         replay: crate::requester_auth::replay_cache(),
         own_node,

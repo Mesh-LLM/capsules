@@ -243,14 +243,16 @@ a key from any of three places:
   mapping a name to a raw Ed25519 public key in hex. The name is a peer's id,
   or any label for a node with no stable id. A node writes its own id to
   `<data dir>/self-peer-id` and its public key to
-  `<data dir>/keys/node-key.pub.pem`. This is a stopgap: the record of what
-  was accepted says so (`accepted_via: operator_stopgap`), and it binds the
-  key to nothing.
+  `<data dir>/keys/node-key.pub.pem`. This is a stopgap: it rests on your
+  word alone, with no host or key vouching for it, and the record of what
+  was accepted says so (`accepted_via: operator_stopgap`). A key a host
+  announces is known by the host's peer id, not by your label.
 - **A controller declaration** the sender carries: a `controller-binding/0`
   record (Controller Binding v0) that both keys signed, binding the sender's
   key to a key known one of the other two ways. Only `same_controller_asserted`
-  under `dual_signature/0` is used, and only inside its window. A declaration
-  that binds the sender's key to this node's own key is never used.
+  under `dual_signature/0` is used, and only inside its window. A key that a
+  carried declaration binds to this node's own key is refused, however else
+  it is known: it is this node's side, never a counterparty.
 
 If the host and `CAPSULES_PEER_KEYS` give a peer different keys, nothing
 signed by either key for that peer verifies until you remove the stale entry.
