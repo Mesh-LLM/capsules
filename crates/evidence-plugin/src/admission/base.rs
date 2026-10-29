@@ -4,7 +4,8 @@
 //! - **identity**: the peer's history card verifies under the record key it
 //!   announced, with that key as its responder.
 //! - **key age**: the card's first checkpoint is at least [`KEY_AGE_DAYS`]
-//!   old. A checkpoint's time counts as stated, witnessed or not.
+//!   old. A checkpoint's time counts as stated, witnessed or not, so a peer
+//!   can backdate it: a `pass` here is not proof of age.
 //! - **performed-and-settled**: this node's own book holds at least
 //!   [`MIN_SETTLED`] exchange with the peer whose book reads `settled`.
 //! - **disputes**: no adverse adjudication about the peer in the last

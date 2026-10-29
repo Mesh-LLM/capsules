@@ -322,7 +322,8 @@ from its history card and this node's own book. The rows decide nothing: only yo
 NO. They record:
 
 - **identity**: the card verifies under the record key the peer announced;
-- **key age**: the card's first checkpoint is at least 7 days old;
+- **key age**: the card's first checkpoint is at least 7 days old. That time is the peer's own
+  statement, witnessed or not, so a peer can backdate it: `pass` is not proof of age;
 - **performed and settled**: this node has at least one settled exchange with the peer;
 - **disputes**: no referee has ruled against the peer (`contradicted`) in the last 30 days, counting
   only verdicts this node asked for or issued;
