@@ -1339,12 +1339,13 @@ mod tests {
         assert!(requested_adjudication("peer", &one_half).is_none());
     }
 
-    /// A recorded ask, its window closing `window` from now, on a fresh
-    /// ledger.
+    /// What checking a reply finds with no key announced for the peer.
     fn unverified(_: &[u8], _: &serde_json::Value) -> serde_json::Value {
         serde_json::json!({"state": "no_announced_key"})
     }
 
+    /// A recorded ask, its window closing `window` from now, on a fresh
+    /// ledger.
     fn recorded_ask(
         window: Duration,
     ) -> (
