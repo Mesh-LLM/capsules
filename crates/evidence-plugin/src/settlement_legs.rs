@@ -971,10 +971,12 @@ mod tests {
     /// deposit covers the bill. Both sides still seal: the payer its terms,
     /// payer_observed and delivered legs, the provider its payee_observed leg
     /// citing the payer's deposit terms leg, whether the exchange event
-    /// naming the provider comes before or after the accounted bill.
+    /// naming the provider comes before or after the accounted bill, and
+    /// whether the bill equals the deposit or is below it.
     #[test]
     fn a_deposit_that_covers_the_bill_seals_both_sides() {
-        for exchange_first in [false, true] {
+        for (exchange_first, bill_msat) in [(false, 1000), (true, 1000), (false, 600), (true, 600)]
+        {
             let (a, b) = dirs();
             let pair = Pair::open(a.path(), b.path());
             pair.provider_event(Phase::InputInvoiceIssued, 0, INPUT, &[]);
@@ -989,12 +991,17 @@ mod tests {
                     Some(RESPONSE),
                 )
             };
+            let accounted = || {
+                pair.payer
+                    .settlement_legs()
+                    .on_lifecycle(&pair.payer, &accounted_bill("ex", bill_msat))
+            };
             let pushes = if exchange_first {
                 let pushes = exchange();
-                pair.payer_accounted();
+                accounted();
                 pushes
             } else {
-                pair.payer_accounted();
+                accounted();
                 exchange()
             };
             assert_eq!(pushes.len(), 1, "only the deposit's terms leg is pushed");
@@ -1004,7 +1011,7 @@ mod tests {
             assert_eq!(
                 kinds(&payer),
                 ["terms", "payer_observed", "delivered"],
-                "exchange first: {exchange_first}"
+                "exchange first: {exchange_first}, bill: {bill_msat}"
             );
             assert_eq!(kinds(&provider), ["payee_observed"]);
             let deposit_terms = &payer[0]["capsule_id"];
