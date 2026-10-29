@@ -374,8 +374,8 @@ fn a_signed_refusal_is_checked_against_the_commitment_the_ask_recorded() {
         &capsules,
         &asked.record_id,
         &digest_of(&sent),
-        &json!({"reason": "not_authorized"}),
-        &json!({"state": "refusal", "reason": "not_authorized"}),
+        &json!({"reason": "no_such_subject"}),
+        &json!({"state": "refusal", "reason": "no_such_subject"}),
         "2026-10-29T12:00:02Z",
     )
     .unwrap();

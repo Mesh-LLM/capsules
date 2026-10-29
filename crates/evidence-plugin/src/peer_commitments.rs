@@ -19,11 +19,12 @@
 //! - `MATCH` when the pinned policy allows the refusal: its reason blames
 //!   the request, or the commitment does not answer the subject form;
 //! - `MISMATCH` when the policy answers it to a stranger (`stranger_safe`)
-//!   and the refusal withholds it (`not_authorized`,
-//!   `derivation_unsupported`, `no_such_subject`);
-//! - `NOT_CHECKED` otherwise: a `policy_declined`, which honest responders
-//!   also send for load and size limits, or an answer that depends on who
-//!   asks, which the policy alone does not settle.
+//!   and the refusal withholds it (`derivation_unsupported`,
+//!   `no_such_subject`);
+//! - `NOT_CHECKED` otherwise: a `policy_declined` or `not_authorized`, which
+//!   honest responders also send for load, size and signature limits, or an
+//!   answer that depends on who asks, which the policy alone does not
+//!   settle.
 
 use std::path::{Path, PathBuf};
 
@@ -36,19 +37,21 @@ use crate::commitment::{self, Signed};
 /// The directory under the data directory.
 pub const DIR: &str = "peer-commitments";
 
-/// The refusal reasons that withhold what the policy may promise:
-/// withheld from this asker, a derivation not offered, or a subject said
-/// not to exist. `policy_declined` is not one of them: an honest responder
-/// also sends it for load and size limits (a full stranger pool, too many
-/// checkpoints, an answer too large), which no policy promises past, so it
-/// reads `NOT_CHECKED`. The rest (`request_malformed`, `deadline_unmet`,
+/// The refusal reasons that can only mean the peer withheld what the policy
+/// may promise: a derivation not offered, or a subject said not to exist.
+/// `policy_declined` and `not_authorized` are not among them: an honest
+/// responder also sends them for reasons no policy promises past. It sends
+/// `policy_declined` for load and size limits (a full stranger pool, too
+/// many checkpoints, an answer too large) and `not_authorized` when a
+/// signed request fails a check (its audience before the responder knows
+/// its own id, a deadline too far ahead, a full replay cache). So both read
+/// `NOT_CHECKED`. The rest (`request_malformed`, `deadline_unmet`,
 /// `coverage_unsatisfiable`, `retention_expired`) blame the request and
 /// read `MATCH`.
-const WITHHOLDING_REASONS: [Reason; 3] = [
-    Reason::NotAuthorized,
-    Reason::DerivationUnsupported,
-    Reason::NoSuchSubject,
-];
+const WITHHOLDING_REASONS: [Reason; 2] = [Reason::DerivationUnsupported, Reason::NoSuchSubject];
+
+/// Refusal reasons the wire cannot tell apart from an honest limit.
+const AMBIGUOUS_REASONS: [Reason; 2] = [Reason::PolicyDeclined, Reason::NotAuthorized];
 
 fn path(data_dir: &Path, peer_id: &str) -> Option<PathBuf> {
     // A mesh id is lowercase hex: nothing else names a file here.
@@ -103,10 +106,10 @@ pub fn policy_check(pinned: Option<&Value>, request: &Value, reason: &str) -> Va
         return json!({"status": "NOT_CHECKED", "why": "no commitment held for the peer"});
     };
     let status = |status: &str, why: &str| json!({"status": status, "why": why, "policy_digest": pinned["policy_digest"]});
-    if reason == Reason::PolicyDeclined.token() {
+    if AMBIGUOUS_REASONS.iter().any(|r| r.token() == reason) {
         return status(
             "NOT_CHECKED",
-            "policy_declined is also sent for load and size limits",
+            "an honest responder also sends this reason for limits no policy promises past",
         );
     }
     let withholds = WITHHOLDING_REASONS.iter().any(|r| r.token() == reason);

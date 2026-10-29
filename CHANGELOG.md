@@ -15,8 +15,9 @@
   records the commitment held for the peer, and a signed refusal is checked against the policy
   it pins (`policy_check`: `MISMATCH` when the policy answers it to any asker and the refusal
   withholds it, `MATCH` when the refusal blames the request or the policy does not answer that
-  subject, `NOT_CHECKED` with no commitment held, for `policy_declined`, which also covers load
-  and size limits, or where the answer depends on who asks). Mesh-LLM/capsules-plugin#56.
+  subject, `NOT_CHECKED` with no commitment held, for `policy_declined` or `not_authorized`,
+  which honest responders also send for load, size and signature limits, or where the answer
+  depends on who asks). Mesh-LLM/capsules-plugin#56.
 - **`settlement_check` and the Lightning adapter declaration (loop step 6).** The new read-only tool
   checks the Lightning settlement records this node holds for a paid exchange, under
   `adapters/lightning-v0.md`. Each check (object held, invoice join, amount, finality, preimage,

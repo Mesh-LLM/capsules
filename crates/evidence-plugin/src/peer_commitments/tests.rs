@@ -57,11 +57,7 @@ fn withholding_what_the_policy_gives_any_asker_is_a_mismatch() {
     let mut card_over_checkpoints = checkpoints.clone();
     card_over_checkpoints["derivation"] = json!("history_card/1");
     for request in [history_card(), checkpoints, card_over_checkpoints] {
-        for reason in [
-            "not_authorized",
-            "derivation_unsupported",
-            "no_such_subject",
-        ] {
+        for reason in ["derivation_unsupported", "no_such_subject"] {
             let check = policy_check(Some(&pinned), &request, reason);
             assert_eq!(check["status"], "MISMATCH", "{request} {reason}: {check}");
             assert_eq!(check["policy_digest"], pinned["policy_digest"]);
@@ -70,12 +66,15 @@ fn withholding_what_the_policy_gives_any_asker_is_a_mismatch() {
 }
 
 #[test]
-fn policy_declined_is_not_checked_since_load_and_size_limits_send_it_too() {
+fn a_reason_honest_limits_also_send_is_not_checked() {
     let (_dir, pinned) = held();
-    assert_eq!(
-        policy_check(Some(&pinned), &history_card(), "policy_declined")["status"],
-        "NOT_CHECKED"
-    );
+    for reason in ["policy_declined", "not_authorized"] {
+        assert_eq!(
+            policy_check(Some(&pinned), &history_card(), reason)["status"],
+            "NOT_CHECKED",
+            "{reason}"
+        );
+    }
 }
 
 #[test]
@@ -98,7 +97,7 @@ fn a_refusal_the_policy_allows_is_a_match() {
     // `standard_history/1` is answered through `full_history`, but the
     // default policy does not give it to a stranger.
     assert_eq!(
-        policy_check(Some(&pinned), &standard, "not_authorized")["status"],
+        policy_check(Some(&pinned), &standard, "no_such_subject")["status"],
         "NOT_CHECKED"
     );
 }
@@ -113,14 +112,14 @@ fn a_refusal_of_a_subject_form_the_commitment_does_not_answer_is_a_match() {
     let pinned = pinned(dir.path(), NODE).unwrap();
     let record = json!({"subject": {"record": "a".repeat(64)}, "coverage": {"min_freshness": 1}});
     assert_eq!(
-        policy_check(Some(&pinned), &record, "not_authorized")["status"],
+        policy_check(Some(&pinned), &record, "no_such_subject")["status"],
         "MATCH"
     );
 }
 
 #[test]
 fn without_a_commitment_a_refusal_is_not_checked_never_a_mismatch() {
-    let check = policy_check(None, &history_card(), "not_authorized");
+    let check = policy_check(None, &history_card(), "no_such_subject");
     assert_eq!(check["status"], "NOT_CHECKED");
     assert_eq!(check.get("policy_digest"), None);
 }
@@ -130,7 +129,7 @@ fn whether_a_counterparty_is_answered_is_not_checked() {
     let (_dir, pinned) = held();
     let record = json!({"subject": {"record": "a".repeat(64)}, "coverage": {"min_freshness": 1}});
     assert_eq!(
-        policy_check(Some(&pinned), &record, "not_authorized")["status"],
+        policy_check(Some(&pinned), &record, "no_such_subject")["status"],
         "NOT_CHECKED"
     );
 }
