@@ -1849,6 +1849,37 @@ impl CapsuleState {
         &self,
         block: serde_json::Map<String, Value>,
     ) -> anyhow::Result<EmittedCapsule> {
+        self.emit_local_block(
+            "admission-decision",
+            "n/a-admission-decision",
+            crate::admission::BLOCK,
+            block,
+        )
+    }
+
+    /// Seal one record of this node's book of asks (`crate::ask_book`):
+    /// a local record whose one block is the evidencebook entry.
+    pub fn emit_ask_record(
+        &self,
+        block: serde_json::Map<String, Value>,
+    ) -> anyhow::Result<EmittedCapsule> {
+        self.emit_local_block(
+            "ask-record",
+            "n/a-ask-record",
+            crate::ask_book::BLOCK,
+            block,
+        )
+    }
+
+    /// Seal a local record whose one block is `block` under `block_name`,
+    /// chained onto this node's head.
+    fn emit_local_block(
+        &self,
+        kind: &str,
+        model_id: &str,
+        block_name: &str,
+        block: serde_json::Map<String, Value>,
+    ) -> anyhow::Result<EmittedCapsule> {
         let mut ledger = self
             .ledger
             .lock()
@@ -1860,14 +1891,14 @@ impl CapsuleState {
                 relation: crate::producer::capsule::CHAIN_RELATION_FOLLOWS.to_string(),
             });
         let action_id = format!(
-            "mesh-poc/admission-decision/{}",
+            "mesh-poc/{kind}/{}",
             crate::producer::capsule::fresh_store_nonce()
         );
         let mut blocks = serde_json::Map::new();
-        blocks.insert(crate::admission::BLOCK.into(), Value::Object(block));
+        blocks.insert(block_name.into(), Value::Object(block));
         let capsule = crate::producer::capsule::seal_local_record(
             action_id,
-            "n/a-admission-decision",
+            model_id,
             blocks,
             None,
             chain,

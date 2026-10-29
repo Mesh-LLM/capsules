@@ -515,7 +515,8 @@ async fn requester_tool_call_round_trips_a_real_dialed_stream() {
         request_bytes
     });
 
-    let request = serde_json::json!({"subject": {"kind": "record", "capsule_id": "aa"}});
+    let request =
+        serde_json::json!({"subject": {"checkpoints": null}, "coverage": {"min_freshness": 1}});
     let response_envelope = harness
         .call_mesh_evidence_tool(
             "aa".repeat(32).as_str(),
@@ -628,7 +629,7 @@ async fn requester_reports_a_clean_failure_when_the_peer_never_answers() {
     let response_envelope = harness
         .call_mesh_evidence_tool(
             "bb".repeat(32).as_str(),
-            serde_json::json!({}),
+            serde_json::json!({"subject": {"checkpoints": null}, "coverage": {"min_freshness": 1}}),
             None,
             |_request| proto::OpenMeshStreamResponse {
                 stream_id: "test".to_string(),
@@ -685,7 +686,7 @@ async fn tampered_bytes_in_flight_pass_through_unvalidated_and_unrepaired() {
     let response_envelope = harness
         .call_mesh_evidence_tool(
             "cc".repeat(32).as_str(),
-            serde_json::json!({}),
+            serde_json::json!({"subject": {"checkpoints": null}, "coverage": {"min_freshness": 1}}),
             Some(false),
             |_request| proto::OpenMeshStreamResponse {
                 stream_id: "test".to_string(),

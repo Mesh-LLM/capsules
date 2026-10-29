@@ -120,6 +120,11 @@ in `crates/evidence-plugin/src/two_node_e2e.rs` run over what each node wrote:
   carry (`src/referee_e2e_setup.rs`). The live trigger, which assembles a
   pair from real twin traffic and chooses the referee, needs three serving
   nodes and is not run here.
+- each ask is sealed before it is sent (loop step 7): the requester's
+  history-card ask is an `evidence_request` record ahead of the
+  `evidence_response` citing it, which verified for exactly the sealed
+  request's digest; and an ask to a node not on the mesh ends, once its
+  window closes, in a `recorded_absence` citing that request.
 - the real-host tests (`tests/host_runtime_e2e.rs`, see
   [docs/REAL-HOST-VERIFICATION.md](docs/REAL-HOST-VERIFICATION.md)) pass, and
   fail on a build that serves a blocked model.

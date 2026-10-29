@@ -773,13 +773,14 @@ pub const HISTORICAL_REFERENCE_OPERATION: &str = "historical_reference";
 pub async fn handle_historical_reference(
     args: RunArgs,
     context: &mut mesh_llm_plugin::PluginContext<'_>,
-    ledger_dir: std::path::PathBuf,
+    capsules: std::sync::Arc<crate::capsule_emit::CapsuleState>,
 ) -> mesh_llm_plugin::PluginResult<Value> {
+    let ledger_dir = capsules.ledger_dir().to_path_buf();
     let plan = plan(args).map_err(mesh_llm_plugin::PluginError::invalid_params)?;
     let registry = crate::peer_keys::registry();
     let x = match &plan.join_key {
         JoinKey::ClientNonce(key) => {
-            let reply = ask(context, &plan.x_peer, key, registry.as_deref()).await;
+            let reply = ask(context, &capsules, &plan.x_peer, key, registry.as_deref()).await;
             after_x(&plan, &reply)
         }
         JoinKey::Unjoinable(why) => Err(Outcome::NotJoinable { why: why.clone() }),
@@ -787,7 +788,7 @@ pub async fn handle_historical_reference(
     let mut y_replies = Vec::new();
     if let (Ok(_), JoinKey::ClientNonce(key)) = (&x, &plan.join_key) {
         for y in &plan.ys {
-            y_replies.push(ask(context, &y.peer_id, key, registry.as_deref()).await);
+            y_replies.push(ask(context, &capsules, &y.peer_id, key, registry.as_deref()).await);
         }
     }
     let result = finish(&plan, x, &y_replies);
@@ -800,20 +801,24 @@ pub async fn handle_historical_reference(
 /// One ask of `peer` for its halves under `key`, as a [`Reply`].
 async fn ask(
     context: &mut mesh_llm_plugin::PluginContext<'_>,
+    capsules: &std::sync::Arc<crate::capsule_emit::CapsuleState>,
     peer: &str,
     key: &str,
     registry: Option<&str>,
 ) -> Reply {
     use crate::mesh_evidence_bridge::{send_evidence_request, verifying_key, SendError};
-    match send_evidence_request(context, peer, &request_for(key)).await {
-        Ok((sent, answer)) => Reply::Answered {
-            sent,
-            answer,
+    match send_evidence_request(context, peer, &request_for(key), Some(capsules)).await {
+        Ok(answered) => Reply::Answered {
+            sent: answered.sent,
+            answer: answered.answer,
             key: crate::peer_keys::announced_key_in(registry, peer)
                 .and_then(|key_id| verifying_key(&key_id))
                 .map(Box::new),
             witness_keys: crate::checkpoint_cadence::active_witness_keys(),
         },
+        Err(SendError::NotRecorded(e)) => {
+            Reply::Nothing(format!("not sent: the request could not be recorded: {e}"))
+        }
         Err(SendError::NotOpened(e)) => Reply::Nothing(format!("could not reach the peer: {e}")),
         Err(SendError::NoAnswer(e)) => Reply::Nothing(format!("no answer by the deadline{e}")),
         Err(SendError::Malformed(e)) => Reply::Malformed(format!("not an answer: {e}")),

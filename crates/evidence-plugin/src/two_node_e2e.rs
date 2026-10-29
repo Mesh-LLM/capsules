@@ -8,6 +8,7 @@
 //!
 //! ```sh
 //! E2E_REQUESTER_DIR=<copy> E2E_PROVIDER_DIR=<copy> E2E_EXCHANGES=<n> \
+//!   E2E_JOIN_DIR=<run dir> E2E_UNANSWERED_PEER=<id> \
 //!   cargo test --locked --bin capsules -- --ignored --test-threads=1 two_node_e2e::
 //! ```
 //!
@@ -889,4 +890,109 @@ fn the_referees_verdict_is_sealed_on_both_nodes() {
             "{twin} is {bucket}: {verdicts:?}"
         );
     }
+}
+
+/// The requester's book of asks (`crate::ask_book`), in ledger order: each
+/// record's id and its entry.
+fn asks(node: &Node) -> Vec<(String, Value)> {
+    node.ledger_lines()
+        .into_iter()
+        .filter_map(|r| {
+            let entry = r
+                .pointer("/model_attestation/compute_attestation")?
+                .get(crate::ask_book::BLOCK)?
+                .clone();
+            Some((r["capsule_id"].as_str()?.to_string(), entry))
+        })
+        .collect()
+}
+
+fn cites(entry: &Value, request_id: &str) -> bool {
+    entry["links"].as_array().is_some_and(|links| {
+        links
+            .iter()
+            .any(|l| l["type"] == "cites" && l["target"] == request_id)
+    })
+}
+
+/// Loop step 7, Ask. The history card ask was sealed as `evidence_request`
+/// before its answer: the request record comes first in the requester's
+/// chain, and the response citing it verified as an artifact the provider
+/// signed for exactly the sealed request's digest, so the bytes sent were
+/// the bytes sealed. The ask nobody answered ended in a `recorded_absence`
+/// citing its request, its window at least the minimum long.
+#[test]
+#[ignore = "needs the data directories of a real two-node run (scripts/e2e-two-node.sh)"]
+fn each_ask_is_sealed_before_it_is_sent_and_an_unanswered_one_ends_in_absence() {
+    use sha2::Digest as _;
+    let run = Run::from_env();
+    let provider_id = run.provider.peer_id();
+    let book = asks(&run.requester);
+    let digest = |request: &Value| {
+        hex::encode(sha2::Sha256::digest(
+            evidence_request::jcs::to_string(request).expect("JCS"),
+        ))
+    };
+
+    let answered = book.iter().enumerate().find_map(|(at, (id, entry))| {
+        let statement = &entry["statement"];
+        if entry["record_type"] != "evidence_request"
+            || statement["responder_ref"] != json!(provider_id)
+            || statement["request"]["derivation"] != "history_card/1"
+        {
+            return None;
+        }
+        let (after, (_, response)) = book
+            .iter()
+            .enumerate()
+            .find(|(_, (_, r))| r["record_type"] == "evidence_response" && cites(r, id))?;
+        (response["statement"]["outcome"] == "artifact").then_some((at, after, entry, response))
+    });
+    let (at, after, request, response) = answered.unwrap_or_else(|| {
+        panic!("no history card ask to the provider answered with an artifact: {book:#?}")
+    });
+    assert!(at < after, "the request record comes before its response");
+    assert_eq!(
+        response["statement"]["request_digest"],
+        json!(digest(&request["statement"]["request"])),
+        "the answer is to the request as sealed"
+    );
+    assert_eq!(response["statement"]["verification"]["state"], "artifact");
+
+    let unanswered = std::env::var("E2E_UNANSWERED_PEER")
+        .expect("E2E_UNANSWERED_PEER must name the peer the run asked and nobody answered for");
+    let (request_id, request) = book
+        .iter()
+        .find(|(_, e)| {
+            e["record_type"] == "evidence_request"
+                && e["statement"]["responder_ref"] == json!(unanswered)
+        })
+        .expect("the unanswered ask was sealed");
+    let outcomes: Vec<&Value> = book
+        .iter()
+        .map(|(_, e)| e)
+        .filter(|e| cites(e, request_id))
+        .collect();
+    assert_eq!(outcomes.len(), 1, "one outcome: {outcomes:#?}");
+    let absence = outcomes[0];
+    assert_eq!(absence["record_type"], "recorded_absence");
+    let statement = &absence["statement"];
+    assert_eq!(statement["outcome"], "recorded_absence");
+    assert_eq!(
+        statement["request_digest"],
+        json!(digest(&request["statement"]["request"]))
+    );
+    let time = |v: &Value| {
+        chrono::DateTime::parse_from_rfc3339(v.as_str().expect("a time")).expect("RFC 3339")
+    };
+    let (opened, closed) = (
+        time(&statement["window"]["opened"]),
+        time(&statement["window"]["closed"]),
+    );
+    assert!(
+        (closed - opened).num_seconds() >= evidencebook::ask::MINIMUM_ABSENCE_WINDOW_SECONDS,
+        "{statement:#}"
+    );
+    assert!(time(&statement["recorded_at"]) >= closed, "{statement:#}");
+    open_ledger(&run.requester.ledger_dir()).expect("the requester's ledger reloads");
 }
