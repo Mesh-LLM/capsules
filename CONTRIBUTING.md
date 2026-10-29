@@ -112,6 +112,14 @@ in `crates/evidence-plugin/src/two_node_e2e.rs` run over what each node wrote:
   from the requester, because the requester is a client node, whose id is new
   each start and so cannot be given a key, and each of its pushes is refused
   for that reason.
+- the referee's verdict is sealed on both nodes: while they run, the
+  requester holds two test twins' halves of the first exchange and puts the
+  pair to the provider over the mesh; the provider signs the verdict, seals
+  `adjudication_issued` and delivers it, and the requester seals
+  `adjudication_received` for the same verdict, which its own verdict counts
+  carry (`src/referee_e2e_setup.rs`). The live trigger, which assembles a
+  pair from real twin traffic and chooses the referee, needs three serving
+  nodes and is not run here.
 - the real-host tests (`tests/host_runtime_e2e.rs`, see
   [docs/REAL-HOST-VERIFICATION.md](docs/REAL-HOST-VERIFICATION.md)) pass, and
   fail on a build that serves a blocked model.

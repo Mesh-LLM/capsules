@@ -144,6 +144,17 @@ joined() { tool "$REQUESTER_CONSOLE" join '{}' > "$out/join-after.json" && jq -e
 # holds KIND: the provider, as the reporter, keeps the requester's record.
 holds() { [ -f "$(plugin_data provider)/joins/$requester_id.$1.json" ]; }
 
+# The referee step's two twins are test keys that both nodes' operators
+# announce (crates/evidence-plugin/src/referee_e2e_setup.rs).
+# setup TEST: run one of the referee step's setup tests.
+setup() {
+  (cd "$repo/crates/evidence-plugin" &&
+    cargo test --locked --bin capsules -- --ignored --exact "referee_e2e_setup::$1" > "$logs/setup-$1.log" 2>&1) \
+    || { cat "$logs/setup-$1.log" >&2; return 1; }
+}
+E2E_TWIN_KEYS=$out/twin-keys.json setup write_twin_keys
+twin_keys=$(cat "$out/twin-keys.json")
+
 # Record push is on by default; set explicitly at both ends here (a node with it
 # off does not take the other side's push either), so the run shows what a
 # node holds once the host names the other side.
@@ -166,8 +177,12 @@ setting provider "join_reporter = \"$provider_id\""
 # requester's: a client node's id is new each time it starts.
 provider_key=$(openssl pkey -pubin -in "$(plugin_data provider)/keys/node-key.pub.pem" -outform DER | tail -c 32 | od -An -v -tx1 | tr -d ' \n')
 [ ${#provider_key} = 64 ] || { echo "could not read the provider's public key" >&2; exit 1; }
-CAPSULES_PEER_KEYS=$(jq -cn --arg id "$provider_id" --arg k "$provider_key" '{($id): $k}')
+CAPSULES_PEER_KEYS=$(jq -cn --arg id "$provider_id" --arg k "$provider_key" --argjson twins "$twin_keys" \
+  '{($id): $k} + $twins')
 export CAPSULES_PEER_KEYS
+# The provider, as referee, names itself by its own key and checks each twin's
+# half under that twin's key (read per use, so no restart).
+setting provider "peer_keys = '$CAPSULES_PEER_KEYS'"
 
 # --- the requester: serves nothing, joins the provider's mesh ---------------
 # The provider is its reporter; it checks its join switch every second and
@@ -197,6 +212,10 @@ for n in $(seq "$EXCHANGES"); do
   echo "exchange $n: HTTP $code, served by ${served_by:-<not said>}"
   [ "$code" = 200 ] || { echo "exchange $n failed" >&2; exit 1; }
   [ "$served_by" = "$provider_id" ] || { echo "exchange $n was not served by the provider" >&2; exit 1; }
+  if [ "$n" = 1 ]; then
+    jq -cn --argjson q "$body" --slurpfile a "$out/response-1.json" \
+      '{request_body: $q, response_body: $a[0]}' > "$out/first-exchange.json"
+  fi
 done
 
 # --- each side seals its own half -------------------------------------------
@@ -221,6 +240,26 @@ history_card() {
     && jq -e '.verification.state == "artifact" and .answer.derivation == "history_card/1"' "$out/history-card.json"
 }
 wait_for 60 "the provider served its history card, verified under its key" history_card
+
+# --- the referee: a twin pair put to the provider, its verdict on both chains
+# The requester holds two twins' halves of the first exchange and puts the pair
+# to the provider over the mesh; the provider's answer to that exchange is the
+# referee answer. The provider signs the verdict, seals adjudication_issued,
+# and delivers the verdict to the requester, which seals adjudication_received.
+E2E_PROVIDER_DIR=$(plugin_data provider) E2E_REQUESTER_DIR=$(plugin_data requester) \
+  E2E_FIRST_EXCHANGE=$out/first-exchange.json E2E_ADJUDICATE_REQUEST=$out/adjudicate.json \
+  setup put_twin_halves_on_the_requester
+tool "$REQUESTER_CONSOLE" mesh_evidence_request "$(jq -cn --arg p "$provider_id" \
+  --slurpfile r "$out/adjudicate.json" '{peer_id: $p, request: $r[0], verify: false}')" > "$out/verdict.json"
+jq -e '.adjudication_verdict == 1 and (.verdict_capsule.capsule_id | type == "string")' "$out/verdict.json" > /dev/null \
+  || { echo "the provider issued no verdict:" >&2; cat "$out/verdict.json" >&2; exit 1; }
+echo "referee verdict: $(jq -r .verdict "$out/verdict.json")"
+tool "$PROVIDER_CONSOLE" deliver_adjudication "$(jq -cn --arg p "$requester_id" \
+  --slurpfile v "$out/verdict.json" '{peer_id: $p, verdict_capsule: $v[0].verdict_capsule}')" > "$out/delivered.json"
+jq -e '.status == "received"' "$out/delivered.json" > /dev/null \
+  || { echo "the requester did not hold the verdict:" >&2; cat "$out/delivered.json" >&2; exit 1; }
+sealed() { grep -q '"adjudication_received"' "$(plugin_data requester)/ledger/capsules.jsonl"; }
+wait_for 30 "the requester sealed its adjudication_received record" sealed
 
 # --- join again after the first exchange: now it is complete ----------------
 wait_for 120 "join on the requester says it has joined" joined

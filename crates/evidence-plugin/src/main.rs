@@ -42,6 +42,8 @@ mod record_push_bridge;
 mod record_push_parity;
 mod record_push_receive;
 mod referee;
+#[cfg(test)]
+mod referee_e2e_setup;
 mod requester_auth;
 mod routing_choice_bridge;
 mod routing_rule;

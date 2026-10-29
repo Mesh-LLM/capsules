@@ -533,7 +533,17 @@ fn the_host_names_both_sides_and_the_requester_holds_the_providers_record() {
         "both sides saw the same exchanges"
     );
 
-    let held = read_jsonl(&run.requester.ledger_dir().join("received-capsules.jsonl"));
+    // The referee step's two twin halves are held beside the provider's
+    // records; everything else held counts.
+    let is_twin = |record: &Value| {
+        crate::referee::half::served_by(record)
+            .is_some_and(|server| crate::referee_e2e_setup::TWINS.contains(&server))
+    };
+    let (twins, held): (Vec<Value>, Vec<Value>) =
+        read_jsonl(&run.requester.ledger_dir().join("received-capsules.jsonl"))
+            .into_iter()
+            .partition(is_twin);
+    assert_eq!(twins.len(), 2, "the requester holds the two twins' halves");
     assert_eq!(
         held.len(),
         exchanges,
@@ -712,4 +722,117 @@ fn the_switch_joins_over_the_mesh_and_off_leaves() {
     assert_eq!(acked.reporter, provider_id);
     // Nothing else reached the reporter's list.
     assert_eq!(std::fs::read_dir(&joins).unwrap().count(), 2);
+}
+
+/// The referee step (`crate::referee_e2e_setup`): the requester put a twin
+/// pair to the provider over the mesh, and the provider, as referee, signed
+/// the verdict, sealed `adjudication_issued` and delivered the verdict back.
+/// Both chains still reload clean, each records the same verdict, the verdict
+/// verifies under the provider's key on both nodes, and the requester's own
+/// counts (`verdict_counts::fold`, which the admission pack's disputes row
+/// reads) carry it for both twins.
+#[test]
+#[ignore = "needs the data directories of a real two-node run (scripts/e2e-two-node.sh)"]
+fn the_referees_verdict_is_sealed_on_both_nodes() {
+    use crate::producer::capsule::{ADJUDICATION_ISSUED_BLOCK, ADJUDICATION_RECEIVED_BLOCK};
+    use crate::referee_e2e_setup::{TWINS, TWIN_BRACKET_ID};
+    let run = Run::from_env();
+    let provider_id = run.provider.peer_id();
+    let block = |node: &Node, name: &str| -> Value {
+        let found: Vec<Value> = node
+            .ledger_lines()
+            .into_iter()
+            .filter_map(|r| {
+                r.pointer(&format!("/model_attestation/compute_attestation/{name}"))
+                    .cloned()
+            })
+            .collect();
+        assert_eq!(found.len(), 1, "one {name} record: {found:#?}");
+        found[0].clone()
+    };
+    let issued = block(&run.provider, ADJUDICATION_ISSUED_BLOCK);
+    let received = block(&run.requester, ADJUDICATION_RECEIVED_BLOCK);
+    let verdict_id = issued["verdict_capsule_id"]
+        .as_str()
+        .expect("the issued verdict's id");
+    for (side, record) in [("issued", &issued), ("received", &received)] {
+        assert_eq!(
+            record["verdict_capsule_id"],
+            json!(verdict_id),
+            "{side}: {record:#}"
+        );
+        assert_eq!(
+            record["referee_node_id"],
+            json!(provider_id),
+            "{side}: {record:#}"
+        );
+        assert_eq!(record["half_node_ids"], json!(TWINS), "{side}: {record:#}");
+        assert_eq!(
+            record["twin_bracket_id"],
+            json!(TWIN_BRACKET_ID),
+            "{side}: {record:#}"
+        );
+    }
+    let contradicted = format!(
+        "{}{}",
+        crate::referee::verdict::VERDICT_CONTRADICTED_PREFIX,
+        TWINS[1]
+    );
+    assert_eq!(
+        issued["verdict"],
+        json!(contradicted),
+        "the referee's answer is twin A's"
+    );
+    assert_eq!(received["verdict"], issued["verdict"]);
+    for (node, role) in [(&run.requester, "requester"), (&run.provider, "provider")] {
+        open_ledger(&node.ledger_dir())
+            .unwrap_or_else(|error| panic!("{role}: the ledger does not reload: {error}"));
+    }
+
+    // The verdict each node holds beside its chain: the referee's signature,
+    // under its announced key.
+    let keys = run.peer_keys();
+    for (node, file) in [
+        (
+            &run.provider,
+            crate::adjudication_records::ISSUED_ADJUDICATIONS_FILENAME,
+        ),
+        (
+            &run.requester,
+            crate::adjudication_records::RECEIVED_ADJUDICATIONS_FILENAME,
+        ),
+    ] {
+        let held: Vec<Value> = read_jsonl(&node.ledger_dir().join(file))
+            .into_iter()
+            .filter(|h| h["verdict_capsule_id"] == json!(verdict_id))
+            .collect();
+        assert_eq!(held.len(), 1, "{file}: {held:#?}");
+        let facts = crate::referee::hold::verdict_facts(&held[0]["verdict_capsule"], Some(&keys))
+            .unwrap_or_else(|| {
+                panic!("{file}: the verdict does not verify under the referee's key")
+            });
+        assert_eq!(facts.referee_node_id, provider_id);
+        assert_eq!(facts.selection_tier, Some(2));
+    }
+
+    // The requester asked for it, so its own counts carry it for each twin.
+    let records: Vec<Value> = run.requester.ledger_lines();
+    let asked = crate::verdict_counts::read_requested(&run.requester.ledger_dir());
+    let by_peer = crate::verdict_counts::fold(&records, &asked);
+    // The ruling the admission pack's disputes row reads: twin B contradicted.
+    let buckets = [
+        crate::verdict_counts::CORROBORATED,
+        crate::verdict_counts::CONTRADICTED,
+    ];
+    for (twin, bucket) in TWINS.into_iter().zip(buckets) {
+        let verdicts = by_peer
+            .get(twin)
+            .unwrap_or_else(|| panic!("no verdict counted for {twin}"));
+        assert!(
+            verdicts.iter().any(|v| v.verdict_capsule_id == verdict_id
+                && v.referee_node_id == provider_id
+                && v.bucket == bucket),
+            "{twin} is {bucket}: {verdicts:?}"
+        );
+    }
 }
