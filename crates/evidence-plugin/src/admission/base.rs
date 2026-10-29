@@ -1,8 +1,10 @@
-//! The base policy's five rows (`base/1`, #64): what admission reads about an
-//! unlisted peer once the operator's lists have not decided it.
+//! The base policy's five rows (`base/1`, #64): what admission reads about
+//! any peer an attempt names, listed or not, and seals with its decision.
 //!
 //! - **identity**: the peer's history card verifies under the record key it
-//!   announced, with that key as its responder.
+//!   announces now, with that key as its responder. A card read under another
+//!   key, or a later answer that fails to verify, is no longer read; with no
+//!   key known yet, the row is `not_read`, not `fail`.
 //! - **key age**: the card's first checkpoint is at least [`KEY_AGE_DAYS`]
 //!   old. A checkpoint's time counts as stated, witnessed or not, so a peer
 //!   can backdate it: a `pass` here is not proof of age.
@@ -96,6 +98,9 @@ pub struct Card {
     pub artifact_digest: String,
     /// The time its first checkpoint states. `None` when it doesn't parse.
     pub first_checkpoint_at: Option<DateTime<Utc>>,
+    /// The record key it verified under. The card speaks for that key only:
+    /// once the peer's announced key changes, it is no longer read.
+    pub key_id: String,
 }
 
 /// What one ask of a peer's card came to.
@@ -116,12 +121,24 @@ struct CardEntry {
     in_flight: bool,
 }
 
-/// The local rows' inputs for one peer.
+/// The local rows' inputs for one peer, as [`Base::read`] resolves them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LocalFacts {
     pub settled: usize,
     pub held_halves: usize,
     pub adverse: usize,
+}
+
+/// The local rows' inputs from one read of this node's chain.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Facts {
+    /// Per peer node id (lowercase): settled exchanges and adverse verdicts.
+    pub by_peer: HashMap<String, LocalFacts>,
+    /// The halves held, by the key the receiver verified each under
+    /// (`sender_key_id`). A receiver records no transport-attested node id
+    /// (`record_push_bridge`), so a half is the peer's when its key is the
+    /// peer's announced key.
+    pub halves_by_key: HashMap<String, BTreeSet<String>>,
 }
 
 /// What the rows read for one attempt.
@@ -135,8 +152,9 @@ pub struct Read {
 pub struct Base {
     ledger_dir: PathBuf,
     cards: Mutex<HashMap<String, CardEntry>>,
-    /// `None` until the first refresh: the local rows are then not read.
-    facts: RwLock<Option<HashMap<String, LocalFacts>>>,
+    /// `None` until a refresh read the chain whole: the local rows are then
+    /// not read.
+    facts: RwLock<Option<Facts>>,
     asks: OnceLock<tokio::sync::mpsc::UnboundedSender<String>>,
 }
 
@@ -153,13 +171,33 @@ impl Base {
     /// The rows for `peer` (a lowercase 64-hex node id) at `now`, queueing an
     /// ask of its card when one is due.
     pub fn read(&self, peer: &str, at: Instant, now: DateTime<Utc>) -> Read {
-        let (card, card_rows) = self.card_rows(peer, at, now);
+        let registry = crate::peer_keys::registry();
+        let key = crate::peer_keys::announced_key_in(registry.as_deref(), peer);
+        self.read_with_key(peer, key.as_deref(), at, now)
+    }
+
+    /// [`Base::read`] with `key`, the peer's announced record key now.
+    fn read_with_key(
+        &self,
+        peer: &str,
+        key: Option<&str>,
+        at: Instant,
+        now: DateTime<Utc>,
+    ) -> Read {
+        let key = key.map(str::to_ascii_lowercase);
+        let (card, card_rows) = self.card_rows(peer, key.as_deref(), at, now);
         let local = self
             .facts
             .read()
             .expect("the facts lock is never poisoned")
             .as_ref()
-            .map(|facts| facts.get(peer).cloned().unwrap_or_default());
+            .map(|facts| {
+                let mut local = facts.by_peer.get(peer).cloned().unwrap_or_default();
+                if let Some(halves) = key.as_ref().and_then(|key| facts.halves_by_key.get(key)) {
+                    local.held_halves += halves.len();
+                }
+                local
+            });
         let local_row = |pass: fn(&LocalFacts) -> bool| {
             local
                 .as_ref()
@@ -175,15 +213,27 @@ impl Base {
         Read { rows, card }
     }
 
-    /// The identity and key-age rows, and the card cited.
+    /// The identity and key-age rows, and the card cited. `key` is the
+    /// peer's announced record key now; a card read under another key is not
+    /// read.
     fn card_rows(
         &self,
         peer: &str,
+        key: Option<&str>,
         at: Instant,
         now: DateTime<Utc>,
     ) -> (Option<String>, [RowResult; 2]) {
         let mut cards = self.cards.lock().expect("the card lock is never poisoned");
         let entry = cards.entry(peer.to_string()).or_default();
+        if entry
+            .card
+            .as_ref()
+            .is_some_and(|(card, _)| Some(card.key_id.as_str()) != key)
+        {
+            entry.card = None;
+            entry.last = None;
+            entry.asked_at = None;
+        }
         let stale = entry
             .card
             .as_ref()
@@ -217,13 +267,16 @@ impl Base {
     }
 
     /// What an ask of `peer`'s card came to. A card once read is kept until
-    /// a newer one is read: a later refusal does not unread it.
+    /// a newer one is read or one fails to verify: a later refusal or silence
+    /// does not unread it.
     pub fn record_card(&self, peer: &str, outcome: CardOutcome, at: Instant) {
         let mut cards = self.cards.lock().expect("the card lock is never poisoned");
         let entry = cards.entry(peer.to_string()).or_default();
         entry.in_flight = false;
-        if let CardOutcome::Read(card) = &outcome {
-            entry.card = Some((card.clone(), at));
+        match &outcome {
+            CardOutcome::Read(card) => entry.card = Some((card.clone(), at)),
+            CardOutcome::Unverifiable => entry.card = None,
+            CardOutcome::NotRead => {}
         }
         entry.last = Some(outcome);
     }
@@ -233,17 +286,24 @@ impl Base {
         self.facts
             .write()
             .expect("the facts lock is never poisoned")
-            .get_or_insert_with(HashMap::new)
+            .get_or_insert_with(Facts::default)
+            .by_peer
             .insert(peer.to_string(), facts);
     }
 
-    /// Recompute the local rows' inputs from this node's own chain.
+    /// Recompute the local rows' inputs from this node's own chain. A chain
+    /// that doesn't read whole leaves them not read rather than empty.
     pub fn refresh(&self, now: DateTime<Utc>) {
         let facts = local_facts(&self.ledger_dir, now);
+        if facts.is_none() {
+            tracing::warn!(
+                "admission could not read this node's chain whole; the local rows read not_read"
+            );
+        }
         *self
             .facts
             .write()
-            .expect("the facts lock is never poisoned") = Some(facts);
+            .expect("the facts lock is never poisoned") = facts;
     }
 
     /// Start the background ask of peers' cards and the local refresh, for
@@ -289,58 +349,75 @@ pub fn card_request() -> Value {
 }
 
 async fn ask_card(context: &mut mesh_llm_plugin::PluginContext<'_>, peer: &str) -> CardOutcome {
-    use crate::mesh_evidence_bridge::{send_evidence_request, verifying_key};
-    let Ok((sent, answer)) = send_evidence_request(context, peer, &card_request()).await else {
+    let Ok((sent, answer)) =
+        crate::mesh_evidence_bridge::send_evidence_request(context, peer, &card_request()).await
+    else {
         return CardOutcome::NotRead;
     };
     let registry = crate::peer_keys::registry();
-    let key = crate::peer_keys::announced_key_in(registry.as_deref(), peer)
-        .and_then(|key_id| verifying_key(&key_id));
     read_card(
         &sent,
         &answer,
-        key.as_ref(),
+        crate::peer_keys::announced_key_in(registry.as_deref(), peer).as_deref(),
         &crate::checkpoint_cadence::active_witness_keys(),
     )
 }
 
-/// The card in `answer` to the request `sent`, verified under `key`.
+/// The card in `answer` to the request `sent`, verified under `key_id` (the
+/// peer's announced record key, hex).
 pub fn read_card(
     sent: &[u8],
     answer: &Value,
-    key: Option<&ed25519_dalek::VerifyingKey>,
+    key_id: Option<&str>,
     witness_keys: &std::collections::BTreeMap<String, String>,
 ) -> CardOutcome {
     if answer.get("reason").is_some() {
         return CardOutcome::NotRead;
     }
-    let Some(key) = key else {
-        return CardOutcome::Unverifiable;
+    // No usable key yet (not announced, or announced two ways): nothing can
+    // be checked, which is not a card that failed to verify.
+    let Some((key_id, key)) = key_id.and_then(|key_id| {
+        crate::mesh_evidence_bridge::verifying_key(key_id).map(|key| (key_id, key))
+    }) else {
+        return CardOutcome::NotRead;
     };
     let Ok(request) = evidence_request::request::parse_json(sent) else {
         return CardOutcome::Unverifiable;
     };
     let witness_key =
         |ts_url: &str| crate::evidence_answer::configured_witness_key(witness_keys, ts_url);
-    match crate::evidence_artifact::check(sent, &request, answer, key, &witness_key) {
+    match crate::evidence_artifact::check(sent, &request, answer, &key, &witness_key) {
         Ok(checked) if checked.checkpoints > 0 => CardOutcome::Read(Card {
             artifact_digest: checked.artifact_digest,
             first_checkpoint_at: checked
                 .first_checkpoint_at
                 .and_then(|at| DateTime::parse_from_rfc3339(&at).ok())
                 .map(|at| at.with_timezone(&Utc)),
+            key_id: key_id.to_ascii_lowercase(),
         }),
         _ => CardOutcome::Unverifiable,
     }
 }
 
-/// The local rows' inputs, per peer node id (lowercase), from this node's
-/// own chain at `ledger_dir`.
-pub fn local_facts(ledger_dir: &Path, now: DateTime<Utc>) -> HashMap<String, LocalFacts> {
+/// The local rows' inputs from this node's own chain at `ledger_dir`, or
+/// `None` when the chain, or the list of adjudications it asked for, is there
+/// but doesn't read whole: a torn or unreadable line could hide an adverse
+/// verdict, so it is never read as "none".
+pub fn local_facts(ledger_dir: &Path, now: DateTime<Utc>) -> Option<Facts> {
+    for file in ["capsules.jsonl", crate::verdict_counts::REQUESTED_FILENAME] {
+        match std::fs::read_to_string(ledger_dir.join(file)) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    if crate::evidence_panes::unparsable_line_count(ledger_dir) > 0 {
+        return None;
+    }
     let records = crate::evidence_panes::read_capsule_records(ledger_dir);
     let settled_ids = crate::evidence_panes::settled_exchange_ids(&records);
     let mut settled: HashMap<String, BTreeSet<String>> = HashMap::new();
-    let mut held: HashMap<String, BTreeSet<String>> = HashMap::new();
+    let mut facts = Facts::default();
     for record in &records {
         if let (Some(peer), Some(exchange)) = (
             crate::evidence_panes::full_counterparty_node_id(record),
@@ -353,20 +430,16 @@ pub fn local_facts(ledger_dir: &Path, now: DateTime<Utc>) -> HashMap<String, Loc
                     .insert(exchange.to_string());
             }
         }
-        if let Some((peer, half)) = held_half(record) {
-            held.entry(peer).or_default().insert(half);
+        if let Some((key, half)) = held_half(record) {
+            facts.halves_by_key.entry(key).or_default().insert(half);
         }
+    }
+    for (peer, exchanges) in settled {
+        facts.by_peer.entry(peer).or_default().settled = exchanges.len();
     }
     let period = chrono::Duration::days(DISPUTE_PERIOD_DAYS);
     let verdicts =
         crate::verdict_counts::fold(&records, &crate::verdict_counts::read_requested(ledger_dir));
-    let mut facts: HashMap<String, LocalFacts> = HashMap::new();
-    for (peer, halves) in held {
-        facts.entry(peer).or_default().held_halves = halves.len();
-    }
-    for (peer, exchanges) in settled {
-        facts.entry(peer).or_default().settled = exchanges.len();
-    }
     for (peer, verdicts) in verdicts {
         // A verdict whose time doesn't read counts as in the period.
         let adverse = verdicts
@@ -379,22 +452,26 @@ pub fn local_facts(ledger_dir: &Path, now: DateTime<Utc>) -> HashMap<String, Loc
                     .is_none_or(|at| now - at <= period)
             })
             .count();
-        facts.entry(peer.to_ascii_lowercase()).or_default().adverse = adverse;
+        facts
+            .by_peer
+            .entry(peer.to_ascii_lowercase())
+            .or_default()
+            .adverse = adverse;
     }
-    facts
+    Some(facts)
 }
 
-/// `(the pushing peer's node id, the half's capsule id)` from a citing record
-/// whose receiver checked the half's signature.
+/// `(the key the half verified under, the half's capsule id)` from a citing
+/// record whose receiver checked the half's signature.
 fn held_half(record: &Value) -> Option<(String, String)> {
     let received = record.pointer("/model_attestation/compute_attestation/received_half")?;
     if received.get("signature_ok").and_then(Value::as_bool) != Some(true) {
         return None;
     }
-    let peer = received
-        .get("received_from_node_id")
+    let key = received
+        .get("sender_key_id")
         .and_then(Value::as_str)
-        .filter(|id| !id.is_empty() && *id != "unknown")?;
+        .filter(|key| !key.is_empty())?;
     let half = record
         .get("references")
         .and_then(Value::as_array)?
@@ -402,7 +479,7 @@ fn held_half(record: &Value) -> Option<(String, String)> {
         .find(|r| r.get("citation_purpose").and_then(Value::as_str) == Some("counterparty_half"))
         .and_then(|r| r.get("digest"))
         .and_then(Value::as_str)?;
-    Some((peer.to_ascii_lowercase(), half.to_string()))
+    Some((key.to_ascii_lowercase(), half.to_string()))
 }
 
 /// A sealed time, RFC 3339 or minute-granular (`2026-10-29T16:30Z`).

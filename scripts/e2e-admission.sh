@@ -9,7 +9,11 @@
 #      background;
 #   2. once the card is read, the next attempt is still GO (the rows decide
 #      nothing), cites the card by commitment, and reads identity `pass` and
-#      key age `fail` (the provider's key is minutes old).
+#      key age `fail` (the provider's key is minutes old);
+#   3. restarted with the provider on its deny list, the requester refuses
+#      the attempt (403) and seals a NO from the deny list, with its rows;
+#      corroboration reads `pass`, from the provider's pushed half, which
+#      the requester holds under the provider's key.
 #
 # It needs a mesh-llm with the OpenAI exchange lifecycle (Mesh-LLM/mesh-llm
 # #2226): main, or a lab build. A release up to 0.78 has no admission hook, so
@@ -120,6 +124,10 @@ decision_count() { decisions | wc -l | tr -d ' '; }
 # The plugin's log line once a card ask came back read (colors stripped).
 card_read() { perl -pe 's/\e\[[0-9;]*m//g' "$logs/requester.log" | grep 'admission asked a peer for its history card' | grep -q 'card="read"'; }
 
+# Each side pushes its half to the other at completion, so the requester holds
+# the provider's half (the corroboration row).
+export CAPSULES_SHARE_RECORD_AT_COMPLETION=counterparty
+
 # --- the provider: serves the model, and has a checkpoint to answer under ----
 NODE_ENV=(CAPSULES_CHECKPOINT_CADENCE_SECONDS=5)
 start_node provider "$PROVIDER_API" "$PROVIDER_CONSOLE" "" --gguf "$model" --model "$MODEL_NAME"
@@ -175,9 +183,32 @@ echo "$second" | jq -e '.verdict == "GO" and .source == "default"
   and .rows[0] == {"row": "identity", "result": "pass"}
   and .rows[1] == {"row": "key_age", "result": "fail"}' > /dev/null \
   || { echo "the second decision is not a GO citing the card" >&2; exit 1; }
+# --- 3. the provider on the deny list: NO, with its rows ---------------------
+# The settings are read at start, so the requester restarts with the list.
+held_half() { jq -e 'select(.model_attestation.compute_attestation.received_half.signature_ok == true)' "$(ledger requester)" | grep -q .; }
+wait_for 60 "the requester holds the provider's half" held_half
+requester_pid=${pids[${#pids[@]}-1]}
+kill -TERM "$requester_pid"
+for _ in $(seq 60); do kill -0 "$requester_pid" 2>/dev/null || break; sleep 0.5; done
+kill -KILL "$requester_pid" 2>/dev/null || true
+unset 'pids[${#pids[@]}-1]'
+mv "$logs/requester.log" "$logs/requester-1.log"
+NODE_ENV+=(CAPSULES_ADMISSION_DENY="$provider_id")
+start_node requester "$REQUESTER_API" "$REQUESTER_CONSOLE" "$grant" --client --join "$token"
+wait_for 300 "the restarted requester can route to the provider's model" lists_model "$REQUESTER_API"
+before=$(decision_count)
+code=$(chat "$REQUESTER_API" 3)
+[ "$code" = 403 ] || { echo "the denied request was not refused: HTTP $code $(cat "$out/chat-3.json")" >&2; exit 1; }
+third=$(decisions | sed -n "$((before + 1))p")
+echo "third decision: $third"
+echo "$third" | jq -e '.verdict == "NO" and .source == "deny_list"
+  and (.rows | length) == 5 and .reads[1].kind == "history_card"
+  and .rows[4] == {"row": "corroboration", "result": "pass"}' > /dev/null \
+  || { echo "the third decision is not a deny-list NO with its rows" >&2; exit 1; }
+
 # The provider's id never appears in clear in the requester's admission records.
 if decisions | grep -q "$provider_id"; then
   echo "an admission record names the provider in clear" >&2
   exit 1
 fi
-echo "PASS: GO with the rows sealed, then GO citing the history card, between two real nodes"
+echo "PASS: GO with the rows sealed, GO citing the history card, then a deny-list NO with its rows, between two real nodes"

@@ -334,7 +334,9 @@ are placeholders, fixed in this version.
 
 The settings are read once at start; restart mesh-llm after changing them. Nothing is fetched
 while a request waits: a peer's card is asked for in the background (at most once an hour per
-peer, and again daily), and the book is re-read every minute. Until then the rows read `not_read`. If a setting does not parse, the plugin keeps running and refuses every
+peer, and again daily), and the book is re-read every minute. Until then the rows read `not_read`.
+
+If a setting does not parse, the plugin keeps running and refuses every
 peer (`unreadable_policy` in the log and the records) until you fix it and restart, so a typo
 never admits a peer you meant to refuse.
 

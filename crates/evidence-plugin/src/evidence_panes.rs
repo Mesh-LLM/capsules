@@ -136,7 +136,7 @@ fn read_ledger_lines(ledger_dir: &Path) -> Vec<Option<Value>> {
 }
 
 /// Ledger lines that do not parse: reported, never dropped silently.
-fn unparsable_line_count(ledger_dir: &Path) -> usize {
+pub(crate) fn unparsable_line_count(ledger_dir: &Path) -> usize {
     read_ledger_lines(ledger_dir)
         .iter()
         .filter(|line| line.is_none())

@@ -544,11 +544,14 @@ mod tests {
     /// settled, corroborated exchange with no adverse adjudication.
     fn all_rows_pass(admission: &Admission, peer: &str, at: std::time::Instant) {
         let now = chrono::Utc::now();
+        let key = "ab00000000000000000000000000000000000000000000000000000000000006";
+        crate::peer_keys::announced::announce_for_test(peer, key);
         admission.base.record_card(
             peer,
             base::CardOutcome::Read(base::Card {
                 artifact_digest: "c".repeat(64),
                 first_checkpoint_at: Some(now - chrono::Duration::days(30)),
+                key_id: key.to_string(),
             }),
             at,
         );
@@ -688,6 +691,7 @@ mod tests {
             let block = sealed_block(&capsules);
             assert_eq!(block["source"], "unreadable_target");
             assert_eq!(block["peer_commitment"], Value::Null);
+            assert!(block.get("rows").is_none(), "no peer, no rows");
         }
         let (admission, capsules, _dir) = admission(policy(None));
         let mut event = selected("");
@@ -785,6 +789,11 @@ mod tests {
                 block["reads"][0]["digest"],
                 Value::Null,
                 "no policy was read"
+            );
+            assert_eq!(
+                block["rows"].as_array().map(Vec::len),
+                Some(5),
+                "the peer is still named, so its rows are read"
             );
         }
     }
