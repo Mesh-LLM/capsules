@@ -697,7 +697,8 @@ pub struct JoinArgs {
     /// The operator's Nostr public key (BIP-340, 64 lowercase hex) to bind
     /// this node's key to. `join` signs the node's half and returns, under
     /// `controller_binding_ceremony.event`, the Nostr event the operator
-    /// signs with their own signer; nothing is stored as bound until then.
+    /// signs with their own signer and never publishes to a relay (CB §9.3);
+    /// nothing is stored as bound until then.
     #[serde(default)]
     pub controller: Option<String>,
     /// That event, signed (NIP-01: `pubkey`, `created_at`, `kind`, `tags`,
@@ -705,6 +706,21 @@ pub struct JoinArgs {
     /// `controller_binding` does.
     #[serde(default)]
     pub controller_event: Option<Value>,
+}
+
+impl JoinArgs {
+    /// At most one of `controller_binding`, `controller` and
+    /// `controller_event`, checked before anything is written: one call that
+    /// stored one binding and then refused another would read as refused.
+    fn one_binding_operation(&self) -> Result<(), String> {
+        let given = usize::from(self.controller_binding.is_some())
+            + usize::from(self.controller.is_some())
+            + usize::from(self.controller_event.is_some());
+        if given > 1 {
+            return Err("give one of controller_binding, controller and controller_event".into());
+        }
+        Ok(())
+    }
 }
 
 /// `doctor`: `{"findings": [...]}`.
@@ -740,6 +756,7 @@ pub async fn handle_join(
     node_id: Option<String>,
 ) -> mesh_llm_plugin::PluginResult<Value> {
     blocking(move || {
+        args.one_binding_operation()?;
         let now = evidence_answer::now_utc();
         let data_dir = capsules
             .ledger_dir()
@@ -783,19 +800,13 @@ pub async fn handle_join(
             report["controller_binding_ceremony"] = json!({
                 "event": event,
                 "next": "sign this Nostr event with the operator's own signer (for example a \
-                         NIP-07 extension), then run join with controller_event set to the signed \
-                         event",
+                         NIP-07 extension) and do not publish it to any relay, then run join with \
+                         controller_event set to the signed event",
             });
         }
         // The ledger is `<data dir>/ledger`; the join switch keeps its state
         // in the data directory.
-        if let Some(data_dir) = capsules.ledger_dir().parent() {
-            report["network"] = crate::network_join::status(
-                data_dir,
-                &commitment::key_id(capsules.signing_key()),
-                node_id.as_deref(),
-            );
-        }
+        report["network"] = crate::network_join::status(data_dir, &own, node_id.as_deref());
         Ok(report)
     })
     .await
@@ -869,9 +880,18 @@ pub fn quickstart(plugin_id: &str) -> String {
          curl -s -X POST -H 'content-type: application/json' -d '{{\"controller\": \"<your key>\"}}' {join}\n\
          ```\n\
          \n\
-         Then pass the signed event back as `controller_event`. `doctor` then reports\n\
-         `controller_binding: bound`, and the commitment names the binding by its digest\n\
-         alone, never your key. Show the binding record only to the parties that need it.\n\
+         Sign it, do not publish it: never send this event to a relay, which would link your\n\
+         key to the node. Then pass the signed event back:\n\
+         \n\
+         ```bash\n\
+         curl -s -X POST -H 'content-type: application/json' -d '{{\"controller_event\": <signed event>}}' {join}\n\
+         ```\n\
+         \n\
+         `doctor` then reports `controller_binding: bound`, and the commitment names the\n\
+         binding by its digest alone, never your key. Show the binding record only to the\n\
+         parties that need it. The binding holds for a year: the plugin does not yet send or\n\
+         read revocations (Controller Binding §5), so it holds until its `not_after` or until\n\
+         you run the ceremony again.\n\
          \n\
          4. **Publish the commitment.** This returns the signed commitment and its policy; then\n\
          add it to the commitment list by pull request:\n\
@@ -888,7 +908,7 @@ pub fn quickstart(plugin_id: &str) -> String {
          has it. While no reporter is named yet (`network.reporter` is null), nothing is sent.\n\
          To leave, turn the switch off.\n\
          \n\
-         `join` and `doctor` seal nothing and contact nobody; `join` writes only a binding.\n",
+         `join` and `doctor` seal nothing and contact nobody; `join` writes only a binding or a pending one.\n",
         switch = crate::share_policy::JOIN_NETWORK_LABEL,
         join = tool(JOIN_OPERATION),
         doctor = tool(DOCTOR_OPERATION),

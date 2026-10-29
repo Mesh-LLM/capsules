@@ -299,9 +299,18 @@ signer; the node never sees your secret key:
 curl -s -X POST -H 'content-type: application/json' -d '{"controller": "<your key>"}' $CONSOLE/api/plugins/capsules/tools/join
 ```
 
-Then pass the signed event back as `controller_event`. `doctor` then reports
-`controller_binding: bound`, and the commitment names the binding by its digest
-alone, never your key. Show the binding record only to the parties that need it.
+Sign it, do not publish it: never send this event to a relay, which would link your
+key to the node. Then pass the signed event back:
+
+```bash
+curl -s -X POST -H 'content-type: application/json' -d '{"controller_event": <signed event>}' $CONSOLE/api/plugins/capsules/tools/join
+```
+
+`doctor` then reports `controller_binding: bound`, and the commitment names the
+binding by its digest alone, never your key. Show the binding record only to the
+parties that need it. The binding holds for a year: the plugin does not yet send or
+read revocations (Controller Binding §5), so it holds until its `not_after` or until
+you run the ceremony again.
 
 4. **Publish the commitment.** This returns the signed commitment and its policy; then
 add it to the commitment list by pull request:
@@ -318,7 +327,7 @@ it to the network's reporter node; `join` shows under `network` whether the repo
 has it. While no reporter is named yet (`network.reporter` is null), nothing is sent.
 To leave, turn the switch off.
 
-`join` and `doctor` seal nothing and contact nobody; `join` writes only a binding.
+`join` and `doctor` seal nothing and contact nobody; `join` writes only a binding or a pending one.
 <!-- /join-quickstart -->
 
 ## Admit or refuse peers

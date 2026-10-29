@@ -17,7 +17,7 @@
 use std::path::PathBuf;
 
 use ed25519_dalek::SigningKey;
-use serde_json::{json, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 const SEED_PREFIX: &str = "capsules-e2e-controller-binding/v1/";
@@ -69,20 +69,8 @@ fn write_controller() {
 #[ignore = "run by scripts/e2e-two-node.sh"]
 fn sign_event() {
     let out = out_dir();
-    let mut event: Value =
+    let event: Value =
         serde_json::from_slice(&std::fs::read(out.join("ceremony-event.json")).unwrap()).unwrap();
-    let serial = serde_json::to_string(&json!([
-        0,
-        event["pubkey"],
-        event["created_at"],
-        event["kind"],
-        event["tags"],
-        event["content"],
-    ]))
-    .unwrap();
-    let id = Sha256::digest(serial.as_bytes());
-    let sig = nostr_key().sign_raw(&id, &[0; 32]).unwrap();
-    event["id"] = hex::encode(id).into();
-    event["sig"] = hex::encode(sig.to_bytes()).into();
+    let event = crate::controller_binding::sign_event_for_test(&nostr_key(), &event);
     std::fs::write(out.join("signed-event.json"), event.to_string()).unwrap();
 }
