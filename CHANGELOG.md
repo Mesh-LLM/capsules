@@ -19,6 +19,14 @@
   (action-state-group/evidencebook-skills#71). The per-exchange receipt page, the Service History
   form when `share_standard_history` is on, and the 9b wording are not in this change. The CSV and
   the integrity, peers, twin-bracket and "Your records" JSON exports are unchanged. No release.
+- **The node key bound to its operator (loop step 12).** `join` takes an optional
+  `controller_binding`: a Controller Binding record (AAC `spec/controller-binding-v0.md`) that binds
+  this node's key to its operator's, which may be the operator's Nostr key (`bip340`, signed with a
+  Nostr event). `join` stores it only when it binds this node's key and applies, and refuses it
+  otherwise. `doctor` reports `controller_binding: bound` with the binding digest, or `unbound` with
+  the reason. The commitment names the binding by its digest alone (`controller_binding.digest`),
+  never the operator's key, and the binding stays optional (Steven's ruling). Verification of the
+  `bip340` key type uses `k256`. Mesh-LLM/capsules-plugin#54, #97.
 - **The Service History (`service_history/1`), a Standard History under the inference-service
   history profile.** A requester asks for it by the digest of
   `derivations/service-history-1.json` (`cbc96d80…`), for `full_history`, pinned to a checkpoint
