@@ -51,32 +51,48 @@ fn nothing_is_pinned_without_a_held_commitment_that_still_checks() {
 }
 
 #[test]
-fn a_policy_refusal_of_what_the_policy_gives_any_asker_is_a_mismatch() {
+fn withholding_what_the_policy_gives_any_asker_is_a_mismatch() {
     let (_dir, pinned) = held();
-    for reason in [
-        "not_authorized",
-        "policy_declined",
-        "derivation_unsupported",
-    ] {
-        let check = policy_check(Some(&pinned), &history_card(), reason);
-        assert_eq!(check["status"], "MISMATCH", "{reason}: {check}");
-        assert_eq!(check["policy_digest"], pinned["policy_digest"]);
-    }
     let checkpoints = json!({"subject": {"checkpoints": null}, "coverage": {"min_freshness": 1}});
+    let mut card_over_checkpoints = checkpoints.clone();
+    card_over_checkpoints["derivation"] = json!("history_card/1");
+    for request in [history_card(), checkpoints, card_over_checkpoints] {
+        for reason in [
+            "not_authorized",
+            "derivation_unsupported",
+            "no_such_subject",
+        ] {
+            let check = policy_check(Some(&pinned), &request, reason);
+            assert_eq!(check["status"], "MISMATCH", "{request} {reason}: {check}");
+            assert_eq!(check["policy_digest"], pinned["policy_digest"]);
+        }
+    }
+}
+
+#[test]
+fn policy_declined_is_not_checked_since_load_and_size_limits_send_it_too() {
+    let (_dir, pinned) = held();
     assert_eq!(
-        policy_check(Some(&pinned), &checkpoints, "not_authorized")["status"],
-        "MISMATCH"
+        policy_check(Some(&pinned), &history_card(), "policy_declined")["status"],
+        "NOT_CHECKED"
     );
 }
 
 #[test]
 fn a_refusal_the_policy_allows_is_a_match() {
     let (_dir, pinned) = held();
-    assert_eq!(
-        policy_check(Some(&pinned), &history_card(), "coverage_unsatisfiable")["status"],
-        "MATCH",
-        "not a policy decision"
-    );
+    for reason in [
+        "request_malformed",
+        "deadline_unmet",
+        "coverage_unsatisfiable",
+        "retention_expired",
+    ] {
+        assert_eq!(
+            policy_check(Some(&pinned), &history_card(), reason)["status"],
+            "MATCH",
+            "{reason} blames the request"
+        );
+    }
     let mut standard = history_card();
     standard["derivation"] = json!("standard_history/1");
     // `standard_history/1` is answered through `full_history`, but the
@@ -117,4 +133,21 @@ fn whether_a_counterparty_is_answered_is_not_checked() {
         policy_check(Some(&pinned), &record, "not_authorized")["status"],
         "NOT_CHECKED"
     );
+}
+
+#[test]
+fn two_holds_of_one_peer_at_once_leave_one_whole_commitment() {
+    let dir = tempfile::tempdir().unwrap();
+    let frame = built(&defaults()).to_wire();
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            scope.spawn(|| hold(dir.path(), NODE, &frame).unwrap());
+        }
+    });
+    assert!(pinned(dir.path(), NODE).is_some());
+    let left: Vec<_> = std::fs::read_dir(dir.path().join(DIR))
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(left, [std::ffi::OsString::from(format!("{NODE}.json"))]);
 }

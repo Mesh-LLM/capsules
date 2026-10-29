@@ -16,12 +16,14 @@
 //!
 //! **The check** ([`policy_check`]) on a signed refusal:
 //! - `NOT_CHECKED` when no commitment was held at ask time;
-//! - `MATCH` when the pinned policy allows the refusal: its reason is not a
-//!   policy reason, or the commitment does not answer the subject form;
+//! - `MATCH` when the pinned policy allows the refusal: its reason blames
+//!   the request, or the commitment does not answer the subject form;
 //! - `MISMATCH` when the policy answers it to a stranger (`stranger_safe`)
-//!   and the refusal withholds it by policy;
-//! - `NOT_CHECKED` otherwise: whether the peer answers depends on who asks,
-//!   which the policy alone does not settle.
+//!   and the refusal withholds it (`not_authorized`,
+//!   `derivation_unsupported`, `no_such_subject`);
+//! - `NOT_CHECKED` otherwise: a `policy_declined`, which honest responders
+//!   also send for load and size limits, or an answer that depends on who
+//!   asks, which the policy alone does not settle.
 
 use std::path::{Path, PathBuf};
 
@@ -34,11 +36,18 @@ use crate::commitment::{self, Signed};
 /// The directory under the data directory.
 pub const DIR: &str = "peer-commitments";
 
-/// The refusal reasons that say the peer withheld by policy.
-const POLICY_REASONS: [Reason; 3] = [
+/// The refusal reasons that withhold what the policy may promise:
+/// withheld from this asker, a derivation not offered, or a subject said
+/// not to exist. `policy_declined` is not one of them: an honest responder
+/// also sends it for load and size limits (a full stranger pool, too many
+/// checkpoints, an answer too large), which no policy promises past, so it
+/// reads `NOT_CHECKED`. The rest (`request_malformed`, `deadline_unmet`,
+/// `coverage_unsatisfiable`, `retention_expired`) blame the request and
+/// read `MATCH`.
+const WITHHOLDING_REASONS: [Reason; 3] = [
     Reason::NotAuthorized,
-    Reason::PolicyDeclined,
     Reason::DerivationUnsupported,
+    Reason::NoSuchSubject,
 ];
 
 fn path(data_dir: &Path, peer_id: &str) -> Option<PathBuf> {
@@ -57,9 +66,16 @@ pub fn hold(data_dir: &Path, peer_id: &str, frame: &Value) -> std::io::Result<()
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a mesh peer id")
     })?;
     std::fs::create_dir_all(path.parent().expect("under DIR"))?;
-    let tmp = path.with_extension("json.tmp");
+    // One temporary file per write, so two fetches of one peer at once
+    // never write into each other's file; the rename publishes one whole.
+    let tmp = path.with_extension(format!(
+        "json.{}.tmp",
+        crate::producer::capsule::fresh_store_nonce()
+    ));
     std::fs::write(&tmp, serde_json::to_vec(frame)?)?;
-    std::fs::rename(tmp, path)
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 /// What an ask of `peer_id` records of the commitment held for it:
@@ -87,9 +103,15 @@ pub fn policy_check(pinned: Option<&Value>, request: &Value, reason: &str) -> Va
         return json!({"status": "NOT_CHECKED", "why": "no commitment held for the peer"});
     };
     let status = |status: &str, why: &str| json!({"status": status, "why": why, "policy_digest": pinned["policy_digest"]});
-    let by_policy = POLICY_REASONS.iter().any(|r| r.token() == reason);
-    if !by_policy {
-        return status("MATCH", "the refusal is not a policy decision");
+    if reason == Reason::PolicyDeclined.token() {
+        return status(
+            "NOT_CHECKED",
+            "policy_declined is also sent for load and size limits",
+        );
+    }
+    let withholds = WITHHOLDING_REASONS.iter().any(|r| r.token() == reason);
+    if !withholds {
+        return status("MATCH", "the refusal blames the request");
     }
     let Some(form) = subject_form(request) else {
         return status("NOT_CHECKED", "the request names no subject form");
@@ -104,8 +126,10 @@ pub fn policy_check(pinned: Option<&Value>, request: &Value, reason: &str) -> Va
         .pointer("/policy/stranger_safe")
         .and_then(Value::as_array)
         .is_some_and(|safe| {
+            // `history_card/1` is answered over `full_history` or
+            // `checkpoints` alike (`evidence_log`'s derivation forms).
             let asked = match request.get("derivation").and_then(Value::as_str) {
-                Some(derivation) if form == "full_history" => derivation,
+                Some(derivation) if matches!(form, "full_history" | "checkpoints") => derivation,
                 None if form == "checkpoints" => "checkpoints",
                 _ => return false,
             };

@@ -1414,6 +1414,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_caller_hears_the_verification_the_response_records() {
+        let (capsules, asked, closes_at, sent, _dir) = recorded_ask(Duration::from_secs(60));
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let reply = async { Ok(br#"{"reason":"not_authorized"}"#.to_vec()) };
+        settle_ask(
+            capsules.clone(),
+            asked,
+            "peer".into(),
+            sent,
+            reply,
+            closes_at,
+            tx,
+        )
+        .await;
+        let (_, verification) = rx.await.unwrap().expect("an answer");
+        let recorded = crate::evidence_panes::read_capsule_records(capsules.ledger_dir())
+            .into_iter()
+            .filter_map(|r| {
+                r.pointer("/model_attestation/compute_attestation")?
+                    .get(crate::ask_book::BLOCK)
+                    .cloned()
+            })
+            .find(|e| e["record_type"] == "evidence_response")
+            .expect("the response record");
+        assert_eq!(recorded["statement"]["verification"], verification);
+    }
+
+    #[tokio::test]
     async fn a_reply_after_the_window_closes_is_never_read() {
         let (capsules, asked, closes_at, sent, _dir) = recorded_ask(Duration::from_millis(20));
         let (tx, rx) = tokio::sync::oneshot::channel();
