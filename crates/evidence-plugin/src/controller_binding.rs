@@ -20,6 +20,13 @@
 //! **Where it travels.** As the member [`MEMBER`] of a pushed bundle
 //! (`record_push_receive`) or of a signed evidence request
 //! (`requester_auth`), as the record object itself.
+//!
+//! **This node's own binding** (loop step 12, Mesh-LLM/capsules-plugin#54).
+//! A node holds at most one binding of its own key to its operator's, in
+//! [`HELD_FILE`] in the data directory. `join` stores one only when it
+//! binds this node's key and applies ([`binds_own`]); `doctor` reports it
+//! `bound`, naming the other key, while it still applies, and `unbound`
+//! with the reason otherwise.
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use evidence_request::time::{parse_utc, UtcTime};
@@ -150,6 +157,61 @@ pub fn applies(record: &Value, at: UtcTime) -> Option<Applied> {
         keys: [keys[0].as_str()?.to_string(), keys[1].as_str()?.to_string()],
         digest: evaluation.digest?,
     })
+}
+
+/// The file in the data directory that holds this node's own binding.
+pub const HELD_FILE: &str = "controller-binding.json";
+
+/// This node's own binding as stored, when there is one. A file that does
+/// not parse reads as JSON `null`, which [`binds_own`] refuses.
+pub fn read_held(data_dir: &std::path::Path) -> Option<Value> {
+    let bytes = std::fs::read(data_dir.join(HELD_FILE)).ok()?;
+    Some(serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+/// `record`, when it binds `own_key` and applies at `at` (CB §6.2); why
+/// not otherwise, in words a `doctor` finding or a refused `join` carries.
+pub fn binds_own(record: &Value, own_key: &str, at: UtcTime) -> Result<Applied, String> {
+    let evaluation = evaluate(record, &[at]);
+    if evaluation.form != Status::Pass {
+        return Err(
+            "it is not a well-formed controller binding record (controller-binding/0)".into(),
+        );
+    }
+    if record["claim"].as_str() != Some(CLAIM_SAME_CONTROLLER) {
+        return Err(format!("its claim is not {CLAIM_SAME_CONTROLLER}"));
+    }
+    match evaluation.signatures {
+        Some(Status::Pass) => {}
+        Some(Status::NotChecked) => {
+            return Err(format!(
+                "its method {} is one this node does not check",
+                record["method"]
+            ))
+        }
+        _ => return Err("its two signatures do not both verify".into()),
+    }
+    if evaluation.window != Some(Status::Pass) {
+        return Err("it is outside its window (not_before to not_after)".into());
+    }
+    let applied = applies(record, at).ok_or("it does not apply")?;
+    if applied.other(own_key).is_none() {
+        return Err(format!("it does not bind this node's key {own_key}"));
+    }
+    Ok(applied)
+}
+
+/// Store `record` as this node's own binding, after [`binds_own`].
+pub fn store_held(
+    data_dir: &std::path::Path,
+    record: &Value,
+    own_key: &str,
+    at: UtcTime,
+) -> Result<Applied, String> {
+    let applied = binds_own(record, own_key, at)?;
+    crate::network_join::write_atomically(&data_dir.join(HELD_FILE), record)
+        .map_err(|e| format!("the binding could not be stored: {e}"))?;
+    Ok(applied)
 }
 
 /// CB §4: UTF-8 of JCS of the record with `sigs` removed.
@@ -466,5 +528,35 @@ mod tests {
         ] {
             assert!(applies(&record, now).is_none(), "{why}");
         }
+    }
+
+    /// `join` stores a binding of this node's key that applies, and a
+    /// refused one leaves the binding already held in place.
+    #[test]
+    fn only_a_binding_of_this_nodes_key_that_applies_is_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let (node, operator, other) = (key(1), key(2), key(3));
+        let own = hex::encode(node.verifying_key().to_bytes());
+        let now = at("2026-10-28T00:00:00Z");
+        assert_eq!(read_held(dir.path()), None);
+
+        let good = bind_for_test(&node, &operator, FROM, UNTIL);
+        let applied = store_held(dir.path(), &good, &own, now).expect("stored");
+        assert_eq!(
+            applied.other(&own),
+            Some(hex::encode(operator.verifying_key().to_bytes()).as_str())
+        );
+        assert_eq!(read_held(dir.path()), Some(good.clone()));
+
+        let mut unsigned = bind_for_test(&node, &other, FROM, UNTIL);
+        unsigned["sigs"] = Value::Array(vec![]);
+        for record in [bind_for_test(&other, &operator, FROM, UNTIL), unsigned] {
+            assert!(store_held(dir.path(), &record, &own, now).is_err());
+            assert_eq!(read_held(dir.path()), Some(good.clone()), "kept");
+        }
+
+        std::fs::write(dir.path().join(HELD_FILE), b"not json").unwrap();
+        assert_eq!(read_held(dir.path()), Some(Value::Null));
+        assert!(binds_own(&Value::Null, &own, now).is_err());
     }
 }
