@@ -316,14 +316,20 @@ jq -e '.verification.state == "artifact"' "$out/history-card-boundary.json" > /d
   || { echo "no history card at the boundary checkpoint:" >&2; cat "$out/history-card-boundary.json" >&2; exit 1; }
 # T6: the card inside the Service History is the direct card, byte for byte.
 python3 -I - "$out/service-history-boundary.json" "$out/history-card-boundary.json" <<'PY'
-import base64, json, sys
-def artifact(path):
-    answer = json.load(open(path))["answer"]
-    return json.loads(base64.b64decode(answer["artifact"]))
+import base64, hashlib, json, sys
+def octets(path):
+    # The envelope's byte fields are unpadded base64url.
+    text = json.load(open(path))["answer"]["artifact"]
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 def jcs(v):
-    return json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-history, card = artifact(sys.argv[1]), artifact(sys.argv[2])
-assert jcs(history["history_card"]) == jcs(card), "the embedded card is not the direct card"
+    return json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+history_octets, card_octets = octets(sys.argv[1]), octets(sys.argv[2])
+history = json.loads(history_octets)
+# Byte for byte: the direct card's octets are the embedded card's canonical
+# form, and the History's digest of the card is the digest of those octets.
+assert jcs(history["history_card"]) == card_octets, "the embedded card is not the direct card"
+assert history["history_card_digest"] == hashlib.sha256(card_octets).hexdigest(), \
+    "history_card_digest is not the digest of the direct card"
 assert history["period_counts"]["periods"], "the Service History lists no closed period"
 print("T6: the Service History embeds the direct history card, and lists",
       len(history["period_counts"]["periods"]), "closed period(s)")

@@ -227,7 +227,7 @@ fn pinned_time(cases: &[Value], pin: &str) -> String {
     panic!("no case holds the checkpoint {pin}");
 }
 
-/// The refusals this node also gives: an interval that is no run of whole
+/// The refusals this node also gives, through the gates its responder calls: an interval that is no run of whole
 /// periods, and an anchor off a period boundary, each `policy_declined`
 /// (ISH §6.1 items 2 and 5).
 #[test]
@@ -242,12 +242,19 @@ fn the_refusals_are_the_ones_this_node_gives() {
         let def = Definition::from_document(&case["inputs"]["definition"]).unwrap();
         let request = octets(&case["inputs"]["request"]);
         assert_eq!(request["derivation"], json!(def.digest()));
-        let declined = if request["subject"].get("full_history").is_none() {
-            true
-        } else {
+        // The gate the responder calls, over the case's own request.
+        let req = evidence_request::request::parse_json(
+            case["inputs"]["request"]["octets_text"]
+                .as_str()
+                .unwrap()
+                .as_bytes(),
+        )
+        .unwrap();
+        let mut declined = def.declines_request(&req.subject, &req.coverage);
+        if !declined {
             let pin = request["coverage"]["expected_pin"].as_str().unwrap();
-            !def.policy.is_boundary(&pinned_time(&all, pin))
-        };
+            declined = def.declines_anchor(&pinned_time(&all, pin));
+        }
         assert!(declined, "{}", id(case));
         run += 1;
     }

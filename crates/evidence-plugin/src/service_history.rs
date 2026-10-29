@@ -73,7 +73,7 @@
 
 use evidence_request::jcs;
 use evidence_request::registry::{Reason, DERIVATION_HISTORY_CARD};
-use evidence_request::request::Derivation;
+use evidence_request::request::{Coverage, Derivation, Subject};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -310,6 +310,21 @@ impl Definition {
         })
     }
 
+    /// Whether a request for this definition is `policy_declined` before
+    /// anything is resolved: a Service History is a run of whole closed
+    /// periods at one pinned anchor, so any other subject or coverage is
+    /// declined, the same for every requester (ISH §6.1 items 2 and 5).
+    pub(crate) fn declines_request(&self, subject: &Subject, coverage: &Coverage) -> bool {
+        !(matches!(subject, Subject::FullHistory) && matches!(coverage, Coverage::ExpectedPin(_)))
+    }
+
+    /// Whether an answer pinned to a checkpoint with time `timestamp` is
+    /// `policy_declined`: only a period boundary is answered (ISH §6.1
+    /// item 2).
+    pub(crate) fn declines_anchor(&self, timestamp: &str) -> bool {
+        !self.policy.is_boundary(timestamp)
+    }
+
     /// The digest that names the definition on the wire.
     pub(crate) fn digest(&self) -> &str {
         &self.digest
@@ -338,7 +353,7 @@ impl Definition {
                 if let Ok(length) = std::env::var("CAPSULES_TEST_PERIOD_LENGTH_S") {
                     let length: u64 = length.parse().expect("a whole number of seconds");
                     policy["length_s"] = json!(length);
-                    policy["min_length_s"] = json!(length.min(86_400));
+                    policy["min_length_s"] = json!(length);
                 }
             }
             Definition::from_document(&document).expect("the definition file conforms")
@@ -374,9 +389,10 @@ pub fn unix_time(timestamp: &str) -> Option<i64> {
     evidence_request::time::parse_utc(timestamp).map(|t| t.seconds)
 }
 
+#[cfg(test)]
 /// Whether the checkpoint time `timestamp` is a boundary of this node's
 /// periods.
-pub fn is_boundary(timestamp: &str) -> bool {
+fn is_boundary(timestamp: &str) -> bool {
     Definition::active().policy.is_boundary(timestamp)
 }
 
