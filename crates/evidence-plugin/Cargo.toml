@@ -171,6 +171,10 @@ getrandom = "0.2"
 # counts it (`witness_status`). 0.1.0 is yanked, so this resolves to 0.1.1 or
 # later.
 scitt-cose-receipt = "0.1"
+# A controller binding to an operator's Nostr key (`controller_binding`): the
+# `bip340` key type signs a Nostr event with BIP-340 Schnorr over secp256k1
+# (AAC Controller Binding §4.1). Same RustCrypto line as p256.
+k256 = { version = "0.13", default-features = false, features = ["schnorr", "std"] }
 
 [dev-dependencies]
 # The record-push parity run reads its own golden answers, which hold a record

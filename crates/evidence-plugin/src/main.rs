@@ -2,6 +2,7 @@ mod adjudication_records;
 mod admission;
 mod agreement;
 mod agreement_bridge;
+mod ask_book;
 // Library-shaped: the split-stage verifier, the frame fold and a few record
 // kinds are exercised by their own tests and the split-stage fixtures, not
 // yet by a live path of this binary.
@@ -10,6 +11,8 @@ mod checkpoint_cadence;
 mod commitment;
 mod commitment_bridge;
 mod controller_binding;
+#[cfg(test)]
+mod controller_binding_e2e_setup;
 mod data_dir;
 mod decision;
 mod doctor;
@@ -994,12 +997,12 @@ fn with_evidence_operations(
             )
             .input::<exchange_corroboration::RunArgs>()
             .handle({
-                let ledger_dir = capsules_for_delivery.ledger_dir().to_path_buf();
+                let capsules = capsules_for_delivery.clone();
                 move |args, context| {
                     Box::pin(exchange_corroboration::handle_historical_reference(
                         args,
                         context,
-                        ledger_dir.clone(),
+                        capsules.clone(),
                     ))
                 }
             }),
@@ -1138,15 +1141,16 @@ fn with_evidence_operations(
             .description(
                 "Check that this node is ready to join, idempotently: check the key, the book, the first checkpoint, \
                  the commitment served on commitment/1 and both stranger probes, and list what is \
-                 in place and what is not. Seals nothing, writes nothing and contacts nobody; a \
-                 fresh node's first checkpoint follows its first exchange.",
+                 in place and what is not. Seals nothing and contacts nobody; it writes only a \
+                 controller_binding it is given, after checking that it binds this node's key and \
+                 applies. A fresh node's first checkpoint follows its first exchange.",
             )
             .input::<doctor::JoinArgs>()
             .handle({
                 let capsules = capsules_for_delivery.clone();
                 let self_peer = self_peer.clone();
-                move |_args, _context| {
-                    Box::pin(doctor::handle_join(capsules.clone(), self_peer.current()))
+                move |args, _context| {
+                    Box::pin(doctor::handle_join(args, capsules.clone(), self_peer.current()))
                 }
             }),
     );
@@ -1366,6 +1370,21 @@ async fn main() -> anyhow::Result<()> {
     let own_public_key = capsules.public_key();
     let own_signing_key = capsules.signing_key().clone();
     owner_maintenance::finish_pending_after_open(&data_dir, &capsules, &log_id)?;
+    // Asks still pending from the last run: the absence of each whose
+    // window closed while this node was stopped, and the close of the rest.
+    let (overdue, open) = ask_book::resume_asks(&capsules, &evidence_answer::now_utc());
+    if overdue > 0 {
+        tracing::info!(
+            overdue,
+            "sealed the absences of asks whose window closed while stopped"
+        );
+    }
+    for asked in open {
+        tokio::spawn(mesh_evidence_bridge::absence_when_window_closes(
+            capsules.clone(),
+            asked,
+        ));
+    }
     tracing::info!(
         chain_head = ?capsules.chain_head(),
         "record sealing ready"

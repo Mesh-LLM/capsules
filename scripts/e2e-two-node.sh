@@ -273,6 +273,20 @@ PY
 }
 wait_for 60 "the provider declined a Service History off a period boundary, signed" service_history_declined
 
+# --- the ask, recorded: one that nobody answers ends in a sealed absence ----
+# Each ask above was sealed as evidence_request before it was sent. Now the
+# requester asks a node that is not on the mesh. With its deadline already
+# passed, the window closes 60 s after the ask is recorded (the minimum), and
+# the requester then seals recorded_absence citing it. The tool call itself
+# fails: nothing can be reached. The window does not wait for it.
+unanswered_peer=$(printf '%064d' 7)
+curl -sS --max-time 90 -X POST -H 'content-type: application/json' \
+  "http://127.0.0.1:$REQUESTER_CONSOLE/api/plugins/capsules/tools/mesh_evidence_request" \
+  -d "$(jq -cn --arg p "$unanswered_peer" \
+  --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{peer_id: $p,
+    request: {subject: {full_history: null}, coverage: {min_freshness: 1}, derivation: "history_card/1", deadline: $d}}')" \
+  > "$out/unanswered.json" 2>&1 || true
+
 # --- the referee: a twin pair put to the provider, its verdict on both chains
 # The requester holds two twins' halves of the first exchange and puts the pair
 # to the provider over the mesh; the provider's answer to that exchange is the
@@ -293,8 +307,33 @@ jq -e '.status == "received"' "$out/delivered.json" > /dev/null \
 sealed() { grep -q '"adjudication_received"' "$(plugin_data requester)/ledger/capsules.jsonl"; }
 wait_for 30 "the requester sealed its adjudication_received record" sealed
 
+absent() { grep -q '"recorded_absence"' "$(plugin_data requester)/ledger/capsules.jsonl"; }
+wait_for 180 "the requester sealed the absence of its unanswered ask" absent
+
 # --- join again after the first exchange: now it is complete ----------------
 wait_for 120 "join on the requester says it has joined" joined
+
+# --- the provider binds its node key to its operator's Nostr key -----------
+# A test Nostr key (crates/evidence-plugin/src/controller_binding_e2e_setup.rs).
+# join stores the binding, and refuses one of another node's key; the
+# requester then finds the binding in the provider's commitment by its
+# digest alone.
+(cd "$repo/crates/evidence-plugin" &&
+  E2E_PROVIDER_DIR=$(plugin_data provider) E2E_BINDINGS=$out \
+    cargo test --locked --bin capsules -- --ignored --exact controller_binding_e2e_setup::write_bindings \
+    > "$logs/setup-bindings.log" 2>&1) || { cat "$logs/setup-bindings.log" >&2; exit 1; }
+tool "$PROVIDER_CONSOLE" join "$(jq -cn --slurpfile b "$out/binding.json" '{controller_binding: $b[0]}')" \
+  > "$out/binding-join.json"
+code=$(curl -sS -o "$out/binding-refused.json" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+  -d "$(jq -cn --slurpfile b "$out/binding-other.json" '{controller_binding: $b[0]}')" \
+  "http://127.0.0.1:$PROVIDER_CONSOLE/api/plugins/capsules/tools/join")
+[ "$code" != 200 ] || { echo "join took a binding of another node's key" >&2; exit 1; }
+fetched() {
+  tool "$REQUESTER_CONSOLE" mesh_commitment_fetch "$(jq -cn --arg p "$provider_id" '{peer_id: $p}')" \
+    > "$out/fetched-commitment.json" \
+    && jq -e '.commitment.controller_binding.digest | type == "string"' "$out/fetched-commitment.json"
+}
+wait_for 60 "the requester fetched the provider's commitment, naming its binding" fetched
 
 # --- the switch off: a signed leave -----------------------------------------
 sed -i.bak 's/^join_network = "on"$/join_network = "off"/' "$(node_home requester)/config.toml"
@@ -310,5 +349,5 @@ cp -a "$(plugin_data requester)" "$out/data/requester"
 cp -a "$(plugin_data provider)" "$out/data/provider"
 cd "$repo/crates/evidence-plugin"
 E2E_REQUESTER_DIR=$out/data/requester E2E_PROVIDER_DIR=$out/data/provider E2E_EXCHANGES=$EXCHANGES \
-  E2E_JOIN_DIR=$out \
+  E2E_JOIN_DIR=$out E2E_UNANSWERED_PEER=$unanswered_peer \
   cargo test --locked --bin capsules -- --ignored --test-threads=1 two_node_e2e::

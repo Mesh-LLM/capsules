@@ -317,16 +317,19 @@ async fn ask(
         }
     }
     use crate::mesh_evidence_bridge::SendError;
-    let reply = match crate::mesh_evidence_bridge::send_evidence_request(context, referee, &request)
-        .await
-    {
-        Ok((_, reply)) => reply,
-        // No plugin stream to open: nothing there can sign a verdict.
-        Err(SendError::NotOpened(_)) => return (Called::CannotSign, None),
-        Err(SendError::NoAnswer(_) | SendError::Malformed(_)) => {
-            return (Called::Unreachable, None)
-        }
-    };
+    let reply =
+        match crate::mesh_evidence_bridge::send_evidence_request(context, referee, &request, None)
+            .await
+        {
+            Ok(answered) => answered.answer,
+            // No plugin stream to open: nothing there can sign a verdict.
+            Err(SendError::NotOpened(_)) => return (Called::CannotSign, None),
+            // Never for an adjudicate request, which is not put in the book.
+            Err(SendError::NotRecorded(_)) => return (Called::Unreachable, None),
+            Err(SendError::NoAnswer(_) | SendError::Malformed(_)) => {
+                return (Called::Unreachable, None)
+            }
+        };
     let capsule = reply.get("verdict_capsule").cloned().unwrap_or(Value::Null);
     match crate::referee::hold::verdict_facts(&capsule, peer_keys) {
         Some(facts) if facts.referee_node_id == referee && facts.selection_tier == Some(tier) => {

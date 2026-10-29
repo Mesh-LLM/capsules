@@ -38,7 +38,7 @@ pub(crate) fn built(policy: &Policy) -> Signed {
         node_id: Some(NODE),
         policy_digest: Some(&digest),
     };
-    build(&responder, NODE, policy).unwrap()
+    build(&responder, NODE, policy, None).unwrap()
 }
 
 /// `signed` with `edit` applied to its commitment, signed again.
@@ -184,6 +184,42 @@ fn a_built_commitment_has_exactly_the_members_and_verifies() {
     assert_eq!(doc["answers_within"], ANSWERS_WITHIN);
 }
 
+/// The controller binding is named by its digest alone, only when given,
+/// and any other shape of the member is refused (loop's `OPTIONAL`).
+#[test]
+fn a_controller_binding_is_named_by_its_digest_alone() {
+    let digest = "ab".repeat(32);
+    let signed = resigned(&built(&defaults()), |d| {
+        d[CONTROLLER_BINDING] = json!({ "digest": digest })
+    });
+    assert_eq!(verify(&signed), Vec::<String>::new());
+    assert!(built(&defaults())
+        .commitment
+        .get(CONTROLLER_BINDING)
+        .is_none());
+    for (value, says) in [
+        (
+            json!({"digest": "AB".repeat(32)}),
+            "controller_binding.digest is not a sha256",
+        ),
+        (json!({}), "missing controller_binding.digest"),
+        (
+            json!({"digest": digest, "keys": [digest]}),
+            "unknown field controller_binding.keys",
+        ),
+        (json!(digest), "controller_binding has the wrong type"),
+    ] {
+        let bad = resigned(&built(&defaults()), |d| {
+            d[CONTROLLER_BINDING] = value.clone()
+        });
+        let problems = verify(&bad);
+        assert!(
+            problems.iter().any(|p| p.contains(says)),
+            "{says}: {problems:?}"
+        );
+    }
+}
+
 #[test]
 fn the_checkpoint_is_the_latest_and_the_staple_is_what_a_stranger_gets() {
     let dir = tempfile::tempdir().unwrap();
@@ -227,7 +263,7 @@ fn no_checkpoint_means_no_commitment() {
         node_id: Some(NODE),
         policy_digest: None,
     };
-    let err = build(&responder, NODE, &policy).unwrap_err();
+    let err = build(&responder, NODE, &policy, None).unwrap_err();
     assert!(err.why.contains("no checkpoint"), "{err:?}");
     assert!(!err.lasting);
 }

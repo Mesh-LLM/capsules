@@ -17,7 +17,10 @@
 //! reporter's.
 //!
 //! **`join`** checks that this node is ready to join, idempotently, and
-//! writes nothing: the key and the book exist from the first start, and the
+//! writes nothing but a controller binding it is given (`controller_binding`
+//! in its arguments), which it stores as this node's own only after
+//! checking that it binds this node's key and applies
+//! (`controller_binding::store_held`): the key and the book exist from the first start, and the
 //! cadence cuts checkpoints over new activity. It reports what is in place
 //! (the key, the book, the first checkpoint, the commitment that
 //! `commitment/1` serves) and what is not, with `doctor`'s findings, probe
@@ -67,6 +70,7 @@ pub const PROBE_HISTORY_CARD: &str = "probe_history_card";
 // States. NOT_CHECKED means the check was not run, never that it passed.
 pub const STATE_SELF_ATTESTED: &str = "self_attested";
 pub const STATE_UNBOUND: &str = "unbound";
+pub const STATE_BOUND: &str = "bound";
 pub const STATE_PRESENT: &str = "present";
 pub const STATE_MISSING: &str = "missing";
 pub const STATE_WITNESSED: &str = "witnessed";
@@ -85,7 +89,7 @@ pub struct Finding {
     pub check: &'static str,
     pub state: &'static str,
     pub detail: String,
-    /// What shows the finding: an anchor or a policy digest.
+    /// What shows the finding: an anchor, a policy digest or a binding digest.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub records: Vec<String>,
 }
@@ -233,14 +237,52 @@ fn long_log_note(book: &Book) -> String {
     }
 }
 
+/// Whether this node's own binding (`controller_binding::read_held`) binds
+/// `key_id` and applies now: `bound`, with the binding digest, or `unbound`
+/// with the reason. It never names the other key: that is the operator's,
+/// often a Nostr identity used elsewhere, and a finding may be shown to
+/// anyone the operator shows `doctor` to (CB §9.3).
+fn controller_binding(binding: Option<&Value>, key_id: &str, now: &str) -> Finding {
+    let Some(record) = binding else {
+        return Finding::new(
+            CONTROLLER_BINDING,
+            STATE_UNBOUND,
+            format!(
+                "no controller binding record names this node's key {key_id}: the node holds none"
+            ),
+        );
+    };
+    let checked = evidence_request::time::parse_utc(now)
+        .ok_or_else(|| format!("the time {now} does not parse"))
+        .and_then(|at| crate::controller_binding::binds_own(record, key_id, at));
+    match checked {
+        Ok(applied) => Finding::new(
+            CONTROLLER_BINDING,
+            STATE_BOUND,
+            format!(
+                "this node's key {key_id} is bound to its operator's key by the binding {}: both \
+                 keys signed it, and it is inside its window",
+                applied.digest
+            ),
+        )
+        .with(applied.digest),
+        Err(why) => Finding::new(
+            CONTROLLER_BINDING,
+            STATE_UNBOUND,
+            format!("the controller binding this node holds does not count: {why}"),
+        ),
+    }
+}
+
 /// Every finding, the probe's included when `probe` is set. `responder` is
 /// what this node answers with now, under `policy`; `served` is the
-/// commitment it serves.
+/// commitment it serves; `binding` is this node's own controller binding.
 pub fn findings(
     responder: &Responder<'_>,
     policy: &Policy,
     served: &Served,
     witnesses: &Witnesses,
+    binding: Option<&Value>,
     probe: bool,
 ) -> Result<Vec<Finding>, String> {
     let book = read_book(responder)?;
@@ -260,14 +302,7 @@ pub fn findings(
                 )
             },
         ),
-        Finding::new(
-            CONTROLLER_BINDING,
-            STATE_UNBOUND,
-            format!(
-                "no controller binding record names this node's key {key_id}: the plugin holds none \
-                 of its own"
-            ),
-        ),
+        controller_binding(binding, &key_id, responder.now),
     ];
     out.push(match latest {
         None => Finding::new(
@@ -575,8 +610,9 @@ pub fn join_report(
     policy: &Policy,
     served: &Served,
     witnesses: &Witnesses,
+    binding: Option<&Value>,
 ) -> Result<Value, String> {
-    let findings = findings(responder, policy, served, witnesses, true)?;
+    let findings = findings(responder, policy, served, witnesses, binding, true)?;
     let state = |check: &str| {
         findings
             .iter()
@@ -603,6 +639,9 @@ pub fn join_report(
         .iter()
         .find(|f| f.check == POLICY_IN_COMMITMENT)
         .expect("findings always holds policy_in_commitment");
+    if state(CONTROLLER_BINDING) == STATE_BOUND {
+        done.push("the node key is bound to its operator's key".into());
+    }
     if commitment.state == STATE_PRESENT {
         done.push("the commitment served on commitment/1 verifies".into());
     } else {
@@ -647,8 +686,15 @@ pub struct DoctorArgs {
     pub probe: bool,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct JoinArgs {}
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct JoinArgs {
+    /// A controller binding record (controller-binding/0) that binds this
+    /// node's key to its operator's, signed by both. Stored as this node's
+    /// own binding when it binds this node's key and applies now; refused
+    /// otherwise, and the binding already held is kept.
+    #[serde(default)]
+    pub controller_binding: Option<Value>,
+}
 
 /// `doctor`: `{"findings": [...]}`.
 pub async fn handle_doctor(
@@ -660,9 +706,17 @@ pub async fn handle_doctor(
         let now = evidence_answer::now_utc();
         let witnesses = Witnesses::read(capsules.ledger_dir());
         let served = crate::commitment_bridge::own(&capsules, node_id.as_deref());
+        let binding = held(&capsules);
         commitment::with_responder(&capsules, &now, node_id.as_deref(), |responder, policy| {
-            findings(responder, policy, &served, &witnesses, args.probe)
-                .map(|f| json!({"findings": f}))
+            findings(
+                responder,
+                policy,
+                &served,
+                &witnesses,
+                binding.as_ref(),
+                args.probe,
+            )
+            .map(|f| json!({"findings": f}))
         })
     })
     .await
@@ -670,18 +724,33 @@ pub async fn handle_doctor(
 
 /// `join`: what is in place and what is not (see the module doc).
 pub async fn handle_join(
+    args: JoinArgs,
     capsules: std::sync::Arc<crate::capsule_emit::CapsuleState>,
     node_id: Option<String>,
 ) -> mesh_llm_plugin::PluginResult<Value> {
     blocking(move || {
         let now = evidence_answer::now_utc();
+        if let Some(record) = &args.controller_binding {
+            let data_dir = capsules
+                .ledger_dir()
+                .parent()
+                .ok_or("the ledger has no data directory to keep a binding in")?;
+            let at = evidence_request::time::parse_utc(&now)
+                .ok_or_else(|| format!("the time {now} does not parse"))?;
+            let own = commitment::key_id(capsules.signing_key());
+            crate::controller_binding::store_held(data_dir, record, &own, at)
+                .map_err(|why| format!("the controller binding is refused: {why}"))?;
+        }
         let witnesses = Witnesses::read(capsules.ledger_dir());
         let served = crate::commitment_bridge::own(&capsules, node_id.as_deref());
+        let binding = held(&capsules);
         let mut report = commitment::with_responder(
             &capsules,
             &now,
             node_id.as_deref(),
-            |responder, policy| join_report(responder, policy, &served, &witnesses),
+            |responder, policy| {
+                join_report(responder, policy, &served, &witnesses, binding.as_ref())
+            },
         )?;
         // The ledger is `<data dir>/ledger`; the join switch keeps its state
         // in the data directory.
@@ -695,6 +764,12 @@ pub async fn handle_join(
         Ok(report)
     })
     .await
+}
+
+/// This node's own controller binding, from the data directory the ledger
+/// is in (`<data dir>/ledger`).
+fn held(capsules: &crate::capsule_emit::CapsuleState) -> Option<Value> {
+    crate::controller_binding::read_held(capsules.ledger_dir().parent()?)
 }
 
 async fn blocking(

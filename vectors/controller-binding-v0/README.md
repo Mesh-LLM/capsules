@@ -4,7 +4,8 @@ These vectors exercise `spec/controller-binding-v0.md` (cited as CB) and its use
 independence (`spec/interop-profile-v0.md`, `evidence-interop/0`, cited as IP, §6.7.4). They cover:
 
 - the binding record's form and the methods of its three claim types (CB §3);
-- the rule that both keys sign the same bytes (CB §4);
+- the rule that both keys sign the same bytes (CB §4), and how a `bip340` (Nostr) key signs them
+  with a Nostr event (CB §3.3, §4.1);
 - revocation (CB §5);
 - the binding properties, and when a binding applies to a pair (CB §6);
 - what a binding proves, and the `issuer_independence` it gives (CB §7).
@@ -50,7 +51,10 @@ identity (CB §3.2).
 | Inputs | `halves`, `binding`, and where the case needs them, `revocations` and `credential`, each as JSON octets given as text |
 
 **All keys are test keys.** Each private key is the Ed25519 seed SHA-256 of the label in
-`test_keys`. Never use one for anything else.
+`test_keys`, except `operator-nostr`, a `bip340` key whose secret key is SHA-256 of its label. Its
+signing events have `created_at` 1790812800 and are signed with BIP-340's all-zero `aux_rand`, so
+they are reproducible, and so are their nonces, which a real ceremony draws at random (CB §9.3).
+Never use one for anything else.
 
 ## Expected values
 
@@ -93,6 +97,17 @@ already. No case reaches it, as in `vectors/coverage-declaration-v0/`.
 | `unknown-method` | `same_controller_asserted` under `single_signature/0`, over two valid signatures: signatures `NOT_CHECKED`, does not apply | nothing | `NOT_CHECKED` |
 | `delegator-not-bound` | `delegated_by` naming the third key as delegator | `controller_binding_form` | `NOT_CHECKED` |
 | `revocation-by-other-key` | a revocation before the halves, signed by the third key: it does not apply, and the binding applies | nothing | `FAIL`: redundant, by the binding |
+| `valid-nostr-key` | the first half's key bound to the `bip340` key, signed by the Nostr event; it does not bind the pair | nothing | `NOT_CHECKED` |
+| `nostr-key-read-as-ed25519` | the same keys and signatures without `key_types`, so both are `ed25519` | `controller_binding_signatures` | `NOT_CHECKED` |
+| `nostr-wrong-digest` | the Nostr event's `content` names another record's digest | `controller_binding_signatures` | `NOT_CHECKED` |
+| `nostr-other-kind` | the Nostr event is of kind 1 over the right `content` | `controller_binding_signatures` | `NOT_CHECKED` |
+| `nostr-revoked` | revoked by the `bip340` key, with a Nostr event, before the halves | `controller_binding_revocation` | `NOT_CHECKED` |
+| `nostr-nonce-short` | a `bip340` binding whose `nonce` is `ceremony-1`, not 32 hex characters | `controller_binding_form` | `NOT_CHECKED` |
+| `nostr-sig-malformed` | the `bip340` key's `sig` object has a third member | `controller_binding_signatures` | `NOT_CHECKED` |
+| `nostr-created-at-negative` | the Nostr event is validly signed over `created_at` −1 | `controller_binding_signatures` | `NOT_CHECKED` |
+| `nostr-created-at-text` | the same over `created_at` written as text | `controller_binding_signatures` | `NOT_CHECKED` |
+| `key-types-malformed` | `key_types` holds one token | `controller_binding_form` | `NOT_CHECKED` |
+| `key-types-unknown` | `key_types` names an unlisted token: signatures `NOT_CHECKED`; a revocation by that key, signed with Ed25519, does not apply | nothing | `NOT_CHECKED` |
 
 No case shows `issuer_independence` `PASS`. A binding never gives it (CB §7), and this revision
 registers no evidence that does (IP P-60).
@@ -111,3 +126,7 @@ registers no evidence that does (IP P-60).
 - A verifier that does not implement a binding method (`controller_binding_signatures`
   `NOT_CHECKED`).
 - Binding records or statements the verifier could not parse.
+- A `created_at` above 2^53 − 1. JSON with such an integer has no JCS form (IP §5.1), so the
+  record cannot be carried as these vectors carry every input.
+- A `bip340` key bound to the key of the other half. Halves are signed with Ed25519, so no pair
+  is under a `bip340` key, and every `bip340` case leaves the pair unbound.
