@@ -1392,6 +1392,7 @@ async fn main() -> anyhow::Result<()> {
         admission::Policy::from_settings(),
         capsules.clone(),
     ));
+    let admission_for_rows = peer_admission.clone();
     // the record-push responder's
     // citing-record seal writes to the SAME single-writer ledger -- one
     // `CapsuleState`, shared by Arc, never a second writer.
@@ -1629,6 +1630,8 @@ async fn main() -> anyhow::Result<()> {
                 self_peer_for_join.clone(),
                 data_dir_for_join.clone(),
             );
+            // The base policy's card asks and local refresh (`admission::base`).
+            admission_for_rows.start(context.owned());
             Box::pin(async move {
                 peer_keys::announced::start(announces, PLUGIN_ID);
                 announce_own_key(

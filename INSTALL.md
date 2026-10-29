@@ -317,8 +317,23 @@ your lists, and seal the decision in its book:
 - `CAPSULES_ADMISSION_DENY`: peers to refuse, in the same form. A peer on both lists is refused.
 - `CAPSULES_ADMISSION_DEFAULT`: `go` (the default) or `no`, for a peer on neither list.
 
+Each decision also records what the base policy's five rows (policy `base/1`) read about the peer,
+from its history card and this node's own book. The rows decide nothing: only your settings give a
+NO. They record:
+
+- **identity**: the card verifies under the record key the peer announced;
+- **key age**: the card's first checkpoint is at least 7 days old;
+- **performed and settled**: this node has at least one settled exchange with the peer;
+- **disputes**: no referee has ruled against the peer (`contradicted`) in the last 30 days, counting
+  only verdicts this node asked for or issued;
+- **corroboration**: this node holds the peer's pushed half of at least one exchange.
+
+A row that fails stays a record; to refuse such a peer, add it to your deny list. The thresholds
+are placeholders, fixed in this version.
+
 The settings are read once at start; restart mesh-llm after changing them. Nothing is fetched
-while a request waits. If a setting does not parse, the plugin keeps running and refuses every
+while a request waits: a peer's card is asked for in the background (at most once an hour per
+peer, and again daily), and the book is re-read every minute. Until then the rows read `not_read`. If a setting does not parse, the plugin keeps running and refuses every
 peer (`unreadable_policy` in the log and the records) until you fix it and restart, so a typo
 never admits a peer you meant to refuse.
 
@@ -345,8 +360,8 @@ the request anyway. The same holds while the plugin is stopped or not loaded: wi
 mesh-llm refuses every request (503) until the plugin is back; with `best_effort`, it routes to
 every peer, deny list included.
 
-Each decision is an `admission_decision` record: the verdict, which list or the default gave it,
-and the digest of the policy it read. The record never names the peer in clear, since records can
+Each decision is an `admission_decision` record: the verdict, which list or the default
+gave it, each row's result (`pass`, `fail` or `not_read`), the digest of the policy it read, and the history card it read, by a commitment like the peer's. The record never names the peer in clear, since records can
 be shared with others; it names the peer by a commitment only this node's key can open, so a peer
 cannot check a record about itself unless you open it. If the key is lost, so is the way to say
 which peer an old record names. If a decision cannot be sealed, the answer is NO and the log says

@@ -442,6 +442,11 @@ pub struct Checked {
     pub records: Vec<u64>,
     /// The checkpoints it lists (`checkpoints`, `history_card/1`).
     pub checkpoints: usize,
+    /// The time the first of them states, which starts the stream: a
+    /// history card's key age. `None` when the answer lists none.
+    pub first_checkpoint_at: Option<String>,
+    /// The envelope's `artifact_digest`, checked against the artifact.
+    pub artifact_digest: String,
     /// The halves an `exchange_corroboration/1` answer states, each proven
     /// under the anchor. Empty for any other answer.
     pub halves: Vec<crate::exchange_corroboration::Half>,
@@ -714,6 +719,8 @@ pub fn check(
         anchor: served.digest,
         records,
         checkpoints: listed.len(),
+        first_checkpoint_at: listed.first().map(|first| first.cp.timestamp.clone()),
+        artifact_digest: env.artifact_digest.clone(),
         halves,
         receipts,
         history,

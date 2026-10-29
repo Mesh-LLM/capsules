@@ -682,7 +682,7 @@ fn effective_ledger(ledger_dir: &Path) -> EffectiveLedger {
 /// The host-minted `exchange_id` a record carries, if any. Settlement records
 /// join rows on this id, never on the request digest: the payer's lifecycle
 /// events carry only the id.
-fn record_exchange_id(record: &Value) -> Option<&str> {
+pub(crate) fn record_exchange_id(record: &Value) -> Option<&str> {
     poc_block(record)
         .and_then(|poc| poc.pointer("/serving_provenance/exchange_id"))
         .and_then(Value::as_str)
@@ -1608,6 +1608,18 @@ fn settlement_summaries(
     ids.into_iter()
         .filter_map(|id| settlements.summary_for([id]))
         .collect()
+}
+
+/// The exchange ids whose book on this node, as payer or as provider, reads
+/// `settled`: every invoice it saw issued has a settlement its own wallet
+/// reported. Admission's performed-and-settled row reads this
+/// (`crate::admission::base`), never a sum or an amount.
+pub(crate) fn settled_exchange_ids(records: &[Value]) -> BTreeSet<String> {
+    let mut settlements = SettlementIndex::default();
+    for record in records.iter().filter(|record| is_settlement_record(record)) {
+        settlements.push(record.clone());
+    }
+    settlements.settled_exchange_ids()
 }
 
 /// [`build_pane_b`] with the receiver's claim refusals, so a peer's row counts the
