@@ -27,8 +27,9 @@
 //! A node holds at most one binding of its own key to its operator's, in
 //! [`HELD_FILE`] in the data directory. `join` stores one only when it
 //! binds this node's key and applies ([`binds_own`]); `doctor` reports it
-//! `bound`, naming the other key, while it still applies, and `unbound`
-//! with the reason otherwise.
+//! `bound`, naming the binding by its digest and never the other key, while
+//! it still applies, and `unbound` with the reason otherwise. Concurrent
+//! `join`s store one at a time ([`HELD_LOCK`]).
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use evidence_request::time::{parse_utc, UtcTime};
@@ -189,10 +190,19 @@ pub fn binds_own(record: &Value, own_key: &str, at: UtcTime) -> Result<Applied, 
     match evaluation.signatures {
         Some(Status::Pass) => {}
         Some(Status::NotChecked) => {
-            return Err(format!(
-                "its method {} is one this node does not check",
-                record["method"]
-            ))
+            let unknown = record[KEY_TYPES]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .find(|t| *t != KEY_TYPE_ED25519 && *t != KEY_TYPE_BIP340);
+            return Err(match unknown {
+                Some(kind) => format!("its key type {kind} is one this node does not check"),
+                None => format!(
+                    "its method {} is one this node does not check",
+                    record["method"].as_str().unwrap_or_default()
+                ),
+            });
         }
         _ => return Err("its two signatures do not both verify".into()),
     }
@@ -206,6 +216,10 @@ pub fn binds_own(record: &Value, own_key: &str, at: UtcTime) -> Result<Applied, 
     Ok(applied)
 }
 
+/// Held while [`store_held`] writes: the write goes through one fixed
+/// temporary file, so two `join`s at once would interleave in it.
+static HELD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Store `record` as this node's own binding, after [`binds_own`].
 pub fn store_held(
     data_dir: &std::path::Path,
@@ -214,6 +228,9 @@ pub fn store_held(
     at: UtcTime,
 ) -> Result<Applied, String> {
     let applied = binds_own(record, own_key, at)?;
+    let _held = HELD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     crate::network_join::write_atomically(&data_dir.join(HELD_FILE), record)
         .map_err(|e| format!("the binding could not be stored: {e}"))?;
     Ok(applied)
@@ -737,6 +754,27 @@ mod tests {
         ] {
             assert!(applies(&binding(id), now).is_none(), "{id}");
         }
+    }
+
+    /// Bindings stored from many threads at once leave one of them whole.
+    #[test]
+    fn concurrent_stores_leave_one_whole_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = key(1);
+        let own = hex::encode(node.verifying_key().to_bytes());
+        let now = at("2026-10-28T00:00:00Z");
+        let records: Vec<Value> = (2..10u8)
+            .map(|seed| bind_for_test(&node, &key(seed), FROM, UNTIL))
+            .collect();
+        std::thread::scope(|scope| {
+            for record in &records {
+                for _ in 0..4 {
+                    scope.spawn(|| store_held(dir.path(), record, &own, now).unwrap());
+                }
+            }
+        });
+        let held = read_held(dir.path()).unwrap();
+        assert!(records.contains(&held), "{held}");
     }
 
     /// The test helper's binding to a Nostr key applies, so the two-node run

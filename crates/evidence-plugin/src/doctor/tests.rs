@@ -476,6 +476,29 @@ fn a_binding_that_does_not_count_reads_unbound() {
         wrong_signer["sigs"][i]["sig"] =
             json!(hex::encode(stranger.sign(input.as_bytes()).to_bytes()));
     }
+    let corpus: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../vectors/controller-binding-v0/vectors.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let binding_of = |id: &str| -> Value {
+        let case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .unwrap();
+        serde_json::from_str(case["inputs"]["binding"]["octets_text"].as_str().unwrap()).unwrap()
+    };
+    // An unknown key type is refused before its signatures are checked, so
+    // this record need not be signed again; the corpus's record binds other
+    // keys, and its signature failure is reached first.
+    let mut unknown_type = crate::controller_binding::bind_for_test(&key(), &operator, from, until);
+    unknown_type["key_types"] = json!(["ed25519", "org.example.key-type"]);
+    let read_as_ed25519 = binding_of("nostr-key-read-as-ed25519");
     for (why, record, says) in [
         ("one signature", one_signed, "do not both verify"),
         ("no signatures", unsigned, "do not both verify"),
@@ -501,6 +524,16 @@ fn a_binding_that_does_not_count_reads_unbound() {
             "outside its window",
         ),
         ("not a record", Value::Null, "not a well-formed"),
+        (
+            "an unknown key type",
+            unknown_type,
+            "its key type org.example.key-type",
+        ),
+        (
+            "a Nostr key read as Ed25519",
+            read_as_ed25519,
+            "do not both verify",
+        ),
     ] {
         let f = doctor_with(Some(&record));
         assert_eq!(f.state, STATE_UNBOUND, "{why}: {}", f.detail);

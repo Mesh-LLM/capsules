@@ -75,7 +75,8 @@ static LAST: Slot = std::sync::Mutex::new(None);
 
 type Slot = std::sync::Mutex<Option<(BuiltFrom, Result<Signed, String>)>>;
 
-/// This node's id, the policy's digest, the latest checkpoint's anchor.
+/// This node's id, the policy's digest, the latest checkpoint's anchor, and
+/// the digest of the held controller binding that applies, if any.
 type BuiltFrom = (String, String, String, Option<String>);
 
 /// What `slot` holds for `key`, or `build`'s result, kept in `slot` unless

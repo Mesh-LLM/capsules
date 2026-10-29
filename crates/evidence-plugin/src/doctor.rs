@@ -89,7 +89,7 @@ pub struct Finding {
     pub check: &'static str,
     pub state: &'static str,
     pub detail: String,
-    /// What shows the finding: an anchor or a policy digest.
+    /// What shows the finding: an anchor, a policy digest or a binding digest.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub records: Vec<String>,
 }
