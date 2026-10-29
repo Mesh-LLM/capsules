@@ -139,7 +139,7 @@ cll = { package = "checkpointed-local-log", version = "0.3.1" }
 # check of Checkpointed Local Log material (`cll`) and witness receipts
 # (`receipt`). The artifact is built by evidencebook (below).
 # Pinned exactly: a new release may change what verifies.
-evidence-request = { version = "=0.2.0", features = ["cll", "receipt"] }
+evidence-request = { version = "=0.2.0", features = ["cll", "receipt", "acceptance"] }
 # The "asked of you" log (`evidence_answer::log_received`) is evidencebook's
 # `received` and the `served_summary/1` fold is its `served_summary`
 # (evidencebook#35); which directory the log may write, how a ledger line is
@@ -157,6 +157,8 @@ evidencebook = "0.0.9"
 ureq = { version = "2", features = ["json"] }
 # O_NOFOLLOW for the lock files (`data_dir`). Already in the tree.
 libc = "0.2"
+# A session id's random bits (`agreement`). Already in the tree.
+getrandom = "0.2"
 # A witness's receipt for a checkpoint is checked offline before the page
 # counts it (`witness_status`). 0.1.0 is yanked, so this resolves to 0.1.1 or
 # later.
@@ -207,3 +209,9 @@ opt-level = 3
 # carries it; then this goes and the requirement above moves to that release.
 [patch.crates-io]
 mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "a39211e78f3dd73cf9a94b08417c0da17e5fa5d9" }
+# The interop profile's acceptance records (`acceptance` feature,
+# agent-action-capsule #454) are on its main but in no published
+# evidence-request yet. Taken from that merge commit until a release carries
+# it; the patch replaces the crate for evidencebook too, so the graph keeps
+# one evidence-request (`cargo tree -d` shows none twice).
+evidence-request = { git = "https://github.com/action-state-group/agent-action-capsule", rev = "a8f7ac7f9d4b76d96796885e5eac795211c28180" }

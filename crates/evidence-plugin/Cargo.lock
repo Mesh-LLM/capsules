@@ -648,6 +648,7 @@ dependencies = [
  "ed25519-dalek",
  "evidence-request",
  "evidencebook",
+ "getrandom 0.2.17",
  "hex",
  "libc",
  "mesh-llm-plugin",
@@ -673,8 +674,7 @@ dependencies = [
 [[package]]
 name = "evidence-request"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f39d101212c2aec822d68f722924830e2c362790053de64fa3e025be25ebf29"
+source = "git+https://github.com/action-state-group/agent-action-capsule?rev=a8f7ac7f9d4b76d96796885e5eac795211c28180#a8f7ac7f9d4b76d96796885e5eac795211c28180"
 dependencies = [
  "base64 0.22.1",
  "checkpointed-local-log",
