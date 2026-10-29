@@ -25,6 +25,7 @@ fn passing() -> LocalFacts {
     LocalFacts {
         settled: 1,
         held_halves: 1,
+        verdicts: 1,
         adverse: 0,
     }
 }
@@ -241,6 +242,7 @@ fn local_facts_count_settled_exchanges_held_halves_and_adverse_verdicts_in_the_p
         Some(&LocalFacts {
             settled: 1,
             held_halves: 0,
+            verdicts: 2,
             adverse: 1,
         }),
         "one settled exchange, one adverse verdict in 30 days"
@@ -300,6 +302,50 @@ fn a_chain_that_does_not_read_whole_leaves_the_local_rows_not_read() {
 }
 
 #[test]
+fn a_torn_line_in_the_asked_for_adjudications_leaves_the_rows_not_read() {
+    let dir = tempfile::tempdir().unwrap();
+    write_ledger(
+        dir.path(),
+        &[verdict(
+            &format!("contradicted:{PEER}"),
+            "v",
+            "2026-10-29T00:00Z",
+        )],
+    );
+    std::fs::write(
+        dir.path().join(crate::verdict_counts::REQUESTED_FILENAME),
+        "{\"referee\":",
+    )
+    .unwrap();
+    assert!(
+        local_facts(dir.path(), Utc::now()).is_none(),
+        "the request it tore could be the one an adverse verdict needs"
+    );
+}
+
+#[test]
+fn disputes_is_not_read_until_this_node_holds_a_verdict_about_the_peer() {
+    let (base, _dir) = base();
+    let at = Instant::now();
+    base.set_facts_for_test(
+        PEER,
+        LocalFacts {
+            verdicts: 0,
+            ..passing()
+        },
+    );
+    assert_eq!(
+        base.read_keyed(PEER, at, Utc::now()).rows[3],
+        RowResult::NotRead
+    );
+    base.set_facts_for_test(PEER, passing());
+    assert_eq!(
+        base.read_keyed(PEER, at, Utc::now()).rows[3],
+        RowResult::Pass
+    );
+}
+
+#[test]
 fn a_card_read_under_another_key_or_failing_later_is_no_longer_read() {
     let (base, _dir) = base();
     let (sender, mut asks) = tokio::sync::mpsc::unbounded_channel();
@@ -325,6 +371,12 @@ fn a_card_read_under_another_key_or_failing_later_is_no_longer_read() {
         read.rows[0],
         RowResult::Fail,
         "the newer answer did not verify"
+    );
+    let read = base.read_with_key(PEER, Some(&rotated), at, Utc::now());
+    assert_eq!(
+        read.rows[0],
+        RowResult::NotRead,
+        "a failure under the old key says nothing about the new one"
     );
 }
 

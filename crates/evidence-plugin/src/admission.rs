@@ -560,6 +560,7 @@ mod tests {
             base::LocalFacts {
                 settled: 1,
                 held_halves: 1,
+                verdicts: 1,
                 adverse: 0,
             },
         );
@@ -603,6 +604,7 @@ mod tests {
         let adverse = base::LocalFacts {
             settled: 3,
             held_halves: 3,
+            verdicts: 1,
             adverse: 1,
         };
         for (default, decision, verdict) in [

@@ -10,7 +10,8 @@
 //!   can backdate it: a `pass` here is not proof of age.
 //! - **performed-and-settled**: this node's own book holds at least
 //!   [`MIN_SETTLED`] exchange with the peer whose book reads `settled`.
-//! - **disputes**: no adverse adjudication about the peer in the last
+//! - **disputes**: `not_read` until this node holds a verdict about the peer;
+//!   then no adverse adjudication about it in the last
 //!   [`DISPUTE_PERIOD_DAYS`] days, counted exactly as `verdict_counts::fold`
 //!   counts verdicts (verified, asked for by this node, once per referee and
 //!   pair). Adverse is a `contradicted` verdict naming the peer.
@@ -115,6 +116,8 @@ pub enum CardOutcome {
 
 #[derive(Default)]
 struct CardEntry {
+    /// The peer's announced key when this entry was last read.
+    key: Option<String>,
     card: Option<(Card, Instant)>,
     last: Option<CardOutcome>,
     asked_at: Option<Instant>,
@@ -126,6 +129,8 @@ struct CardEntry {
 pub struct LocalFacts {
     pub settled: usize,
     pub held_halves: usize,
+    /// Verdicts about the peer this node holds, of any kind.
+    pub verdicts: usize,
     pub adverse: usize,
 }
 
@@ -207,7 +212,11 @@ impl Base {
             card_rows[0],
             card_rows[1],
             local_row(|f| f.settled >= MIN_SETTLED),
-            local_row(|f| f.adverse == 0),
+            // No verdict about the peer at all is not "checked, clean".
+            match local.as_ref() {
+                Some(facts) if facts.verdicts > 0 => RowResult::of(facts.adverse == 0),
+                _ => RowResult::NotRead,
+            },
             local_row(|f| f.held_halves >= MIN_HELD_HALVES),
         ];
         Read { rows, card }
@@ -225,15 +234,19 @@ impl Base {
     ) -> (Option<String>, [RowResult; 2]) {
         let mut cards = self.cards.lock().expect("the card lock is never poisoned");
         let entry = cards.entry(peer.to_string()).or_default();
-        if entry
-            .card
-            .as_ref()
-            .is_some_and(|(card, _)| Some(card.key_id.as_str()) != key)
+        // A new key starts over: neither an old card nor an old failure
+        // speaks for it.
+        if entry.key.is_some() && entry.key.as_deref() != key
+            || entry
+                .card
+                .as_ref()
+                .is_some_and(|(card, _)| Some(card.key_id.as_str()) != key)
         {
             entry.card = None;
             entry.last = None;
             entry.asked_at = None;
         }
+        entry.key = key.map(str::to_string);
         let stale = entry
             .card
             .as_ref()
@@ -406,7 +419,18 @@ pub fn read_card(
 pub fn local_facts(ledger_dir: &Path, now: DateTime<Utc>) -> Option<Facts> {
     for file in ["capsules.jsonl", crate::verdict_counts::REQUESTED_FILENAME] {
         match std::fs::read_to_string(ledger_dir.join(file)) {
-            Ok(_) => {}
+            // Every line must parse: `read_requested` skips one that doesn't,
+            // and the verdict it asked for would then count nowhere.
+            Ok(text) => {
+                if text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .any(|line| serde_json::from_str::<Value>(line).is_err())
+                {
+                    return None;
+                }
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => return None,
         }
@@ -452,11 +476,9 @@ pub fn local_facts(ledger_dir: &Path, now: DateTime<Utc>) -> Option<Facts> {
                     .is_none_or(|at| now - at <= period)
             })
             .count();
-        facts
-            .by_peer
-            .entry(peer.to_ascii_lowercase())
-            .or_default()
-            .adverse = adverse;
+        let facts = facts.by_peer.entry(peer.to_ascii_lowercase()).or_default();
+        facts.verdicts = verdicts.len();
+        facts.adverse = adverse;
     }
     Some(facts)
 }

@@ -326,7 +326,8 @@ NO. They record:
   statement, witnessed or not, so a peer can backdate it: `pass` is not proof of age;
 - **performed and settled**: this node has at least one settled exchange with the peer;
 - **disputes**: no referee has ruled against the peer (`contradicted`) in the last 30 days, counting
-  only verdicts this node asked for or issued;
+  only verdicts this node asked for or issued; `not_read` while this node holds no verdict about the
+  peer at all;
 - **corroboration**: this node holds the peer's pushed half of at least one exchange.
 
 A row that fails stays a record; to refuse such a peer, add it to your deny list. The thresholds
