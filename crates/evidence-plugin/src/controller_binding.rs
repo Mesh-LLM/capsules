@@ -470,6 +470,57 @@ pub fn bind_for_test(
     record
 }
 
+/// A `same_controller_asserted` binding of the Ed25519 key `node` to the
+/// Nostr (`bip340`) key `nostr`, signed by both as CB §4.1 says, in effect
+/// from `not_before` until `not_after`: for tests and the two-node run.
+#[cfg(test)]
+pub fn bind_to_nostr_for_test(
+    node: &ed25519_dalek::SigningKey,
+    nostr: &k256::schnorr::SigningKey,
+    nonce: &str,
+    not_before: &str,
+    not_after: &str,
+) -> Value {
+    use ed25519_dalek::Signer;
+    let node_key = hex::encode(node.verifying_key().to_bytes());
+    let nostr_key = hex::encode(nostr.verifying_key().to_bytes());
+    let mut pair = [(node_key, KEY_TYPE_ED25519), (nostr_key, KEY_TYPE_BIP340)];
+    pair.sort();
+    let mut record = serde_json::json!({
+        "binding_version": VERSION,
+        "claim": CLAIM_SAME_CONTROLLER,
+        "method": METHOD_DUAL_SIGNATURE,
+        "keys": [pair[0].0, pair[1].0],
+        "key_types": [pair[0].1, pair[1].1],
+        "issued_at": not_before,
+        "not_before": not_before,
+        "not_after": not_after,
+        "revocation": "revocation_statement/0",
+        "nonce": nonce,
+    });
+    let input = signing_input(&record).unwrap();
+    let created_at = 1_790_812_800_u64;
+    let sigs: Vec<Value> = pair
+        .iter()
+        .map(|(key, kind)| {
+            let sig = if *kind == KEY_TYPE_BIP340 {
+                let event = format!(
+                    r#"[0,"{key}",{created_at},{NOSTR_KIND},[],"{VERSION}:{}"]"#,
+                    hex::encode(Sha256::digest(&input))
+                );
+                let id = Sha256::digest(event.as_bytes());
+                let sig = nostr.sign_raw(&id, &[0; 32]).unwrap();
+                serde_json::json!({"created_at": created_at, "sig": hex::encode(sig.to_bytes())})
+            } else {
+                Value::String(hex::encode(node.sign(&input).to_bytes()))
+            };
+            serde_json::json!({"key_id": key, "sig": sig})
+        })
+        .collect();
+    record["sigs"] = Value::Array(sigs);
+    record
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -686,5 +737,15 @@ mod tests {
         ] {
             assert!(applies(&binding(id), now).is_none(), "{id}");
         }
+    }
+
+    /// The test helper's binding to a Nostr key applies, so the two-node run
+    /// binds what this node accepts.
+    #[test]
+    fn the_test_nostr_binding_applies() {
+        let nostr = k256::schnorr::SigningKey::from_bytes(&[7; 32]).unwrap();
+        let record = bind_to_nostr_for_test(&key(1), &nostr, &"ab".repeat(16), FROM, UNTIL);
+        let own = hex::encode(key(1).verifying_key().to_bytes());
+        assert!(binds_own(&record, &own, at("2026-10-28T00:00:00Z")).is_ok());
     }
 }

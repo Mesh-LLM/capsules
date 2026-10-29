@@ -8,6 +8,8 @@ mod checkpoint_cadence;
 mod commitment;
 mod commitment_bridge;
 mod controller_binding;
+#[cfg(test)]
+mod controller_binding_e2e_setup;
 mod data_dir;
 mod decision;
 mod doctor;

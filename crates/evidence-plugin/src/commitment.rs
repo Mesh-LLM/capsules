@@ -25,6 +25,13 @@
 //! this node gives any stranger at that checkpoint (`evidence-interop/0`,
 //! presented by this node). A node with no checkpoint yet has no commitment.
 //!
+//! **The controller binding.** When this node holds a binding of its key to
+//! its operator's that applies (`controller_binding::binds_own`), the
+//! commitment names it in the optional `controller_binding` member by its
+//! binding digest alone (CB §4, §9.3; loop's `steps/03-advertise.md`), never
+//! the record, so the commitment never names the operator's key. Steven's
+//! step 12 ruling (Mesh-LLM/capsules-plugin#54): the binding is optional.
+//!
 //! **Carriers.** The `commitment/1` mesh channel serves it to a peer
 //! (`commitment_bridge`); the `commitment` operation hands it to the
 //! operator, who publishes it to loop's `nodes/commitments/` by pull request.
@@ -287,7 +294,12 @@ pub fn latest_anchor(responder: &Responder<'_>) -> Result<String, String> {
 
 /// Build and sign this node's commitment. `responder` is what this node
 /// answers with: the staple is its answer to a stranger.
-pub fn build(responder: &Responder<'_>, node_id: &str, policy: &Policy) -> Result<Signed, Unbuilt> {
+pub fn build(
+    responder: &Responder<'_>,
+    node_id: &str,
+    policy: &Policy,
+    binding: Option<&str>,
+) -> Result<Signed, Unbuilt> {
     let key = responder.signing_key;
     let key_id = key_id(key);
     let (statement, anchor) = latest_checkpoint(responder).map_err(Unbuilt::passing)?;
@@ -313,7 +325,7 @@ pub fn build(responder: &Responder<'_>, node_id: &str, policy: &Policy) -> Resul
     let policy_bytes = policy.signed_bytes(key);
     let b64 = |raw: &[u8]| base64::engine::general_purpose::STANDARD.encode(raw);
     let sha = |raw: &[u8]| hex::encode(Sha256::digest(raw));
-    let doc = json!({
+    let mut doc = json!({
         "profile": COMMITMENT_PROFILE,
         "node_id": node_id,
         "key_id": key_id,
@@ -331,6 +343,9 @@ pub fn build(responder: &Responder<'_>, node_id: &str, policy: &Policy) -> Resul
         "answers_within": ANSWERS_WITHIN,
         "history_card": {"derivation": "history_card/1", "sha256": sha(&staple), "bytes": b64(&staple)},
     });
+    if let Some(digest) = binding {
+        doc[CONTROLLER_BINDING] = json!({ "digest": digest });
+    }
     let signed = Signed {
         commitment: sign(doc, key),
         policy: policy_bytes,
@@ -517,14 +532,23 @@ const SCHEMA: [(&str, &[&str]); 13] = [
     ("sig", &["alg", "canon", "value"]),
 ];
 
+/// The member that names this node's controller binding by its digest.
+pub const CONTROLLER_BINDING: &str = "controller_binding";
+
+/// Optional members, checked when present (loop's `OPTIONAL`).
+const OPTIONAL: [(&str, &[&str]); 1] = [(CONTROLLER_BINDING, &["digest"])];
+
 fn shape_problems(doc: &Value) -> Vec<String> {
     let Some(map) = doc.as_object() else {
         return vec!["not a JSON object".into()];
     };
     let mut problems = Vec::new();
-    for (name, members) in SCHEMA {
+    for (name, members) in SCHEMA.iter().chain(&OPTIONAL) {
+        let (name, members) = (*name, *members);
         let Some(v) = map.get(name) else {
-            problems.push(format!("missing {name}"));
+            if !OPTIONAL.iter().any(|(n, _)| *n == name) {
+                problems.push(format!("missing {name}"));
+            }
             continue;
         };
         let ok = match (name, members.is_empty()) {
@@ -555,7 +579,7 @@ fn shape_problems(doc: &Value) -> Vec<String> {
     }
     problems.extend(
         map.keys()
-            .filter(|k| !SCHEMA.iter().any(|(n, _)| n == k))
+            .filter(|k| !SCHEMA.iter().chain(&OPTIONAL).any(|(n, _)| n == k))
             .map(|k| format!("unknown field {k}")),
     );
     if problems.is_empty() {
@@ -567,6 +591,11 @@ fn shape_problems(doc: &Value) -> Vec<String> {
             if !is_hex64(&text(&doc[name])) {
                 problems.push(format!("{name} is not 64 lowercase hex"));
             }
+        }
+        if doc.get(CONTROLLER_BINDING).is_some()
+            && !is_hex64(&text(&doc[CONTROLLER_BINDING]["digest"]))
+        {
+            problems.push("controller_binding.digest is not a sha256 (64 lowercase hex)".into());
         }
         if !is_hex64(&text(&doc["lcap"]["policy_digest"])) {
             problems.push("lcap.policy_digest is not a sha256 (64 lowercase hex)".into());

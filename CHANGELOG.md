@@ -4,6 +4,14 @@
 
 ### Added
 
+- **The node key bound to its operator (loop step 12).** `join` takes an optional
+  `controller_binding`: a Controller Binding record (AAC `spec/controller-binding-v0.md`) that binds
+  this node's key to its operator's, which may be the operator's Nostr key (`bip340`, signed with a
+  Nostr event). `join` stores it only when it binds this node's key and applies, and refuses it
+  otherwise. `doctor` reports `controller_binding: bound` with the binding digest, or `unbound` with
+  the reason. The commitment names the binding by its digest alone (`controller_binding.digest`),
+  never the operator's key, and the binding stays optional (Steven's ruling). Verification of the
+  `bip340` key type uses `k256`. Mesh-LLM/capsules-plugin#54, #97.
 - **`settlement_check` and the Lightning adapter declaration (loop step 6).** The new read-only tool
   checks the Lightning settlement records this node holds for a paid exchange, under
   `adapters/lightning-v0.md`. Each check (object held, invoice join, amount, finality, preimage,

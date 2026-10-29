@@ -48,7 +48,7 @@ fn corpus() -> tempfile::TempDir {
 fn serve(dir: &Path, policy: &Policy, node: Option<&str>) -> Served {
     let node = node.ok_or("this node's mesh id is not known yet")?;
     with(dir, policy, |r| {
-        commitment::build(r, node, policy).map_err(|u| u.why)
+        commitment::build(r, node, policy, None).map_err(|u| u.why)
     })
 }
 
@@ -235,7 +235,7 @@ fn an_answer_under_another_policy_than_advertised_is_a_mismatch() {
     // The commitment advertises the defaults; the node now answers with
     // standard history shared.
     let advertised = with(dir.path(), &defaults(), |r| {
-        commitment::build(r, NODE, &defaults()).unwrap()
+        commitment::build(r, NODE, &defaults(), None).unwrap()
     });
     let wider = Policy {
         share_standard_history: true,
@@ -255,7 +255,7 @@ fn an_answer_under_another_policy_than_advertised_is_a_mismatch() {
 fn an_answer_under_another_key_than_advertised_is_a_mismatch() {
     let dir = corpus();
     let advertised = with(dir.path(), &defaults(), |r| {
-        commitment::build(r, NODE, &defaults()).unwrap()
+        commitment::build(r, NODE, &defaults(), None).unwrap()
     });
     // The same commitment, re-signed by another key: the answers do not
     // verify under the key it now names.

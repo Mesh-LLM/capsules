@@ -264,6 +264,28 @@ wait_for 30 "the requester sealed its adjudication_received record" sealed
 # --- join again after the first exchange: now it is complete ----------------
 wait_for 120 "join on the requester says it has joined" joined
 
+# --- the provider binds its node key to its operator's Nostr key -----------
+# A test Nostr key (crates/evidence-plugin/src/controller_binding_e2e_setup.rs).
+# join stores the binding, and refuses one of another node's key; the
+# requester then finds the binding in the provider's commitment by its
+# digest alone.
+(cd "$repo/crates/evidence-plugin" &&
+  E2E_PROVIDER_DIR=$(plugin_data provider) E2E_BINDINGS=$out \
+    cargo test --locked --bin capsules -- --ignored --exact controller_binding_e2e_setup::write_bindings \
+    > "$logs/setup-bindings.log" 2>&1) || { cat "$logs/setup-bindings.log" >&2; exit 1; }
+tool "$PROVIDER_CONSOLE" join "$(jq -cn --slurpfile b "$out/binding.json" '{controller_binding: $b[0]}')" \
+  > "$out/binding-join.json"
+code=$(curl -sS -o "$out/binding-refused.json" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+  -d "$(jq -cn --slurpfile b "$out/binding-other.json" '{controller_binding: $b[0]}')" \
+  "http://127.0.0.1:$PROVIDER_CONSOLE/api/plugins/capsules/tools/join")
+[ "$code" != 200 ] || { echo "join took a binding of another node's key" >&2; exit 1; }
+fetched() {
+  tool "$REQUESTER_CONSOLE" mesh_commitment_fetch "$(jq -cn --arg p "$provider_id" '{peer_id: $p}')" \
+    > "$out/fetched-commitment.json" \
+    && jq -e '.commitment.controller_binding.digest | type == "string"' "$out/fetched-commitment.json"
+}
+wait_for 60 "the requester fetched the provider's commitment, naming its binding" fetched
+
 # --- the switch off: a signed leave -----------------------------------------
 sed -i.bak 's/^join_network = "on"$/join_network = "off"/' "$(node_home requester)/config.toml"
 wait_for 120 "the reporter holds the requester's signed leave" holds leave
