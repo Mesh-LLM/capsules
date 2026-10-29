@@ -648,6 +648,7 @@ dependencies = [
  "ed25519-dalek",
  "evidence-request",
  "evidencebook",
+ "getrandom 0.2.17",
  "hex",
  "k256",
  "libc",

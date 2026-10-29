@@ -1122,8 +1122,10 @@ fn with_evidence_operations(
                 "Check that this node is ready to join, idempotently: check the key, the book, the first checkpoint, \
                  the commitment served on commitment/1 and both stranger probes, and list what is \
                  in place and what is not. Seals nothing and contacts nobody; it writes only a \
-                 controller_binding it is given, after checking that it binds this node's key and \
-                 applies. A fresh node's first checkpoint follows its first exchange.",
+                 controller binding: one it is given whole (controller_binding), or one made with \
+                 the operator's Nostr key (controller, then controller_event signed by the \
+                 operator), after checking that it binds this node's key and applies. A fresh \
+                 node's first checkpoint follows its first exchange.",
             )
             .input::<doctor::JoinArgs>()
             .handle({
