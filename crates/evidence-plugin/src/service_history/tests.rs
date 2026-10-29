@@ -752,3 +752,61 @@ fn a_published_model_above_the_total_does_not_check() {
     let why = check(&art, &times, &anchor).unwrap_err();
     assert!(why.contains("do not add up"), "{why}");
 }
+
+/// What the History page is given: the card by default, the Service History
+/// once `share_standard_history` is on and a boundary checkpoint exists.
+#[test]
+fn the_history_page_is_given_the_form_the_policy_shares() {
+    let dir = node();
+    let key = key();
+    let announced = announced_keys();
+    let replay = ReplayCache::default();
+    let serve = |share: bool| {
+        crate::history_page::serve(&Responder {
+            ledger_dir: dir.path(),
+            signing_key: &key,
+            now: NOW,
+            history_segments: "counterparties",
+            share_standard_history: share,
+            share_exchange_corroboration: false,
+            keys: Keys {
+                announced: &announced,
+                configured: None,
+                own_key: None,
+            },
+            replay: &replay,
+            node_id: Some(RESPONDER_NODE),
+            policy_digest: None,
+        })
+        .unwrap()
+    };
+    let off = serve(false);
+    assert_eq!(off["form"], "history_card/1");
+    assert_eq!(off["outcome"], "answered");
+    let on = serve(true);
+    assert_eq!(on["form"], "service_history/1");
+    assert_eq!(on["outcome"], "answered");
+    let reply: Value = serde_json::from_str(on["reply"].as_str().unwrap()).unwrap();
+    assert_eq!(reply["responder"], on["node_key_id"]);
+    assert!(reply.get("witness_receipts").is_none() || reply["witness_receipts"].is_array());
+}
+
+/// The Service History reply the History page's tests open
+/// (`tests/fixtures/service_history_reply.json`), regenerated here: the node
+/// is deterministic (fixed key, ledger and clock), so a drift in the wire
+/// shape fails this test. `UPDATE_FIXTURES=1 cargo test` rewrites it.
+#[test]
+fn the_service_history_reply_fixture_is_what_the_node_serves() {
+    let dir = node();
+    let key = key();
+    let anchor = checkpoints().last().unwrap().anchor();
+    let served = answered(ask(dir.path(), &history_request(&anchor)));
+    let text = format!("{}\n", serde_json::to_string(&served).unwrap());
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/service_history_reply.json");
+    if std::env::var_os("UPDATE_FIXTURES").is_some() {
+        std::fs::write(&path, &text).unwrap();
+    }
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(served["responder"], hex::encode(key.verifying_key().as_bytes()));
+}

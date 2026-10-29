@@ -536,8 +536,12 @@ function ExchangesSection({
     setPageNote(null)
     try {
       const savedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z')
-      const page =
-        which === 'settlement' ? settlementPage(savedAt) : historyPage((await fetchServedHistory()).replyText, savedAt)
+      let page
+      if (which === 'settlement') page = settlementPage(savedAt)
+      else {
+        const served = await fetchServedHistory()
+        page = historyPage(served.replyText, savedAt, served.form)
+      }
       if (!saveTextFile(page.fileName, page.html, 'text/html')) setPageNote('This browser could not save the page.')
     } catch (error) {
       setPageNote(`Could not save the page: ${error instanceof Error ? error.message : 'this node did not answer'}.`)

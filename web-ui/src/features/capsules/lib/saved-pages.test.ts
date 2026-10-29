@@ -98,6 +98,40 @@ describe('the History page, opened offline', () => {
   })
 })
 
+const serviceFixture = readFileSync(
+  path.resolve(process.cwd(), '../crates/evidence-plugin/tests/fixtures/service_history_reply.json'),
+  'utf8'
+)
+
+describe('the History page of a Service History, opened offline', () => {
+  it('verifies the card inside, shows the counts as the node states them, and says what it did not check', async () => {
+    const { html } = historyPage(serviceFixture, SAVED, 'service_history')
+    expect(Buffer.from(embedded(html)).equals(Buffer.from(serviceFixture, 'utf8'))).toBe(true)
+    const { text, requested } = await open(html)
+    expect(text).toContain('Service History')
+    expect(text).toContain('the history card inside the Service History matches its digest')
+    expect(text).toContain('Checked: The history card inside matches its digest.')
+    expect(text).toContain('Not checked: The counts were not checked')
+    expect(text).toContain('all models: 12')
+    expect(text).toContain('withheld (under 5)')
+    expect(text).toContain('Not checked: Witness receipts')
+    expect(requested).toEqual([])
+  })
+
+  it('shows none of a Service History whose embedded card was changed', async () => {
+    const reply = JSON.parse(serviceFixture) as Record<string, unknown>
+    const bytes = Buffer.from((reply.artifact as string).replace(/-/g, '+').replace(/_/g, '/'), 'base64')
+    const artifact = JSON.parse(bytes.toString('utf8')) as { history_card: { evidence_stream: string } }
+    artifact.history_card.evidence_stream = 'another-log'
+    const swapped = Buffer.from(JSON.stringify(artifact)).toString('base64url')
+    const digest = (await import('node:crypto')).createHash('sha256').update(JSON.stringify(artifact)).digest('hex')
+    const forged = JSON.stringify({ ...reply, artifact: swapped, artifact_digest: digest })
+    const { text } = await open(historyPage(forged, SAVED, 'service_history').html)
+    expect(text).toContain('could not check its answer, so it shows none of it')
+    expect(text).not.toContain('all models: 12')
+  })
+})
+
 describe('the Settlement page, opened offline', () => {
   it('says plainly it holds no evidence from the node, and hands back its note byte for byte', async () => {
     const { html } = settlementPage(SAVED)

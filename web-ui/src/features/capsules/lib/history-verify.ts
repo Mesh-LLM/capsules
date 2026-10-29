@@ -41,6 +41,52 @@ export type HistoryVerdict = {
   /** The key every checkpoint was checked under: the one the reply names as
    *  its responder. Whether it is the node's is not checked. */
   keyId?: string
+  /** Which form was read: the node's card alone, or its Service History. */
+  form?: 'history_card' | 'service_history'
+  /** A Service History's counts, as the node states them (self reported). */
+  counts?: PeriodCount[]
+}
+
+/** One closed period of a Service History: each cell as text, as stated. */
+export type PeriodCount = { from: string; to: string; cells: { what: string; value: string }[] }
+
+export const PERIOD_COUNTS_NOT_RUN: Check = {
+  id: 'period_counts',
+  status: 'not_run',
+  detail:
+    'The counts were not checked against the node’s records or its period policy. They are the node’s own statement, shown as given.'
+}
+
+// RFC 8785 for the values a card holds: null, strings, arrays, objects.
+function jcs(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(jcs).join(',')}]`
+  if (value && typeof value === 'object') {
+    const o = value as Record<string, unknown>
+    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${jcs(o[k])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function periodCounts(raw: unknown): PeriodCount[] {
+  const periods = object(raw) && Array.isArray(object(raw)!.periods) ? (object(raw)!.periods as unknown[]) : []
+  return periods.flatMap((p) => {
+    const period = object(p)
+    if (!period || typeof period.from !== 'string' || typeof period.to !== 'string' || !Array.isArray(period.cells)) return []
+    const cells = period.cells.flatMap((c) => {
+      const cell = object(c)
+      if (!cell) return []
+      const model = object(cell.dimension)?.model
+      const what = typeof model === 'string' ? `model ${model}` : 'all models'
+      const value =
+        typeof cell.value === 'number'
+          ? String(cell.value)
+          : cell.suppressed === 'complementary'
+            ? 'withheld (another withheld count could be derived from it)'
+            : 'withheld (under 5)'
+      return [{ what, value }]
+    })
+    return [{ from: period.from, to: period.to, cells }]
+  })
 }
 
 /** The checks this page cannot run, always listed, whatever else passed. */
@@ -211,13 +257,30 @@ export async function verifyHistoryReply(replyText: string): Promise<HistoryVerd
   } catch {
     artifact = null
   }
-  const history = artifact && Array.isArray(artifact.history) ? artifact.history : null
-  if (!artifact || !history || history.length === 0 || history.length > MAX_CHECKPOINTS) {
-    return fail('card', 'The artifact is not a history card.')
-  }
-  if (artifact.derivation !== 'history_card/1' || reply.derivation !== 'history_card/1') {
+  if (!artifact) return fail('card', 'The artifact is not readable.')
+  // A Service History embeds the node's card as a member; a direct answer is the card.
+  const embedded = object(artifact.history_card)
+  let card: Record<string, unknown> = artifact
+  let counts: PeriodCount[] | undefined
+  if (embedded) {
+    const cardDigest = await sha256Hex(new TextEncoder().encode(jcs(embedded)))
+    if (cardDigest !== artifact.history_card_digest) {
+      return fail('card_digest', 'The history card inside is not the bytes its digest names.')
+    }
+    checks.push({ id: 'card_digest', status: 'pass', detail: 'The history card inside matches its digest.' })
+    if (artifact.anchor !== embedded.anchor || artifact.evidence_stream !== embedded.evidence_stream) {
+      return fail('card', 'The history card inside names another anchor or log than the answer.')
+    }
+    card = embedded
+    counts = periodCounts(artifact.period_counts)
+  } else if (reply.derivation !== 'history_card/1') {
     return fail('card', 'The artifact is not a history_card/1 card.')
   }
+  const history = Array.isArray(card.history) ? card.history : null
+  if (!history || history.length === 0 || history.length > MAX_CHECKPOINTS) {
+    return fail('card', 'The artifact is not a history card.')
+  }
+  if (card.derivation !== 'history_card/1') return fail('card', 'The artifact is not a history_card/1 card.')
 
   const links: Link[] = []
   for (let i = 0; i < history.length; i++) {
@@ -312,8 +375,10 @@ export async function verifyHistoryReply(replyText: string): Promise<HistoryVerd
   return {
     kind: 'answered',
     verified: true,
-    checks: [...checks, ...NOT_RUN],
+    checks: [...checks, ...(counts ? [PERIOD_COUNTS_NOT_RUN] : []), ...NOT_RUN],
     checkpoints: links.map((l) => ({ size: Number(l.size), time: l.time })),
-    keyId: last.keyId
+    keyId: last.keyId,
+    form: counts ? 'service_history' : 'history_card',
+    ...(counts ? { counts } : {})
   }
 }
