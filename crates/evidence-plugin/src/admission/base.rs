@@ -417,25 +417,29 @@ pub fn read_card(
 /// but doesn't read whole: a torn or unreadable line could hide an adverse
 /// verdict, so it is never read as "none".
 pub fn local_facts(ledger_dir: &Path, now: DateTime<Utc>) -> Option<Facts> {
-    for file in ["capsules.jsonl", crate::verdict_counts::REQUESTED_FILENAME] {
-        match std::fs::read_to_string(ledger_dir.join(file)) {
-            // Every line must parse: `read_requested` skips one that doesn't,
-            // and the verdict it asked for would then count nowhere.
-            Ok(text) => {
-                if text
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .any(|line| serde_json::from_str::<Value>(line).is_err())
-                {
-                    return None;
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return None,
-        }
-    }
-    if crate::evidence_panes::unparsable_line_count(ledger_dir) > 0 {
+    // Every line must read: `read_requested` skips a request line that
+    // doesn't parse or lacks its referee and two halves, and the verdict it
+    // asked for would then count nowhere.
+    let request_line = |line: &Value| {
+        line.get("referee").and_then(Value::as_str).is_some()
+            && line
+                .get("halves")
+                .and_then(Value::as_array)
+                .is_some_and(|halves| halves.len() == 2 && halves.iter().all(Value::is_string))
+    };
+    let whole = |file: &str, line_reads: &dyn Fn(&Value) -> bool| match std::fs::read_to_string(
+        ledger_dir.join(file),
+    ) {
+        Ok(text) => text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .all(|line| serde_json::from_str::<Value>(line).is_ok_and(|v| line_reads(&v))),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    };
+    if !whole("capsules.jsonl", &|_| true)
+        || !whole(crate::verdict_counts::REQUESTED_FILENAME, &request_line)
+    {
         return None;
     }
     let records = crate::evidence_panes::read_capsule_records(ledger_dir);

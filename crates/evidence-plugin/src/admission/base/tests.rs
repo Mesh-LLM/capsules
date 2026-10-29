@@ -321,6 +321,24 @@ fn a_torn_line_in_the_asked_for_adjudications_leaves_the_rows_not_read() {
         local_facts(dir.path(), Utc::now()).is_none(),
         "the request it tore could be the one an adverse verdict needs"
     );
+    std::fs::write(
+        dir.path().join(crate::verdict_counts::REQUESTED_FILENAME),
+        "{\"referee\":\"r\"}\n",
+    )
+    .unwrap();
+    assert!(
+        local_facts(dir.path(), Utc::now()).is_none(),
+        "a request line without its halves is skipped by read_requested too"
+    );
+    std::fs::write(
+        dir.path().join(crate::verdict_counts::REQUESTED_FILENAME),
+        "{\"referee\":\"r\",\"halves\":[\"a\",\"b\"],\"asked_at\":\"2026-10-29T00:00Z\"}\n",
+    )
+    .unwrap();
+    assert!(
+        local_facts(dir.path(), Utc::now()).is_some(),
+        "a whole request line reads"
+    );
 }
 
 #[test]
