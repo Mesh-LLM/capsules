@@ -129,5 +129,14 @@ describe('the Settlement page, opened offline', () => {
     const { text } = await open(forged)
     expect(text).toContain('could not read its own note, so it shows nothing')
     expect(text).not.toContain('All settled.')
+
+    // Only the words changed: source and reason are still the dashboard's.
+    const reworded = html.replace(
+      /(id="mesh-bundle"[^>]*>)[^<]*</,
+      `$1${Buffer.from('{"source":"dashboard","reason":"no_terms_pack","words":"All settled."}').toString('base64')}<`
+    )
+    const { text: rewordedText } = await open(reworded)
+    expect(rewordedText).toContain('could not read its own note, so it shows nothing')
+    expect(rewordedText).not.toContain('All settled.')
   })
 })

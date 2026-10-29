@@ -38,6 +38,11 @@ ul{padding-left:1.25rem}table{border-collapse:collapse;width:100%}td,th{border-b
 button{font:inherit;padding:.25rem .75rem}code{font-family:ui-monospace,monospace;font-size:.9em;overflow-wrap:anywhere}
 `
 
+/** What the Settlement page says until the node has a settlement report to
+ *  give: the refusal, never an empty page. */
+export const SETTLEMENT_REFUSAL_WORDS =
+  'This node cannot give a settlement report yet: no terms pack for settlement is in place on it, so there are no figures to show, and none are made up.'
+
 // The page's own script: reads the embedded bytes, checks them, and draws the
 // result with textContent only (nothing from the bundle is ever parsed as HTML).
 const RUNTIME = `
@@ -66,7 +71,7 @@ const RUNTIME = `
       out.appendChild(t)}}
   if(kind==='settlement-refusal'){
     var doc;try{doc=JSON.parse(text)}catch(e){doc=null}
-    if(doc&&doc.source==='dashboard'&&doc.reason==='no_terms_pack'&&typeof doc.words==='string'){
+    if(doc&&doc.source==='dashboard'&&doc.reason==='no_terms_pack'&&doc.words===${JSON.stringify(SETTLEMENT_REFUSAL_WORDS)}){
       out.appendChild(el('p','warn','No report: this page holds no evidence from the node.'));
       out.appendChild(el('p',null,doc.words))}
     else out.appendChild(el('p','bad','This page could not read its own note, so it shows nothing.'));
@@ -134,10 +139,6 @@ export function historyPage(replyText: string, savedAt: string): SavedPage {
   }
 }
 
-/** What the Settlement page says until the node has a settlement report to
- *  give: the refusal, never an empty page. */
-export const SETTLEMENT_REFUSAL_WORDS =
-  'This node cannot give a settlement report yet: no terms pack for settlement is in place on it, so there are no figures to show, and none are made up.'
 
 /** The Settlement page. Until the settlement terms pack exists
  *  (action-state-group/evidencebook-skills#71) the node gives the refusal. */
