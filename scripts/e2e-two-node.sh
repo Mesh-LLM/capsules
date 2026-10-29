@@ -155,6 +155,19 @@ setup() {
 E2E_TWIN_KEYS=$out/twin-keys.json setup write_twin_keys
 twin_keys=$(cat "$out/twin-keys.json")
 
+# A Service History counts closed periods and is answered at a period
+# boundary. The policy's weekly periods would put a live run's boundary at the
+# next Monday 00:00 UTC, so the plugin (built with the test-period-policy
+# feature) is given two-minute periods from the same epoch: another
+# definition, with its own digest. Both nodes read it, since the requester
+# checks the answer against the definition it names.
+E2E_PERIOD_S=120
+export CAPSULES_TEST_PERIOD_LENGTH_S=$E2E_PERIOD_S
+SERVICE_HISTORY=$(jq -cS --argjson n "$E2E_PERIOD_S" \
+  '.period_policy.length_s = $n | .period_policy.min_length_s = $n' derivations/service-history-1.json \
+  | tr -d '\n' | openssl dgst -sha256 -r | cut -d' ' -f1)
+echo "service history definition at ${E2E_PERIOD_S}s periods: $SERVICE_HISTORY"
+
 # Record push is on by default; set explicitly at both ends here (a node with it
 # off does not take the other side's push either), so the run shows what a
 # node holds once the host names the other side.
@@ -241,37 +254,80 @@ history_card() {
 }
 wait_for 60 "the provider served its history card, verified under its key" history_card
 
-# --- node to node: a Service History off a period boundary is declined ------
-# The provider's newest checkpoint is not at a Monday 00:00 UTC boundary, so
-# the Service History (docs/SERVICE-HISTORY.md) pinned to it is a signed
-# policy_declined, checked on the requester under the provider's key.
-SERVICE_HISTORY=cbc96d800ad206791db7e0793b80a2720c1908468ba99692b739aa8e74aab2d8
-service_history_declined() {
-  local pin
-  pin=$(jq -r '.verification.anchor' "$out/history-card.json")
-  tool "$REQUESTER_CONSOLE" mesh_evidence_request "$(jq -cn --arg p "$provider_id" --arg pin "$pin" \
+# --- node to node: a Service History is declined off a period boundary and
+# --- answered on one (PRD T6) ------------------------------------------------
+# A Service History (docs/SERVICE-HISTORY.md) is a run of whole closed periods
+# at one pinned anchor. The newest checkpoint is pinned first: off a period
+# boundary it is a signed policy_declined, on one it is answered. Then a
+# checkpoint on a boundary is waited for, a Service History is asked at it,
+# and the card it embeds is compared with the direct history_card/1 answer
+# at the same pin, byte for byte.
+# checkpoint_pin KIND: the digest of the provider's newest checkpoint that is
+# on a period boundary (KIND boundary), or its newest checkpoint (KIND newest),
+# and its time.
+checkpoint_pin() {
+  python3 -I - "$(plugin_data provider)/ledger/checkpoints.jsonl" "$1" "$E2E_PERIOD_S" <<'PY'
+import calendar, hashlib, json, sys, time
+path, kind, period = sys.argv[1], sys.argv[2], int(sys.argv[3])
+pin = None
+for line in open(path):
+    cp = json.loads(line)
+    at = calendar.timegm(time.strptime(cp["timestamp"].split(".")[0].rstrip("Z"), "%Y-%m-%dT%H:%M:%S"))
+    # The epoch, 2026-01-05T00:00:00Z, is a whole number of periods.
+    if kind == "newest" or at % period == 0:
+        pin = (hashlib.sha256(bytes.fromhex(cp["checkpoint_cose"])).hexdigest(), at)
+if pin is None:
+    sys.exit(1)
+print(pin[0], pin[1])
+PY
+}
+service_history_at() {
+  tool "$REQUESTER_CONSOLE" mesh_evidence_request "$(jq -cn --arg p "$provider_id" --arg pin "$1" \
     --arg d "$SERVICE_HISTORY" '{peer_id: $p,
     request: {subject: {full_history: null}, coverage: {expected_pin: $pin}, derivation: $d}}')" \
-    > "$out/service-history.json" || return 1
-  # The pin's own time decides: a run that spans Monday 00:00 UTC may have
-  # pinned the boundary checkpoint, where the History is answered instead.
-  local at
-  at=$(python3 -I - "$(plugin_data provider)/ledger/checkpoints.jsonl" "$pin" <<'PY'
-import hashlib, json, sys
-for line in open(sys.argv[1]):
-    cp = json.loads(line)
-    if hashlib.sha256(bytes.fromhex(cp.get("checkpoint_cose", ""))).hexdigest() == sys.argv[2]:
-        print(cp["timestamp"])
-PY
-)
-  if [ -n "$at" ] && [ "$(date -u -d "$at" +%u%H%M%S)" = 1000000 ]; then
+    > "$2"
+}
+service_history_newest() {
+  local pin at
+  read -r pin at < <(checkpoint_pin newest) || return 1
+  service_history_at "$pin" "$out/service-history.json" || return 1
+  if [ $((at % E2E_PERIOD_S)) = 0 ]; then
     jq -e '.verification.state == "artifact"' "$out/service-history.json"
   else
     jq -e '.verification.state == "refusal" and .verification.reason == "policy_declined"' \
       "$out/service-history.json"
   fi
 }
-wait_for 60 "the provider declined a Service History off a period boundary, signed" service_history_declined
+wait_for 60 "the provider answered or declined a Service History at its newest checkpoint, signed" service_history_newest
+
+# A boundary comes within one period; the cadence cuts a checkpoint in its
+# minute, with the boundary as its time.
+boundary_checkpointed() { checkpoint_pin boundary > "$out/boundary-pin.txt"; }
+wait_for $((E2E_PERIOD_S + 60)) "the provider cut a checkpoint on a period boundary" boundary_checkpointed
+read -r boundary_pin _ < "$out/boundary-pin.txt"
+service_history_at "$boundary_pin" "$out/service-history-boundary.json"
+jq -e '.verification.state == "artifact" and (.verification.lines | length > 0)' \
+  "$out/service-history-boundary.json" > /dev/null \
+  || { echo "no Service History at the boundary checkpoint:" >&2; cat "$out/service-history-boundary.json" >&2; exit 1; }
+tool "$REQUESTER_CONSOLE" mesh_evidence_request "$(jq -cn --arg p "$provider_id" --arg pin "$boundary_pin" \
+  '{peer_id: $p, request: {subject: {full_history: null}, coverage: {expected_pin: $pin},
+  derivation: "history_card/1"}}')" > "$out/history-card-boundary.json"
+jq -e '.verification.state == "artifact"' "$out/history-card-boundary.json" > /dev/null \
+  || { echo "no history card at the boundary checkpoint:" >&2; cat "$out/history-card-boundary.json" >&2; exit 1; }
+# T6: the card inside the Service History is the direct card, byte for byte.
+python3 -I - "$out/service-history-boundary.json" "$out/history-card-boundary.json" <<'PY'
+import base64, json, sys
+def artifact(path):
+    answer = json.load(open(path))["answer"]
+    return json.loads(base64.b64decode(answer["artifact"]))
+def jcs(v):
+    return json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+history, card = artifact(sys.argv[1]), artifact(sys.argv[2])
+assert jcs(history["history_card"]) == jcs(card), "the embedded card is not the direct card"
+assert history["period_counts"]["periods"], "the Service History lists no closed period"
+print("T6: the Service History embeds the direct history card, and lists",
+      len(history["period_counts"]["periods"]), "closed period(s)")
+PY
 
 # --- the referee: a twin pair put to the provider, its verdict on both chains
 # The requester holds two twins' halves of the first exchange and puts the pair

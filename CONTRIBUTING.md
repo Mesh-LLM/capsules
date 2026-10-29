@@ -120,6 +120,14 @@ in `crates/evidence-plugin/src/two_node_e2e.rs` run over what each node wrote:
   carry (`src/referee_e2e_setup.rs`). The live trigger, which assembles a
   pair from real twin traffic and chooses the referee, needs three serving
   nodes and is not run here.
+- T6, a Service History across a period boundary (PRD T6): the plugin is built
+  with the test-only `test-period-policy` feature, and both nodes run it with
+  two-minute periods (`CAPSULES_TEST_PERIOD_LENGTH_S`), which is another
+  definition with its own digest. The requester asks the provider for a Service
+  History at its newest checkpoint (declined off a boundary, answered on one),
+  then at a boundary checkpoint, verifies it under the provider's key, and
+  compares the card it embeds with the provider's direct `history_card/1`
+  answer at the same pin, byte for byte. No release build enables the feature.
 - the real-host tests (`tests/host_runtime_e2e.rs`, see
   [docs/REAL-HOST-VERIFICATION.md](docs/REAL-HOST-VERIFICATION.md)) pass, and
   fail on a build that serves a blocked model.
