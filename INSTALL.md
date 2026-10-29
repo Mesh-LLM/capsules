@@ -308,6 +308,32 @@ To leave, turn the switch off.
 `join` and `doctor` seal nothing and contact nobody.
 <!-- /join-quickstart -->
 
+## Admit or refuse peers
+
+When this node routes a request to a mesh peer, it can first decide GO or NO for that peer from
+your lists, and seal the decision in its book:
+
+- `CAPSULES_ADMISSION_ALLOW`: peers to admit, as comma-separated 64-hex mesh node ids.
+- `CAPSULES_ADMISSION_DENY`: peers to refuse, in the same form. A peer on both lists is refused.
+- `CAPSULES_ADMISSION_DEFAULT`: `go` (the default) or `no`, for a peer on neither list.
+
+The settings are read once at start; restart mesh-llm after changing them. A value that does not
+parse stops the plugin, so a typo never admits a peer you meant to refuse. Nothing is fetched
+while a request waits.
+
+mesh-llm asks the plugin only when your host config grants it admission, under the plugin's
+`[[plugin]]` entry (`[plugin.openai_exchange_grant]` with `admission = true` and the
+`backend_selected` phase), on a mesh-llm build with the OpenAI exchange lifecycle
+(Mesh-LLM/mesh-llm#2226; no release carries it yet). A NO refuses the request with 403
+`plugin_policy_denied`; trying the next peer instead waits on Mesh-LLM/mesh-llm#2061.
+
+Each decision is an `admission_decision` record: the verdict, which list or the default gave it,
+and the digest of the policy it read. The record never names the peer in clear, since records can
+be shared with others; it names the peer by a commitment only this node's key can open. If the key
+is lost, so is the way to say which peer an old record names. If a decision cannot be sealed, the
+answer is NO and the log says `admission_seal_failed`, so a broken book stops peer traffic
+visibly rather than admitting peers unrecorded.
+
 ## Where the records are kept
 
 Under the plugin's data directory: `CAPSULES_DATA_DIR` if set in the
