@@ -241,6 +241,38 @@ history_card() {
 }
 wait_for 60 "the provider served its history card, verified under its key" history_card
 
+# --- node to node: a Service History off a period boundary is declined ------
+# The provider's newest checkpoint is not at a Monday 00:00 UTC boundary, so
+# the Service History (docs/SERVICE-HISTORY.md) pinned to it is a signed
+# policy_declined, checked on the requester under the provider's key.
+SERVICE_HISTORY=cbc96d800ad206791db7e0793b80a2720c1908468ba99692b739aa8e74aab2d8
+service_history_declined() {
+  local pin
+  pin=$(jq -r '.verification.anchor' "$out/history-card.json")
+  tool "$REQUESTER_CONSOLE" mesh_evidence_request "$(jq -cn --arg p "$provider_id" --arg pin "$pin" \
+    --arg d "$SERVICE_HISTORY" '{peer_id: $p,
+    request: {subject: {full_history: null}, coverage: {expected_pin: $pin}, derivation: $d}}')" \
+    > "$out/service-history.json" || return 1
+  # The pin's own time decides: a run that spans Monday 00:00 UTC may have
+  # pinned the boundary checkpoint, where the History is answered instead.
+  local at
+  at=$(python3 -I - "$(plugin_data provider)/ledger/checkpoints.jsonl" "$pin" <<'PY'
+import hashlib, json, sys
+for line in open(sys.argv[1]):
+    cp = json.loads(line)
+    if hashlib.sha256(bytes.fromhex(cp.get("checkpoint_cose", ""))).hexdigest() == sys.argv[2]:
+        print(cp["timestamp"])
+PY
+)
+  if [ -n "$at" ] && [ "$(date -u -d "$at" +%u%H%M%S)" = 1000000 ]; then
+    jq -e '.verification.state == "artifact"' "$out/service-history.json"
+  else
+    jq -e '.verification.state == "refusal" and .verification.reason == "policy_declined"' \
+      "$out/service-history.json"
+  fi
+}
+wait_for 60 "the provider declined a Service History off a period boundary, signed" service_history_declined
+
 # --- the referee: a twin pair put to the provider, its verdict on both chains
 # The requester holds two twins' halves of the first exchange and puts the pair
 # to the provider over the mesh; the provider's answer to that exchange is the

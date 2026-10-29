@@ -245,6 +245,21 @@ impl CorpusCheckpoint {
 /// Checkpoints after 16 and after 300 lines, signed by the node key, each
 /// with its COSE wire statement; the second carries one witness.
 pub(crate) fn corpus_checkpoints(ledger: &[Value], key: &SigningKey) -> Vec<CorpusCheckpoint> {
+    checkpoints_cut_at(
+        ledger,
+        key,
+        &[(16, "2026-09-28T00:00:00Z"), (300, "2026-09-28T12:00:00Z")],
+    )
+}
+
+/// The checkpoints of `ledger` cut after each `(lines, time)` of `cuts`, in
+/// order, signed under `key`. Every one after the first carries a stub
+/// witness receipt.
+pub(crate) fn checkpoints_cut_at(
+    ledger: &[Value],
+    key: &SigningKey,
+    cuts: &[(usize, &str)],
+) -> Vec<CorpusCheckpoint> {
     let mut nodes = MemoryNodeStore::new();
     let mut out: Vec<CorpusCheckpoint> = Vec::new();
     for (i, record) in ledger.iter().enumerate() {
@@ -253,7 +268,7 @@ pub(crate) fn corpus_checkpoints(ledger: &[Value], key: &SigningKey) -> Vec<Corp
             .try_into()
             .unwrap();
         add_leaf(&mut nodes, leaf_hash(&id)).unwrap();
-        if i + 1 == 16 || i + 1 == 300 {
+        if let Some(&(_, time)) = cuts.iter().find(|(lines, _)| *lines == i + 1) {
             let size = nodes.size();
             let peak_hashes = |size: u64| -> Vec<_> {
                 peaks(size)
@@ -272,12 +287,7 @@ pub(crate) fn corpus_checkpoints(ledger: &[Value], key: &SigningKey) -> Vec<Corp
                 prev_size: prev.map_or(0, |p| p.mmr_size),
                 prev_root: prev.map_or(String::new(), |p| p.root.clone()),
                 key_id: hex::encode(key.verifying_key().to_bytes()),
-                timestamp: if out.is_empty() {
-                    "2026-09-28T00:00:00Z"
-                } else {
-                    "2026-09-28T12:00:00Z"
-                }
-                .into(),
+                timestamp: time.into(),
                 signature: String::new(),
                 witnesses: Vec::new(),
             };

@@ -552,8 +552,26 @@ fn answer_from(
             Reason::PolicyDeclined
         });
     }
+    // This node serves Service History, so it serves no `standard_history/1`
+    // card under its key, whatever a later evidencebook registers (ISH §6.1
+    // item 8).
+    if matches!(&req.derivation,
+        Some(Derivation::Token(t)) if t == crate::service_history::STANDARD_HISTORY_TOKEN)
+    {
+        return Err(Reason::DerivationUnsupported);
+    }
     if crate::exchange_corroboration::is_derivation(req.derivation.as_ref()) {
         return corroboration_answer(req, request_bytes, principal, responder, view);
+    }
+    // A Service History is a run of whole closed periods at one pinned
+    // anchor: any other subject or coverage is `policy_declined`, the same
+    // for every requester, before anything is resolved (ISH §6.1 item 5).
+    let service_history = crate::service_history::is_derivation(req.derivation.as_ref());
+    if service_history
+        && !(matches!(req.subject, Subject::FullHistory)
+            && matches!(req.coverage, Coverage::ExpectedPin(_)))
+    {
+        return Err(Reason::PolicyDeclined);
     }
     // 7. Resolve.
     let anchor = match resolve::resolve(req, view) {
@@ -561,6 +579,10 @@ fn answer_from(
         Resolution::Refuse(reason) => return Err(reason),
     };
     let at = serving_position(view, &anchor)?;
+    // ... and only at an anchor on a period boundary (ISH §6.1 item 2).
+    if service_history && !crate::service_history::is_boundary(&index.chain[at].record.timestamp) {
+        return Err(Reason::PolicyDeclined);
+    }
     let served_summary = matches!(&req.derivation,
         Some(Derivation::Token(t)) if t == SERVED_SUMMARY_DERIVATION_TOKEN);
     if served_summary {
@@ -932,6 +954,14 @@ pub fn verify_response(
                 "records": v.records,
                 "checkpoints": v.checkpoints,
             });
+            if let Some(history) = &v.history {
+                let statuses: Vec<ReceiptStatus> = v.receipts.iter().map(|r| r.status).collect();
+                out["lines"] = json!(crate::service_history::render(
+                    history,
+                    v.checkpoints,
+                    &statuses
+                ));
+            }
             if !witness_keys.is_empty() {
                 out["witnessed"] = json!(v
                     .receipts
@@ -1672,6 +1702,35 @@ pub(crate) mod tests {
                 verified["state"],
                 json!("artifact"),
                 "{request}: {verified}"
+            );
+        }
+    }
+
+    /// A node that serves Service History serves no `standard_history/1`
+    /// card under its key, to a counterparty or anyone, whatever the
+    /// sharing setting (ISH §6.1 item 8), and does not list it.
+    #[test]
+    fn standard_history_1_is_never_served_beside_service_history() {
+        assert!(!crate::commitment::DERIVATIONS.contains(&"standard_history/1"));
+        let dir = node(&corpus_ledger());
+        let pin = standard_history_requests()[0]["coverage"].clone();
+        let request = json!({
+            "subject": {"full_history": null},
+            "coverage": pin,
+            "derivation": crate::service_history::STANDARD_HISTORY_TOKEN,
+        });
+        for share in [true, false] {
+            let bytes = signed_by("node-a", &request);
+            let outcome = ask_with(
+                dir.path(),
+                &bytes,
+                crate::share_policy::history_segments_for(None),
+                share,
+            );
+            assert_eq!(
+                outcome.wire_bytes(),
+                Some(refusal_of(&bytes, Reason::DerivationUnsupported)),
+                "share_standard_history={share}: {outcome:?}"
             );
         }
     }

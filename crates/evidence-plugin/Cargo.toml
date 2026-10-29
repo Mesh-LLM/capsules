@@ -69,6 +69,14 @@ mutant-corroboration-uses-standard-history-gate = []
 mutant-corroboration-filters-per-asker = []
 # Counts two halves with the same role as agreeing.
 mutant-corroboration-role-equality = []
+# The Service History's mutants: each builds it with one fault, and CI
+# requires the named test to FAIL (gates/mutants.json).
+# Embeds a card rebuilt without its consistency proofs, not the direct card.
+mutant-service-history-card-rebuilt = []
+# Counts the period the anchor opens, which is not closed.
+mutant-service-history-counts-open-period = []
+# Publishes the model a suppressed one beside a published total gives away.
+mutant-service-history-skips-complementary = []
 
 # The referee's implementation mutants: each builds the referee with one
 # deliberate fault (vectors/parity/referee/mutants.json names the fault and
