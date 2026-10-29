@@ -556,7 +556,16 @@ async fn settle_ask(
     closes_at: tokio::time::Instant,
     tx: tokio::sync::oneshot::Sender<Settled>,
 ) {
-    match read_answer(tokio::time::timeout_at(closes_at, exchange).await) {
+    let read = tokio::time::timeout_at(closes_at, exchange).await;
+    // `timeout_at` polls the read before its deadline, so a reply read once
+    // the window has closed (a task resumed late) is checked here: it is no
+    // reply, and the absence stands.
+    let read = if tokio::time::Instant::now() < closes_at {
+        read_answer(read)
+    } else {
+        Err(SendError::NoAnswer(" by the window's close".into()))
+    };
+    match read {
         Ok(answer) => {
             let verification = verify_announced(&sent, &answer, &peer_id);
             if let Err(error) = crate::ask_book::record_response(
@@ -1401,6 +1410,30 @@ mod tests {
             sent,
             late,
             closes_at,
+            tx,
+        ));
+        let settled = rx.await.expect("the caller hears");
+        assert!(
+            matches!(settled, Err(SendError::NoAnswer(_))),
+            "{settled:?}"
+        );
+        task.abort();
+        assert_eq!(record_types(&capsules), ["evidence_request"], "no response");
+    }
+
+    #[tokio::test]
+    async fn a_reply_ready_only_once_the_window_has_closed_is_no_reply() {
+        let (capsules, asked, _, sent, _dir) = recorded_ask(Duration::ZERO);
+        let closed = tokio::time::Instant::now() - Duration::from_millis(1);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let ready = async { Ok(br#"{"artifact":"AAAA"}"#.to_vec()) };
+        let task = tokio::spawn(settle_ask(
+            capsules.clone(),
+            asked,
+            "peer".into(),
+            sent,
+            ready,
+            closed,
             tx,
         ));
         let settled = rx.await.expect("the caller hears");
