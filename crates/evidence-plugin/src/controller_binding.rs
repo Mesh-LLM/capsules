@@ -10,7 +10,9 @@
 //! did. Nothing gates on it beyond that.
 //!
 //! **What is used.** Only the claim `same_controller_asserted` under
-//! `dual_signature/0`, the declaration D-29 names. A record that is
+//! `dual_signature/0`, the declaration D-29 names. Each bound key signs as
+//! its key type says (CB §3.3, §4.1): an `ed25519` key with Ed25519, a
+//! `bip340` key, such as an operator's Nostr identity, with a Nostr event. A record that is
 //! malformed, signed by one key, outside its window at the time asked about,
 //! or under a method this node does not implement does not apply (CB §6.2).
 //! No revocation statement reaches this node on any channel, so revocation
@@ -46,6 +48,15 @@ pub const METHOD_DUAL_SIGNATURE: &str = "dual_signature/0";
 const CLAIM_DELEGATED_BY: &str = "delegated_by";
 const CLAIM_SAME_ORGANIZATION: &str = "same_organization_credentialed";
 const METHOD_DUAL_SIGNATURE_CREDENTIAL: &str = "dual_signature_credential/0";
+
+/// The optional member that names each bound key's type (CB §3.1, §3.3).
+const KEY_TYPES: &str = "key_types";
+const KEY_TYPE_ED25519: &str = "ed25519";
+const KEY_TYPE_BIP340: &str = "bip340";
+/// The kind of the Nostr event a `bip340` key signs with (CB §4.1, CB-8).
+const NOSTR_KIND: u64 = 3374;
+/// The largest `created_at` CB §4.1 allows, 2^53 - 1.
+const MAX_CREATED_AT: u64 = (1 << 53) - 1;
 
 const BASE_MEMBERS: [&str; 10] = [
     "binding_version",
@@ -111,13 +122,7 @@ pub fn evaluate(record: &Value, times: &[UtcTime]) -> Evaluation {
         };
     };
     let signatures = match map["method"].as_str() {
-        Some(METHOD_DUAL_SIGNATURE) => {
-            if both_signed(map, record) {
-                Status::Pass
-            } else {
-                Status::Fail
-            }
-        }
+        Some(METHOD_DUAL_SIGNATURE) => both_signed(map, record),
         // `dual_signature_credential/0` needs a credential format this
         // revision does not register (CB-3), and an undefined method is
         // one this node cannot check.
@@ -234,7 +239,8 @@ fn well_formed(map: &Map<String, Value>) -> bool {
         Some(CLAIM_SAME_ORGANIZATION) => (&["credential"], METHOD_DUAL_SIGNATURE_CREDENTIAL),
         _ => return false,
     };
-    if map.len() != BASE_MEMBERS.len() + added.len()
+    let typed = usize::from(map.contains_key(KEY_TYPES));
+    if map.len() != BASE_MEMBERS.len() + added.len() + typed
         || !BASE_MEMBERS
             .iter()
             .chain(added)
@@ -272,6 +278,25 @@ fn well_formed(map: &Map<String, Value>) -> bool {
     if !map["revocation"].is_string() || !map["nonce"].is_string() || !map["sigs"].is_array() {
         return false;
     }
+    if let Some(types) = map.get(KEY_TYPES) {
+        match types.as_array() {
+            Some(types) if types.len() == 2 && types.iter().all(Value::is_string) => {
+                // CB §3.1, §9.3: a record that binds a Nostr key carries a
+                // nonce long enough to be drawn from 128 random bits.
+                let nostr = types.iter().any(|t| t == KEY_TYPE_BIP340);
+                let nonce = map["nonce"].as_str().unwrap_or_default();
+                if nostr
+                    && !(nonce.len() >= 32
+                        && nonce
+                            .bytes()
+                            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+                {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
     match claim {
         Some(CLAIM_DELEGATED_BY) => map["delegator"].as_str().is_some_and(|d| keys.contains(&d)),
         Some(CLAIM_SAME_ORGANIZATION) => map["credential"].as_object().is_some_and(|c| {
@@ -285,22 +310,88 @@ fn well_formed(map: &Map<String, Value>) -> bool {
 }
 
 /// CB §4: exactly two entries `{key_id, sig}`, naming `keys` in order, each
-/// verifying over the signing input.
-fn both_signed(map: &Map<String, Value>, record: &Value) -> bool {
+/// verifying over the signing input as its key's type signs (§4.1).
+/// `NOT_CHECKED` when `key_types` names a type this node does not know.
+fn both_signed(map: &Map<String, Value>, record: &Value) -> Status {
+    let types: Vec<&str> = match map.get(KEY_TYPES) {
+        Some(types) => types
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect(),
+        None => vec![KEY_TYPE_ED25519; 2],
+    };
+    if !types
+        .iter()
+        .all(|t| *t == KEY_TYPE_ED25519 || *t == KEY_TYPE_BIP340)
+    {
+        return Status::NotChecked;
+    }
     let (Some(keys), Some(sigs), Some(input)) = (
         map["keys"].as_array(),
         map["sigs"].as_array(),
         signing_input(record),
     ) else {
+        return Status::Fail;
+    };
+    let good = sigs.len() == 2
+        && sigs
+            .iter()
+            .zip(keys)
+            .zip(&types)
+            .all(|((entry, key), kind)| {
+                let Some(entry) = entry.as_object().filter(|e| e.len() == 2) else {
+                    return false;
+                };
+                entry.get("key_id") == Some(key)
+                    && match *kind {
+                        KEY_TYPE_BIP340 => nostr_signed(key, entry.get("sig"), VERSION, &input),
+                        _ => verifies(key, entry.get("sig"), &input),
+                    }
+            });
+    if good {
+        Status::Pass
+    } else {
+        Status::Fail
+    }
+}
+
+/// CB §4.1: `sig` is `{created_at, sig}`, the BIP-340 signature by `key` over
+/// the id of the Nostr event (NIP-01) of kind 3374, no tags, and content
+/// `<version>:<SHA-256 of the signed octets>`.
+fn nostr_signed(key: &Value, sig: Option<&Value>, version: &str, signed: &[u8]) -> bool {
+    let Some(sig) = sig.and_then(Value::as_object).filter(|s| s.len() == 2) else {
         return false;
     };
-    sigs.len() == 2
-        && sigs.iter().zip(keys).all(|(entry, key)| {
-            let Some(entry) = entry.as_object().filter(|e| e.len() == 2) else {
-                return false;
-            };
-            entry.get("key_id") == Some(key) && verifies(key, entry.get("sig"), &input)
-        })
+    let (Some(key), Some(created_at), Some(value)) = (
+        key.as_str().filter(|k| is_key(k)),
+        sig.get("created_at")
+            .and_then(Value::as_u64)
+            .filter(|t| *t <= MAX_CREATED_AT),
+        sig.get("sig")
+            .and_then(Value::as_str)
+            .filter(|s| is_lower_hex(s, 128)),
+    ) else {
+        return false;
+    };
+    // Every value in the event is hex, a version token or an integer, so
+    // NIP-01's serialization needs no escaping here.
+    let event = format!(
+        r#"[0,"{key}",{created_at},{NOSTR_KIND},[],"{version}:{}"]"#,
+        hex::encode(Sha256::digest(signed))
+    );
+    let (Ok(key), Ok(value)) = (hex::decode(key), hex::decode(value)) else {
+        return false;
+    };
+    let (Ok(key), Ok(value)) = (
+        k256::schnorr::VerifyingKey::from_bytes(&key),
+        k256::schnorr::Signature::try_from(value.as_slice()),
+    ) else {
+        return false;
+    };
+    key.verify_raw(&Sha256::digest(event.as_bytes()), &value)
+        .is_ok()
 }
 
 fn verifies(key: &Value, sig: Option<&Value>, input: &[u8]) -> bool {
@@ -558,5 +649,42 @@ mod tests {
         std::fs::write(dir.path().join(HELD_FILE), b"not json").unwrap();
         assert_eq!(read_held(dir.path()), Some(Value::Null));
         assert!(binds_own(&Value::Null, &own, now).is_err());
+    }
+
+    /// AAC's `valid-nostr-key` binds an Ed25519 key to an operator's Nostr
+    /// (`bip340`) key and applies, whichever of the two asks; its
+    /// `nostr-wrong-digest` and `nostr-key-read-as-ed25519` do not.
+    #[test]
+    fn a_binding_to_a_nostr_key_applies_and_its_negatives_do_not() {
+        let corpus = vectors();
+        let binding = |id: &str| -> Value {
+            let case = corpus["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["id"] == id)
+                .unwrap();
+            serde_json::from_str(case["inputs"]["binding"]["octets_text"].as_str().unwrap())
+                .unwrap()
+        };
+        let good = binding("valid-nostr-key");
+        let nostr = corpus["test_keys"]["keys"]["operator-nostr"]["public"]
+            .as_str()
+            .unwrap();
+        let now = at("2026-10-28T00:00:00Z");
+        let applied = applies(&good, now).expect("applies");
+        let node = applied
+            .other(nostr)
+            .expect("binds the Nostr key")
+            .to_string();
+        assert_eq!(applied.other(&node), Some(nostr));
+        assert!(binds_own(&good, &node, now).is_ok());
+        for id in [
+            "nostr-wrong-digest",
+            "nostr-key-read-as-ed25519",
+            "nostr-created-at-text",
+        ] {
+            assert!(applies(&binding(id), now).is_none(), "{id}");
+        }
     }
 }
