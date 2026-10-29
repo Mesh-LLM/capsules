@@ -277,8 +277,8 @@ async fn a_denied_peer_gets_no_and_an_allowed_peer_gets_go_through_the_wire_prot
 
 #[tokio::test]
 async fn a_setting_that_does_not_parse_fails_closed_and_the_plugin_keeps_running() {
-    // Stopping would not refuse anyone: a host skips a plugin it has no
-    // manifest for and routes to every peer.
+    // Under a `best_effort` grant, stopping would refuse no one: a host
+    // routes to every peer past a plugin it has no manifest for.
     let mut host = Host::spawn(&[
         ("CAPSULES_ADMISSION_ALLOW", ALLOWED),
         ("CAPSULES_ADMISSION_DENY", "not-a-node-id"),

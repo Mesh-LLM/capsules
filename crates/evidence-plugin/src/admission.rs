@@ -18,8 +18,9 @@
 //! waits. A setting that does not read or parse fails closed: the plugin keeps
 //! running and every peer gets NO (`unreadable_policy`) until the operator
 //! fixes it and restarts, so a typo never admits a peer the operator meant to
-//! refuse. Stopping the plugin instead would not: a host skips a plugin it has
-//! no manifest for and routes to every peer.
+//! refuse. Stopping the plugin instead would not, under a `best_effort` grant:
+//! a host then routes to every peer past a plugin it has no manifest for
+//! (under a `required` grant it refuses every request, peers and all).
 //!
 //! Each decision about a peer is sealed as an `admission_decision` record
 //! before the answer goes back, so no GO is acted on unsealed; when sealing

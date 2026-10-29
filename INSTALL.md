@@ -341,8 +341,9 @@ failure_policy = "required"
 A NO refuses the request with 403 `plugin_policy_denied`; trying the next peer instead waits on
 Mesh-LLM/mesh-llm#2061. With `failure_policy = "required"`, a hook that errors or misses
 `deadline_ms` also refuses the request (503). With the default, `best_effort`, mesh-llm routes
-the request anyway. Either way, while the plugin is stopped or not loaded, mesh-llm does not ask
-it and routes to every peer, deny list included.
+the request anyway. The same holds while the plugin is stopped or not loaded: with `required`,
+mesh-llm refuses every request (503) until the plugin is back; with `best_effort`, it routes to
+every peer, deny list included.
 
 Each decision is an `admission_decision` record: the verdict, which list or the default gave it,
 and the digest of the policy it read. The record never names the peer in clear, since records can

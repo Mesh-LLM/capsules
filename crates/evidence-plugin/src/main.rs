@@ -1383,7 +1383,8 @@ async fn main() -> anyhow::Result<()> {
     let capsules_for_routing_choice = capsules.clone();
     // Basic admission (loop step 4): the operator's lists, read once here.
     // Unreadable settings fail closed inside `Admission`, never stop the
-    // plugin (a host routes to every peer past a plugin it has no manifest for).
+    // plugin (under a `best_effort` grant a host routes to every peer past a
+    // plugin it has no manifest for).
     let peer_admission = Arc::new(admission::Admission::new(
         admission::Policy::from_settings(),
         capsules.clone(),
