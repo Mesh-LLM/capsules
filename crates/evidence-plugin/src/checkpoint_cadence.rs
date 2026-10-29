@@ -468,6 +468,13 @@ pub fn spawn(
                         .await;
                     }
                 }
+                // A checkpoint at each Service History period boundary, cut
+                // in the boundary's minute so its time is the boundary
+                // (`crate::service_history`). Nothing new since the last
+                // checkpoint, nothing cut: that boundary is not answered at.
+                _ = tokio::time::sleep(until_period_boundary(unix_now())) => {
+                    run("period boundary", |s, k, a| s.reconnect(k, a));
+                }
                 _ = shutdown.changed() => {
                     if *shutdown.borrow() {
                         break;
@@ -481,6 +488,22 @@ pub fn spawn(
     });
 
     Ok(handle)
+}
+
+/// The wall clock, in Unix seconds.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// How long from the Unix time `now` until one second after the next
+/// Service History period boundary: late enough that the wall clock has
+/// reached the boundary, and well inside its minute, which a checkpoint's
+/// minute-granular time then names.
+fn until_period_boundary(now: i64) -> Duration {
+    let next = crate::service_history::next_boundary_after(now);
+    Duration::from_secs((next - now).max(0) as u64 + 1)
 }
 
 /// The client capsule-emit's checkpoint calls take. Since capsule-emit
@@ -630,6 +653,22 @@ mod tests {
             .unwrap();
         writeln!(f, "{}", serde_json::json!({ "capsule_id": capsule_id })).unwrap();
         capsule_id
+    }
+
+    #[test]
+    fn the_boundary_wait_ends_one_second_into_the_next_period() {
+        // 2026-01-05T00:00:00Z, the policy's epoch, and the week after.
+        let epoch = 1_767_571_200;
+        let week = crate::service_history::LENGTH_S;
+        assert_eq!(until_period_boundary(epoch - 10), Duration::from_secs(11));
+        assert_eq!(
+            until_period_boundary(epoch),
+            Duration::from_secs(week as u64 + 1)
+        );
+        assert_eq!(
+            until_period_boundary(epoch + week - 1),
+            Duration::from_secs(2)
+        );
     }
 
     fn handle_over(dir: &std::path::Path) -> CheckpointHandle {

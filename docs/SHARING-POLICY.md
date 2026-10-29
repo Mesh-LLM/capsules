@@ -229,10 +229,11 @@ on and the checkpoint cadence on (the default), each push cuts a checkpoint
 (at most one per 100 ms), so a checkpoint's time can be the time one exchange
 ended.
 
-The rest (`served_summary/1` and any other derivation) shows what this node
-serves, so with this switch off it goes only to a counterparty: a node that
-some record of this node names as the other side of an exchange. Any other
-node is refused `policy_declined`.
+The rest (`served_summary/1`, the Service History `service_history/1`
+([SERVICE-HISTORY.md](SERVICE-HISTORY.md)) and any other derivation) shows
+what this node serves, so with this switch off it goes only to a
+counterparty: a node that some record of this node names as the other side
+of an exchange. Any other node is refused `policy_declined`.
 
 The refusal carries nothing about who asked. It is decided before the subject
 is resolved, so it is the same whether or not what was asked for exists, and
