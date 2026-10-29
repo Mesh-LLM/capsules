@@ -38,7 +38,13 @@
 //!   digest): RFC 8785 of `{anchor, derivation, entries, evidence_stream,
 //!   subject}`, each entry the derivation's members with `inclusion` the
 //!   half's `cll-inclusion-proof` at the anchor, in hex
-//!   (`crate::exchange_corroboration`).
+//!   (`crate::exchange_corroboration`);
+//! - `service_history/1` (this node's own, named by its definition digest):
+//!   RFC 8785 of `{anchor, coverage_declaration, declared, derivation,
+//!   evidence_stream, history_card, history_card_digest, period_counts,
+//!   subject}`, the card the `history_card/1` artifact at the same anchor
+//!   (`crate::service_history`). This node signs its envelope itself, with
+//!   no material, as that profile asks.
 //!
 //! **Beyond the profile.** The profile defines no material for a record set,
 //! the checkpoint list or a derivation (its P-13), and no carrier for a
@@ -199,18 +205,26 @@ fn served_summary(
 pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
     let index = view.index;
     let served = index.chain.get(b.at).ok_or(Reason::CoverageUnsatisfiable)?;
-    let signed = signed_envelope(b, view, served)?;
+    let service_history = crate::service_history::is_derivation(b.request.derivation.as_ref());
+    let signed = if service_history {
+        service_history_envelope(b, view, served)?
+    } else {
+        signed_envelope(b, view, served)?
+    };
     let mut reply: Value = serde_json::from_slice(&signed.encode(Binding::Json))
         .map_err(|_| Reason::PolicyDeclined)?;
     // The checkpoints whose receipts go with the answer: every one listed
-    // for a checkpoint list and a history card, else the serving one.
-    let lists_checkpoints = matches!(
-        (&b.request.derivation, &b.request.subject),
-        (Some(Derivation::Token(t)), _) if t == DERIVATION_HISTORY_CARD
-    ) || matches!(
-        (&b.request.derivation, &b.request.subject),
-        (None, Subject::Checkpoints)
-    );
+    // for a checkpoint list and a history card (embedded or not), else the
+    // serving one.
+    let lists_checkpoints = service_history
+        || matches!(
+            (&b.request.derivation, &b.request.subject),
+            (Some(Derivation::Token(t)), _) if t == DERIVATION_HISTORY_CARD
+        )
+        || matches!(
+            (&b.request.derivation, &b.request.subject),
+            (None, Subject::Checkpoints)
+        );
     let carried: &[ChainCheckpoint] = if lists_checkpoints {
         &index.chain[..=b.at]
     } else {
@@ -322,6 +336,83 @@ fn signed_envelope(
     })
 }
 
+/// The Service History's envelope (`crate::service_history`). Its artifact
+/// has more members than a `Derive`d one, so this node signs it itself: the
+/// card is the one `answer::build` serves a direct `history_card/1` request
+/// at the same anchor, and, as the profile registers no material for a
+/// derivation, the envelope carries none (ISH §8.1).
+fn service_history_envelope(
+    b: &Build<'_>,
+    view: &LogView<'_>,
+    served: &ChainCheckpoint,
+) -> Result<Envelope, Reason> {
+    use evidencebook::answer::{self, Options, Selection};
+    let card_request = Request {
+        subject: Subject::FullHistory,
+        coverage: Coverage::ExpectedPin(served.anchor_digest()),
+        derivation: Some(Derivation::Token(DERIVATION_HISTORY_CARD.to_string())),
+        deadline: None,
+        nonce: None,
+        route: None,
+    };
+    let card = answer::build(
+        view,
+        view,
+        &card_request,
+        b.request_bytes,
+        b.resolved,
+        &Selection {
+            at: b.at,
+            records: Vec::new(),
+        },
+        Options::default(),
+        b.signing_key,
+        b.issued_at,
+    )
+    .map_err(|_| Reason::PolicyDeclined)?
+    .artifact;
+    let chain = &view.index.chain[..=b.at];
+    let cuts: Vec<crate::service_history::Cut<'_>> = chain
+        .iter()
+        .map(|cp| {
+            Ok(crate::service_history::Cut {
+                timestamp: &cp.record.timestamp,
+                leaves: leaf_count(cp.record.mmr_size).map_err(|_| Reason::PolicyDeclined)?,
+            })
+        })
+        .collect::<Result<_, Reason>>()?;
+    let leaves = &view.index.leaves;
+    let counts = crate::service_history::period_counts(&cuts, &|i| {
+        leaves
+            .get(i as usize)
+            .and_then(|l| l.facts.served.as_ref())
+            .map(|s| s.group.clone())
+    })?;
+    let log_size = cuts.last().map_or(0, |c| c.leaves);
+    let anchor = served.anchor_digest();
+    let artifact =
+        crate::service_history::artifact(&card, counts, &anchor, &served.record.log_id, log_size)?;
+    envelope::sign(
+        b.request_bytes,
+        envelope::EnvelopeParts {
+            subject: b.request.subject.clone(),
+            derivation: b.request.derivation.clone(),
+            anchor: envelope::Anchor {
+                digest: anchor,
+                freshness: None,
+            },
+            artifact,
+            verification: Vec::new(),
+            issued_at: b.issued_at.to_string(),
+        },
+        b.signing_key,
+    )
+    .map_err(|e| {
+        tracing::warn!(error = %e, "a Service History could not be signed -- declining");
+        Reason::PolicyDeclined
+    })
+}
+
 /// A checkpoint time in the profile's form: UTC, any fraction dropped
 /// (profile §5.2).
 fn profile_time(timestamp: &str) -> String {
@@ -356,6 +447,8 @@ pub struct Checked {
     pub halves: Vec<crate::exchange_corroboration::Half>,
     /// The witness receipts it carries, each as checked.
     pub receipts: Vec<ReceiptCheck>,
+    /// What a Service History counts. `None` for any other answer.
+    pub history: Option<crate::service_history::Counts>,
 }
 
 /// What became of one witness receipt.
@@ -473,13 +566,17 @@ pub fn check(
         {
             Some(t.as_str())
         }
-        Some(Derivation::Digest(d)) if d == crate::exchange_corroboration::DEFINITION_DIGEST => {
+        Some(Derivation::Digest(d))
+            if d == crate::exchange_corroboration::DEFINITION_DIGEST
+                || d == crate::service_history::DEFINITION_DIGEST =>
+        {
             Some(d.as_str())
         }
         Some(_) => return fail("the answer is for a derivation this node does not check"),
     };
 
     let mut halves = Vec::new();
+    let mut history = None;
     let (served, records, listed) = match (derivation, &env.subject) {
         (None, Subject::Record(digest)) => {
             let report = cll_material::check_anchor_inclusion(&env, &ResponderLogKey(*key));
@@ -523,41 +620,38 @@ pub fn check(
         }
         (Some(t), _) if t == DERIVATION_HISTORY_CARD => {
             let art = artifact_map(&env, Some(t))?;
-            let history = art
-                .get("history")
-                .and_then(Value::as_array)
-                .filter(|h| !h.is_empty() && h.len() <= MAX_ITEMS)
-                .ok_or_else(|| CheckError::Answer("the history is malformed".into()))?;
-            let mut listed: Vec<Stated> = Vec::with_capacity(history.len());
-            for entry in history {
-                let statement = hex_member(entry, "checkpoint")?;
-                let cp = stated(&statement, key)?;
-                match (listed.last(), entry.get("consistency_from_previous")) {
-                    (None, Some(Value::Null)) => {}
-                    (Some(prev), Some(Value::String(proof))) => {
-                        let proof = hex::decode(proof).map_err(|_| {
-                            CheckError::Answer("a consistency proof is malformed".into())
-                        })?;
-                        if !consistent(
-                            prev.cp.mmr_size,
-                            &prev.cp.new_peak_hashes,
-                            cp.cp.mmr_size,
-                            &cp.cp.new_peak_hashes,
-                            &proof,
-                        ) {
-                            return fail("a consistency proof does not hold");
-                        }
-                    }
-                    _ => {
-                        return fail(
-                            "a history entry's consistency proof is missing or out of place",
-                        )
-                    }
-                }
-                listed.push(cp);
+            let (served, listed) = card_chain(&art, key)?;
+            (served, Vec::new(), listed)
+        }
+        (Some(d), Subject::FullHistory) if d == crate::service_history::DEFINITION_DIGEST => {
+            // A Standard History is answered only at a pinned anchor.
+            if !matches!(request.coverage, Coverage::ExpectedPin(_)) {
+                return fail("a Service History is answered only under an expected_pin");
             }
-            let served = check_chain(listed, &art)?;
-            (served.0, Vec::new(), served.1)
+            if !env.verification.is_empty() {
+                return fail("a Service History carries no verification material");
+            }
+            let art = artifact_map(&env, derivation)?;
+            let card = art
+                .get("history_card")
+                .and_then(Value::as_object)
+                .ok_or_else(|| CheckError::Answer("the artifact carries no history card".into()))?;
+            let (served, listed) = card_chain(card, key)?;
+            check_names(&art, &served)?;
+            let times: Vec<&str> = listed.iter().map(|s| s.cp.timestamp.as_str()).collect();
+            let log_size = leaf_count(served.cp.mmr_size)
+                .map_err(|_| CheckError::Answer("the anchor's size is not an MMR size".into()))?;
+            history = Some(
+                crate::service_history::check_artifact(
+                    &art,
+                    &times,
+                    &served.digest,
+                    &served.cp.log_id,
+                    log_size,
+                )
+                .map_err(CheckError::Answer)?,
+            );
+            (served, Vec::new(), listed)
         }
         (Some(t), Subject::FullHistory) if t == SERVED_SUMMARY_DERIVATION_TOKEN => {
             // served_summary/1: a static export, answered only under a pin.
@@ -622,7 +716,47 @@ pub fn check(
         checkpoints: listed.len(),
         halves,
         receipts,
+        history,
     })
+}
+
+/// A `history_card/1` artifact's checkpoint list: each checkpoint the
+/// responder's, each consistency proof holding, the list starting the
+/// stream and ending at the anchor `card` names. Returns the anchor and the
+/// list.
+fn card_chain(
+    card: &Map<String, Value>,
+    key: &VerifyingKey,
+) -> Result<(Stated, Vec<Stated>), CheckError> {
+    let history = card
+        .get("history")
+        .and_then(Value::as_array)
+        .filter(|h| !h.is_empty() && h.len() <= MAX_ITEMS)
+        .ok_or_else(|| CheckError::Answer("the history is malformed".into()))?;
+    let mut listed: Vec<Stated> = Vec::with_capacity(history.len());
+    for entry in history {
+        let statement = hex_member(entry, "checkpoint")?;
+        let cp = stated(&statement, key)?;
+        match (listed.last(), entry.get("consistency_from_previous")) {
+            (None, Some(Value::Null)) => {}
+            (Some(prev), Some(Value::String(proof))) => {
+                let proof = hex::decode(proof)
+                    .map_err(|_| CheckError::Answer("a consistency proof is malformed".into()))?;
+                if !consistent(
+                    prev.cp.mmr_size,
+                    &prev.cp.new_peak_hashes,
+                    cp.cp.mmr_size,
+                    &cp.cp.new_peak_hashes,
+                    &proof,
+                ) {
+                    return fail("a consistency proof does not hold");
+                }
+            }
+            _ => return fail("a history entry's consistency proof is missing or out of place"),
+        }
+        listed.push(cp);
+    }
+    check_chain(listed, card)
 }
 
 /// The material of an answer that carries only its anchor checkpoint (a

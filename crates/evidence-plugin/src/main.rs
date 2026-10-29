@@ -50,6 +50,7 @@ mod requester_auth;
 mod routing_choice_bridge;
 mod routing_rule;
 mod self_peer;
+mod service_history;
 mod settings;
 mod settlement_adapter;
 mod settlement_channel;
