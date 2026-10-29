@@ -967,6 +967,70 @@ mod tests {
         assert_eq!((cited_hash, accounted, response), (0, 0, 0));
     }
 
+    /// Since token metering the host issues no final invoice when the
+    /// deposit covers the bill. Both sides still seal: the payer its terms,
+    /// payer_observed and delivered legs, the provider its payee_observed leg
+    /// citing the payer's deposit terms leg, whether the exchange event
+    /// naming the provider comes before or after the accounted bill, and
+    /// whether the bill equals the deposit or is below it.
+    #[test]
+    fn a_deposit_that_covers_the_bill_seals_both_sides() {
+        for (exchange_first, bill_msat) in [(false, 1000), (true, 1000), (false, 600), (true, 600)]
+        {
+            let (a, b) = dirs();
+            let pair = Pair::open(a.path(), b.path());
+            pair.provider_event(Phase::InputInvoiceIssued, 0, INPUT, &[]);
+            pair.payer_event(Phase::InputInvoiceIssued, 0, INPUT, &[]);
+            pair.provider_event(Phase::InputSettlementObserved, 0, INPUT, WALLET);
+            pair.payer_event(Phase::InputSettlementObserved, 0, INPUT, &[("fee_msat", 0)]);
+            let exchange = || {
+                pair.payer.settlement_legs().on_exchange(
+                    &pair.payer,
+                    "ex",
+                    Some(PROVIDER_PEER),
+                    Some(RESPONSE),
+                )
+            };
+            let accounted = || {
+                pair.payer
+                    .settlement_legs()
+                    .on_lifecycle(&pair.payer, &accounted_bill("ex", bill_msat))
+            };
+            let pushes = if exchange_first {
+                let pushes = exchange();
+                accounted();
+                pushes
+            } else {
+                accounted();
+                exchange()
+            };
+            assert_eq!(pushes.len(), 1, "only the deposit's terms leg is pushed");
+            pair.deliver(&pushes);
+
+            let (payer, provider) = (legs_of(a.path()), legs_of(b.path()));
+            assert_eq!(
+                kinds(&payer),
+                ["terms", "payer_observed", "delivered"],
+                "exchange first: {exchange_first}, bill: {bill_msat}"
+            );
+            assert_eq!(kinds(&provider), ["payee_observed"]);
+            let deposit_terms = &payer[0]["capsule_id"];
+            assert_eq!(&pushes[0].capsule["capsule_id"], deposit_terms);
+            for leg in [&payer[1], &payer[2], &provider[0]] {
+                assert_eq!(&leg["settlement"]["terms_ref"], deposit_terms);
+            }
+            assert_eq!(
+                payer[2]["settlement"]["delivery"]["content_digest"],
+                json!(RESPONSE)
+            );
+            assert_eq!(provider[0]["settlement"]["received"]["value"], json!("995"));
+            assert_eq!(provider[0]["settlement"]["sealer_role"], json!("payee"));
+            let [_, cited_hash, accounted, _, _, response, ..] =
+                pair.payer.settlement_legs().held();
+            assert_eq!((cited_hash, accounted, response), (0, 0, 0));
+        }
+    }
+
     /// The host drops a lifecycle event it cannot deliver in time, so the
     /// final invoice's event can be lost while the deposit's and the
     /// accounted bill arrive. A bill above the deposit was not covered by
