@@ -128,6 +128,11 @@ in `crates/evidence-plugin/src/two_node_e2e.rs` run over what each node wrote:
   then at a boundary checkpoint, verifies it under the provider's key, and
   compares the card it embeds with the provider's direct `history_card/1`
   answer at the same pin, byte for byte. No release build enables the feature.
+- each ask is sealed before it is sent (loop step 7): the requester's
+  history-card ask is an `evidence_request` record ahead of the
+  `evidence_response` citing it, which verified for exactly the sealed
+  request's digest; and an ask to a node not on the mesh ends, once its
+  window closes, in a `recorded_absence` citing that request.
 - the real-host tests (`tests/host_runtime_e2e.rs`, see
   [docs/REAL-HOST-VERIFICATION.md](docs/REAL-HOST-VERIFICATION.md)) pass, and
   fail on a build that serves a blocked model.
