@@ -1382,8 +1382,10 @@ async fn main() -> anyhow::Result<()> {
     // Local routing choices seal onto the same single-writer chain.
     let capsules_for_routing_choice = capsules.clone();
     // Basic admission (loop step 4): the operator's lists, read once here.
+    // Unreadable settings fail closed inside `Admission`, never stop the
+    // plugin (a host routes to every peer past a plugin it has no manifest for).
     let peer_admission = Arc::new(admission::Admission::new(
-        admission::Policy::from_settings()?,
+        admission::Policy::from_settings(),
         capsules.clone(),
     ));
     // the record-push responder's
@@ -1655,7 +1657,15 @@ fn with_admission_hook(
         .with_manifest(manifest)
         .with_openai_exchange_handler(move |_handler, event, _context| {
             let admission = admission.clone();
-            Box::pin(async move { Ok(admission.answer(&event)) })
+            // Seal on `spawn_blocking`, like every other seal path: the emit
+            // holds the std ledger mutex across two `sync_all()`s.
+            Box::pin(async move {
+                Ok(
+                    tokio::task::spawn_blocking(move || admission.answer(&event))
+                        .await
+                        .unwrap_or_else(|_| admission::seal_failed()),
+                )
+            })
         })
 }
 

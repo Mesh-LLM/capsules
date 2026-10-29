@@ -15,8 +15,11 @@
 //! and `CAPSULES_ADMISSION_DENY` (comma-separated 64-hex mesh node ids) and
 //! `CAPSULES_ADMISSION_DEFAULT` (`go`, the default, or `no`) for a peer on
 //! neither list. Deny wins over allow. Nothing is fetched while a request
-//! waits. A setting that does not parse stops the plugin at start, so a typo
-//! never admits a peer the operator meant to refuse.
+//! waits. A setting that does not read or parse fails closed: the plugin keeps
+//! running and every peer gets NO (`unreadable_policy`) until the operator
+//! fixes it and restarts, so a typo never admits a peer the operator meant to
+//! refuse. Stopping the plugin instead would not: a host skips a plugin it has
+//! no manifest for and routes to every peer.
 //!
 //! Each decision about a peer is sealed as an `admission_decision` record
 //! before the answer goes back, so no GO is acted on unsealed; when sealing
@@ -83,6 +86,8 @@ pub enum Source {
     Default,
     /// The host named a mesh backend in a shape this plugin cannot read.
     UnreadableTarget,
+    /// The operator's settings did not read or parse.
+    UnreadablePolicy,
 }
 
 impl Source {
@@ -92,6 +97,7 @@ impl Source {
             Self::DenyList => "deny_list",
             Self::Default => "default",
             Self::UnreadableTarget => "unreadable_target",
+            Self::UnreadablePolicy => "unreadable_policy",
         }
     }
 }
@@ -106,12 +112,24 @@ pub struct Policy {
 
 impl Policy {
     /// The policy the three settings give.
+    /// An unset setting takes its default; one set but unreadable (not
+    /// UTF-8) is an error, never "unset".
     pub fn from_settings() -> anyhow::Result<Self> {
-        let read = |name| crate::settings::var(name).ok();
+        Self::from_reader(crate::settings::var)
+    }
+
+    fn from_reader(
+        read: impl Fn(&str) -> Result<String, std::env::VarError>,
+    ) -> anyhow::Result<Self> {
+        let read = |name: &str| match read(name) {
+            Ok(value) => Ok(Some(value)),
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(error) => Err(anyhow::anyhow!("{name}: {error}")),
+        };
         Self::parse(
-            read(ALLOW_SETTING).as_deref(),
-            read(DENY_SETTING).as_deref(),
-            read(DEFAULT_SETTING).as_deref(),
+            read(ALLOW_SETTING)?.as_deref(),
+            read(DENY_SETTING)?.as_deref(),
+            read(DEFAULT_SETTING)?.as_deref(),
         )
     }
 
@@ -234,23 +252,47 @@ fn target(event: &Value) -> Target {
     }
 }
 
+/// Seals one decision's block onto the node's chain.
+type Seal = Box<dyn Fn(Map<String, Value>) -> anyhow::Result<()> + Send + Sync>;
+
 /// The policy in force and where its decisions are sealed.
 pub struct Admission {
-    policy: Policy,
+    /// `None`: the settings did not read or parse, and every peer gets NO.
+    policy: Option<Policy>,
     salt: [u8; 32],
-    policy_digest: String,
-    capsules: Arc<CapsuleState>,
+    policy_digest: Option<String>,
+    seal: Seal,
 }
 
 impl Admission {
-    pub fn new(policy: Policy, capsules: Arc<CapsuleState>) -> Self {
+    /// `policy` as [`Policy::from_settings`] read it; an error is logged
+    /// once here and fails closed.
+    pub fn new(policy: anyhow::Result<Policy>, capsules: Arc<CapsuleState>) -> Self {
         let salt = salt(capsules.signing_key());
-        let policy_digest = policy.digest(&salt);
+        Self::with_seal(
+            policy,
+            salt,
+            Box::new(move |block| capsules.emit_admission_decision(block).map(|_| ())),
+        )
+    }
+
+    fn with_seal(policy: anyhow::Result<Policy>, salt: [u8; 32], seal: Seal) -> Self {
+        let policy = match policy {
+            Ok(policy) => Some(policy),
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    "admission settings are unreadable; every peer gets NO until they are fixed and mesh-llm restarts"
+                );
+                None
+            }
+        };
+        let policy_digest = policy.as_ref().map(|policy| policy.digest(&salt));
         Self {
             policy,
             salt,
             policy_digest,
-            capsules,
+            seal,
         }
     }
 
@@ -262,15 +304,18 @@ impl Admission {
         let (peer, (verdict, source)) = match target(event) {
             Target::NotAPeer => return OpenAiExchangeDecision::default(),
             Target::Peer(peer) => {
-                let decided = self.policy.decide(&peer);
+                let decided = match &self.policy {
+                    Some(policy) => policy.decide(&peer),
+                    None => (Verdict::No, Source::UnreadablePolicy),
+                };
                 (Some(peer), decided)
             }
             Target::Unreadable => (None, (Verdict::No, Source::UnreadableTarget)),
         };
         let block = self.block(peer.as_deref(), verdict, source, event);
-        if let Err(error) = self.capsules.emit_admission_decision(block) {
+        if let Err(error) = (self.seal)(block) {
             tracing::error!(%error, reason = SEAL_FAILED, "could not seal an admission decision; answering NO");
-            return deny(SEAL_FAILED.to_string());
+            return seal_failed();
         }
         match verdict {
             Verdict::Go => OpenAiExchangeDecision {
@@ -303,7 +348,7 @@ impl Admission {
             json!([{
                 "kind": "operator_policy",
                 "policy": POLICY,
-                "digest": {"alg": "SHA-256", "digest": self.policy_digest},
+                "digest": self.policy_digest.as_ref().map(|digest| json!({"alg": "SHA-256", "digest": digest})),
             }]),
         );
         for field in ["request_id", "attempt", "model"] {
@@ -314,6 +359,12 @@ impl Admission {
         }
         block
     }
+}
+
+/// The answer when a decision could not be sealed: NO, with a reason that
+/// says so rather than a deny.
+pub fn seal_failed() -> OpenAiExchangeDecision {
+    deny(SEAL_FAILED.to_string())
 }
 
 fn deny(reason: String) -> OpenAiExchangeDecision {
@@ -339,7 +390,7 @@ mod tests {
     fn admission(policy: Policy) -> (Admission, Arc<CapsuleState>, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
         let capsules = Arc::new(CapsuleState::open(dir.path(), "node-under-test").expect("open"));
-        (Admission::new(policy, capsules.clone()), capsules, dir)
+        (Admission::new(Ok(policy), capsules.clone()), capsules, dir)
     }
 
     fn selected(target: &str) -> Value {
@@ -526,6 +577,61 @@ mod tests {
         assert!(Policy::parse(None, None, Some("maybe")).is_err());
         let empty = Policy::parse(Some(" , "), Some(""), Some(" ")).unwrap();
         assert_eq!(empty.decide(STRANGER), (Verdict::Go, Source::Default));
+    }
+
+    #[test]
+    fn a_failed_seal_answers_no_and_says_so() {
+        let admission = Admission::with_seal(
+            Ok(policy(None)),
+            [1; 32],
+            Box::new(|_| anyhow::bail!("disk full")),
+        );
+        let answer = admission.answer(&selected(&remote(ALLOWED)));
+        assert_eq!(
+            answer.decision,
+            OpenAiAdmissionDecision::Deny,
+            "never an unsealed GO"
+        );
+        assert_eq!(answer.reason.as_deref(), Some(SEAL_FAILED));
+    }
+
+    #[test]
+    fn unreadable_settings_fail_closed_for_every_peer() {
+        let (admission, capsules, _dir) = {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let capsules =
+                Arc::new(CapsuleState::open(dir.path(), "node-under-test").expect("open"));
+            let bad = Policy::parse(None, Some("typo"), None);
+            (Admission::new(bad, capsules.clone()), capsules, dir)
+        };
+        for peer in [ALLOWED, DENIED, STRANGER] {
+            let answer = admission.answer(&selected(&remote(peer)));
+            assert_eq!(answer.decision, OpenAiAdmissionDecision::Deny, "{peer}");
+            assert_eq!(
+                answer.reason.as_deref(),
+                Some("admission NO (unreadable_policy)")
+            );
+            let block = sealed_block(&capsules);
+            assert_eq!(block["source"], "unreadable_policy");
+            assert_eq!(
+                block["reads"][0]["digest"],
+                Value::Null,
+                "no policy was read"
+            );
+        }
+    }
+
+    #[test]
+    fn a_set_but_unreadable_setting_is_an_error_not_unset() {
+        use std::env::VarError;
+        let read = |name: &str| match name {
+            DENY_SETTING => Err(VarError::NotUnicode("\u{fffd}".into())),
+            _ => Err(VarError::NotPresent),
+        };
+        let error = Policy::from_reader(read).expect_err("not silently empty");
+        assert!(error.to_string().contains(DENY_SETTING), "{error}");
+        let unset = Policy::from_reader(|_| Err(VarError::NotPresent)).expect("all unset");
+        assert_eq!(unset.decide(STRANGER), (Verdict::Go, Source::Default));
     }
 
     #[test]

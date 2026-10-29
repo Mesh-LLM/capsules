@@ -317,22 +317,40 @@ your lists, and seal the decision in its book:
 - `CAPSULES_ADMISSION_DENY`: peers to refuse, in the same form. A peer on both lists is refused.
 - `CAPSULES_ADMISSION_DEFAULT`: `go` (the default) or `no`, for a peer on neither list.
 
-The settings are read once at start; restart mesh-llm after changing them. A value that does not
-parse stops the plugin, so a typo never admits a peer you meant to refuse. Nothing is fetched
-while a request waits.
+The settings are read once at start; restart mesh-llm after changing them. Nothing is fetched
+while a request waits. If a setting does not parse, the plugin keeps running and refuses every
+peer (`unreadable_policy` in the log and the records) until you fix it and restart, so a typo
+never admits a peer you meant to refuse.
 
-mesh-llm asks the plugin only when your host config grants it admission, under the plugin's
-`[[plugin]]` entry (`[plugin.openai_exchange_grant]` with `admission = true` and the
-`backend_selected` phase), on a mesh-llm build with the OpenAI exchange lifecycle
-(Mesh-LLM/mesh-llm#2226; no release carries it yet). A NO refuses the request with 403
-`plugin_policy_denied`; trying the next peer instead waits on Mesh-LLM/mesh-llm#2061.
+mesh-llm asks the plugin only on a build with the OpenAI exchange lifecycle
+(Mesh-LLM/mesh-llm#2226; no release carries it yet), and only when your host config grants it,
+under the plugin's `[[plugin]]` entry:
+
+```toml
+[plugin.openai_exchange_grant]
+endpoints = ["chat_completions", "completions", "responses"]
+phases = ["backend_selected"]
+admission = true
+deadline_ms = 250
+max_body_bytes = 1048576
+max_queue_bytes = 4194304
+max_in_flight = 32
+failure_policy = "required"
+```
+
+A NO refuses the request with 403 `plugin_policy_denied`; trying the next peer instead waits on
+Mesh-LLM/mesh-llm#2061. With `failure_policy = "required"`, a hook that errors or misses
+`deadline_ms` also refuses the request (503). With the default, `best_effort`, mesh-llm routes
+the request anyway. Either way, while the plugin is stopped or not loaded, mesh-llm does not ask
+it and routes to every peer, deny list included.
 
 Each decision is an `admission_decision` record: the verdict, which list or the default gave it,
 and the digest of the policy it read. The record never names the peer in clear, since records can
-be shared with others; it names the peer by a commitment only this node's key can open. If the key
-is lost, so is the way to say which peer an old record names. If a decision cannot be sealed, the
-answer is NO and the log says `admission_seal_failed`, so a broken book stops peer traffic
-visibly rather than admitting peers unrecorded.
+be shared with others; it names the peer by a commitment only this node's key can open, so a peer
+cannot check a record about itself unless you open it. If the key is lost, so is the way to say
+which peer an old record names. If a decision cannot be sealed, the answer is NO and the log says
+`admission_seal_failed`, so a broken book stops peer traffic visibly rather than admitting peers
+unrecorded.
 
 ## Where the records are kept
 

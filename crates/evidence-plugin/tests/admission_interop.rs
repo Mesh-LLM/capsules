@@ -276,30 +276,37 @@ async fn a_denied_peer_gets_no_and_an_allowed_peer_gets_go_through_the_wire_prot
 }
 
 #[tokio::test]
-async fn a_setting_that_does_not_parse_stops_the_plugin() {
-    let tag = rand_tag();
-    let socket_path = std::env::temp_dir().join(format!("capsules-admission-bad-{tag}.sock"));
-    let _ = std::fs::remove_file(&socket_path);
-    let _listener = UnixListener::bind(&socket_path).expect("bind fake-host socket");
-    let data_dir = std::env::temp_dir().join(format!("capsules-admission-bad-data-{tag}"));
-    let output = timeout(
-        TEST_TIMEOUT,
-        Command::new(PLUGIN_BIN)
-            .env("MESH_LLM_PLUGIN_ENDPOINT", &socket_path)
-            .env("MESH_LLM_PLUGIN_TRANSPORT", "unix")
-            .env("CAPSULES_DATA_DIR", &data_dir)
-            .env("CAPSULES_ADMISSION_DENY", "not-a-node-id")
-            .output(),
-    )
-    .await
-    .expect("the plugin exits before timeout")
-    .expect("run the plugin");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("CAPSULES_ADMISSION_DENY"),
-        "the error names the setting: {stderr}"
+async fn a_setting_that_does_not_parse_fails_closed_and_the_plugin_keeps_running() {
+    // Stopping would not refuse anyone: a host skips a plugin it has no
+    // manifest for and routes to every peer.
+    let mut host = Host::spawn(&[
+        ("CAPSULES_ADMISSION_ALLOW", ALLOWED),
+        ("CAPSULES_ADMISSION_DENY", "not-a-node-id"),
+    ])
+    .await;
+    let init = host.initialize().await;
+    let handler = init
+        .manifest
+        .as_ref()
+        .and_then(|m| m.openai_exchange_hook.as_deref())
+        .expect("the plugin still declares the hook")
+        .handler
+        .clone();
+    for (attempt, peer) in [ALLOWED, STRANGER].into_iter().enumerate() {
+        let answer = host
+            .select(&handler, &remote(peer), attempt as u64 + 1)
+            .await;
+        assert_eq!(answer["decision"], "deny", "{peer}: {answer}");
+        assert_eq!(answer["reason"], "admission NO (unreadable_policy)");
+    }
+    let data_dir = host.shutdown().await;
+    let sources: Vec<Value> = sealed_decisions(&data_dir)
+        .iter()
+        .map(|b| b["source"].clone())
+        .collect();
+    assert_eq!(
+        sources,
+        [json!("unreadable_policy"), json!("unreadable_policy")]
     );
     let _ = std::fs::remove_dir_all(&data_dir);
-    let _ = std::fs::remove_file(&socket_path);
 }
