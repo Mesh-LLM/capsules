@@ -694,6 +694,17 @@ pub struct JoinArgs {
     /// otherwise, and the binding already held is kept.
     #[serde(default)]
     pub controller_binding: Option<Value>,
+    /// The operator's Nostr public key (BIP-340, 64 lowercase hex) to bind
+    /// this node's key to. `join` signs the node's half and returns, under
+    /// `controller_binding_ceremony.event`, the Nostr event the operator
+    /// signs with their own signer; nothing is stored as bound until then.
+    #[serde(default)]
+    pub controller: Option<String>,
+    /// That event, signed (NIP-01: `pubkey`, `created_at`, `kind`, `tags`,
+    /// `content`, `sig`). Completes the pending binding and stores it, as
+    /// `controller_binding` does.
+    #[serde(default)]
+    pub controller_event: Option<Value>,
 }
 
 /// `doctor`: `{"findings": [...]}`.
@@ -730,17 +741,33 @@ pub async fn handle_join(
 ) -> mesh_llm_plugin::PluginResult<Value> {
     blocking(move || {
         let now = evidence_answer::now_utc();
+        let data_dir = capsules
+            .ledger_dir()
+            .parent()
+            .ok_or("the ledger has no data directory to keep a binding in")?;
+        let at = evidence_request::time::parse_utc(&now)
+            .ok_or_else(|| format!("the time {now} does not parse"))?;
+        let own = commitment::key_id(capsules.signing_key());
         if let Some(record) = &args.controller_binding {
-            let data_dir = capsules
-                .ledger_dir()
-                .parent()
-                .ok_or("the ledger has no data directory to keep a binding in")?;
-            let at = evidence_request::time::parse_utc(&now)
-                .ok_or_else(|| format!("the time {now} does not parse"))?;
-            let own = commitment::key_id(capsules.signing_key());
             crate::controller_binding::store_held(data_dir, record, &own, at)
                 .map_err(|why| format!("the controller binding is refused: {why}"))?;
         }
+        if let Some(event) = &args.controller_event {
+            crate::controller_binding::finish(data_dir, event, &own, at)
+                .map_err(|why| format!("the controller binding is refused: {why}"))?;
+        }
+        let ceremony = match &args.controller {
+            Some(controller) => Some(
+                crate::controller_binding::begin(
+                    data_dir,
+                    capsules.signing_key(),
+                    controller,
+                    &now,
+                )
+                .map_err(|why| format!("the controller binding is refused: {why}"))?,
+            ),
+            None => None,
+        };
         let witnesses = Witnesses::read(capsules.ledger_dir());
         let served = crate::commitment_bridge::own(&capsules, node_id.as_deref());
         let binding = held(&capsules);
@@ -752,6 +779,14 @@ pub async fn handle_join(
                 join_report(responder, policy, &served, &witnesses, binding.as_ref())
             },
         )?;
+        if let Some(event) = ceremony {
+            report["controller_binding_ceremony"] = json!({
+                "event": event,
+                "next": "sign this Nostr event with the operator's own signer (for example a \
+                         NIP-07 extension), then run join with controller_event set to the signed \
+                         event",
+            });
+        }
         // The ledger is `<data dir>/ledger`; the join switch keeps its state
         // in the data directory.
         if let Some(data_dir) = capsules.ledger_dir().parent() {
@@ -825,7 +860,20 @@ pub fn quickstart(plugin_id: &str) -> String {
          curl -s -X POST -H 'content-type: application/json' -d '{{\"probe\": true}}' {doctor}\n\
          ```\n\
          \n\
-         3. **Publish the commitment.** This returns the signed commitment and its policy; then\n\
+         3. **Bind the node to you (optional).** Give `join` your Nostr public key (64 hex,\n\
+         the key behind your npub). It signs the node's half and returns, under\n\
+         `controller_binding_ceremony.event`, a Nostr event for you to sign with your own\n\
+         signer; the node never sees your secret key:\n\
+         \n\
+         ```bash\n\
+         curl -s -X POST -H 'content-type: application/json' -d '{{\"controller\": \"<your key>\"}}' {join}\n\
+         ```\n\
+         \n\
+         Then pass the signed event back as `controller_event`. `doctor` then reports\n\
+         `controller_binding: bound`, and the commitment names the binding by its digest\n\
+         alone, never your key. Show the binding record only to the parties that need it.\n\
+         \n\
+         4. **Publish the commitment.** This returns the signed commitment and its policy; then\n\
          add it to the commitment list by pull request:\n\
          https://github.com/evidence-network/loop/blob/main/nodes/README.md\n\
          \n\
@@ -833,14 +881,14 @@ pub fn quickstart(plugin_id: &str) -> String {
          curl -s -X POST -H 'content-type: application/json' -d '{{}}' {commitment}\n\
          ```\n\
          \n\
-         4. **Join the list.** In the console (Configuration, Plugins, capsules), turn on\n\
+         5. **Join the list.** In the console (Configuration, Plugins, capsules), turn on\n\
          \"{switch}\". The statement under the switch is what you agree to. The node then\n\
          signs one join with its plugin key, with no handle and no operator name, and sends\n\
          it to the network's reporter node; `join` shows under `network` whether the reporter\n\
          has it. While no reporter is named yet (`network.reporter` is null), nothing is sent.\n\
          To leave, turn the switch off.\n\
          \n\
-         `join` and `doctor` seal nothing and contact nobody.\n",
+         `join` and `doctor` seal nothing and contact nobody; `join` writes only a binding.\n",
         switch = crate::share_policy::JOIN_NETWORK_LABEL,
         join = tool(JOIN_OPERATION),
         doctor = tool(DOCTOR_OPERATION),

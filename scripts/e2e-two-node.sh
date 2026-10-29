@@ -297,15 +297,24 @@ wait_for 30 "the requester sealed its adjudication_received record" sealed
 wait_for 120 "join on the requester says it has joined" joined
 
 # --- the provider binds its node key to its operator's Nostr key -----------
-# A test Nostr key (crates/evidence-plugin/src/controller_binding_e2e_setup.rs).
-# join stores the binding, and refuses one of another node's key; the
+# join's ceremony, with a test Nostr key standing in for the operator's signer
+# (crates/evidence-plugin/src/controller_binding_e2e_setup.rs): join with the
+# operator's key returns the event to sign, and join with the signed event
+# stores the binding. join refuses a binding of another node's key; the
 # requester then finds the binding in the provider's commitment by its
 # digest alone.
-(cd "$repo/crates/evidence-plugin" &&
-  E2E_PROVIDER_DIR=$(plugin_data provider) E2E_BINDINGS=$out \
-    cargo test --locked --bin capsules -- --ignored --exact controller_binding_e2e_setup::write_bindings \
-    > "$logs/setup-bindings.log" 2>&1) || { cat "$logs/setup-bindings.log" >&2; exit 1; }
-tool "$PROVIDER_CONSOLE" join "$(jq -cn --slurpfile b "$out/binding.json" '{controller_binding: $b[0]}')" \
+binding_setup() {
+  (cd "$repo/crates/evidence-plugin" &&
+    E2E_BINDINGS=$out cargo test --locked --bin capsules -- --ignored --exact \
+      "controller_binding_e2e_setup::$1" > "$logs/setup-$1.log" 2>&1) \
+    || { cat "$logs/setup-$1.log" >&2; return 1; }
+}
+binding_setup write_controller
+tool "$PROVIDER_CONSOLE" join "$(jq -cn --arg c "$(cat "$out/controller.txt")" '{controller: $c}')" \
+  > "$out/binding-begin.json"
+jq -e '.controller_binding_ceremony.event' "$out/binding-begin.json" > "$out/ceremony-event.json"
+binding_setup sign_event
+tool "$PROVIDER_CONSOLE" join "$(jq -cn --slurpfile e "$out/signed-event.json" '{controller_event: $e[0]}')" \
   > "$out/binding-join.json"
 code=$(curl -sS -o "$out/binding-refused.json" -w '%{http_code}' -X POST -H 'content-type: application/json' \
   -d "$(jq -cn --slurpfile b "$out/binding-other.json" '{controller_binding: $b[0]}')" \

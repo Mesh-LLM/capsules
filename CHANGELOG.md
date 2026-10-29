@@ -8,7 +8,10 @@
   `controller_binding`: a Controller Binding record (AAC `spec/controller-binding-v0.md`) that binds
   this node's key to its operator's, which may be the operator's Nostr key (`bip340`, signed with a
   Nostr event). `join` stores it only when it binds this node's key and applies, and refuses it
-  otherwise. `doctor` reports `controller_binding: bound` with the binding digest, or `unbound` with
+  otherwise. `join` also runs the ceremony itself: given the operator's Nostr key (`controller`),
+  it signs the node's half and returns the Nostr event the operator signs with their own signer;
+  given that event back (`controller_event`), it stores the binding, in effect for a year. The
+  join quickstart in `INSTALL.md` gains this step. `doctor` reports `controller_binding: bound` with the binding digest, or `unbound` with
   the reason. The commitment names the binding by its digest alone (`controller_binding.digest`),
   never the operator's key, and the binding stays optional (Steven's ruling). Verification of the
   `bip340` key type uses `k256`. Mesh-LLM/capsules-plugin#54, #97.

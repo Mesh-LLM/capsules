@@ -725,25 +725,35 @@ fn the_switch_joins_over_the_mesh_and_off_leaves() {
 }
 
 /// The controller binding step (`crate::controller_binding_e2e_setup`): the
-/// provider's `join` stored the binding of its key to its operator's Nostr
-/// key and reported it `bound`, refused a binding of another node's key, and
+/// provider's `join`, through its ceremony, signed its own half, took the
+/// event the operator's Nostr key signed, stored the binding and reported it
+/// `bound`, refused a binding of another node's key, and
 /// the commitment the requester fetched over the mesh names the binding by
 /// its digest alone, never the Nostr key.
 #[test]
 #[ignore = "needs the data directories of a real two-node run (scripts/e2e-two-node.sh)"]
 fn the_providers_binding_is_held_bound_and_named_by_its_digest() {
     let run = Run::from_env();
-    let binding = join_output("binding.json");
+    let binding = crate::controller_binding::read_held(&run.provider.data_dir)
+        .expect("the provider holds a binding");
     let digest = crate::controller_binding::evaluate(&binding, &[])
         .digest
         .expect("the binding has a digest");
     let nostr = crate::controller_binding_e2e_setup::nostr_key();
     let nostr = hex::encode(nostr.verifying_key().to_bytes());
 
+    let begun = join_output("binding-begin.json");
     assert_eq!(
-        crate::controller_binding::read_held(&run.provider.data_dir),
-        Some(binding.clone()),
-        "the provider holds the binding it was given"
+        begun["controller_binding_ceremony"]["event"]["content"],
+        json!(format!("controller-binding/0:{digest}")),
+        "the operator signed the record the provider holds"
+    );
+    assert!(
+        !run.provider
+            .data_dir
+            .join(crate::controller_binding::PENDING_FILE)
+            .exists(),
+        "the ceremony finished"
     );
     let joined = join_output("binding-join.json");
     let finding = joined["findings"]

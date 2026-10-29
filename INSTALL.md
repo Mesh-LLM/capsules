@@ -290,7 +290,20 @@ answers under the policy the commitment signs:
 curl -s -X POST -H 'content-type: application/json' -d '{"probe": true}' $CONSOLE/api/plugins/capsules/tools/doctor
 ```
 
-3. **Publish the commitment.** This returns the signed commitment and its policy; then
+3. **Bind the node to you (optional).** Give `join` your Nostr public key (64 hex,
+the key behind your npub). It signs the node's half and returns, under
+`controller_binding_ceremony.event`, a Nostr event for you to sign with your own
+signer; the node never sees your secret key:
+
+```bash
+curl -s -X POST -H 'content-type: application/json' -d '{"controller": "<your key>"}' $CONSOLE/api/plugins/capsules/tools/join
+```
+
+Then pass the signed event back as `controller_event`. `doctor` then reports
+`controller_binding: bound`, and the commitment names the binding by its digest
+alone, never your key. Show the binding record only to the parties that need it.
+
+4. **Publish the commitment.** This returns the signed commitment and its policy; then
 add it to the commitment list by pull request:
 https://github.com/evidence-network/loop/blob/main/nodes/README.md
 
@@ -298,14 +311,14 @@ https://github.com/evidence-network/loop/blob/main/nodes/README.md
 curl -s -X POST -H 'content-type: application/json' -d '{}' $CONSOLE/api/plugins/capsules/tools/commitment
 ```
 
-4. **Join the list.** In the console (Configuration, Plugins, capsules), turn on
+5. **Join the list.** In the console (Configuration, Plugins, capsules), turn on
 "Join the evidence network". The statement under the switch is what you agree to. The node then
 signs one join with its plugin key, with no handle and no operator name, and sends
 it to the network's reporter node; `join` shows under `network` whether the reporter
 has it. While no reporter is named yet (`network.reporter` is null), nothing is sent.
 To leave, turn the switch off.
 
-`join` and `doctor` seal nothing and contact nobody.
+`join` and `doctor` seal nothing and contact nobody; `join` writes only a binding.
 <!-- /join-quickstart -->
 
 ## Admit or refuse peers
