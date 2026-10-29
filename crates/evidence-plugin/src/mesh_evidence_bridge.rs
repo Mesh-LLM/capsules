@@ -394,12 +394,12 @@ pub(crate) struct Answered {
 /// Signed as this node (`requester_auth::sign_outgoing`) once its key is
 /// announced: under the referee's tag when it is an `adjudicate` request,
 /// which the referee's door on the far end checks it against, and the
-/// Evidence Request's otherwise. Sent as its JCS bytes.
+/// Evidence Request's otherwise.
 ///
 /// With `asks`, an evidence request (never an `adjudicate` one, which
 /// `requested-adjudications` records) is first sealed in this node's book
-/// of asks (`crate::ask_book`), exactly as sent; if that fails nothing is
-/// sent. The stream then stays open until the request's waiting window
+/// of asks (`crate::ask_book`), exactly as sent (its JCS bytes); if that
+/// fails nothing is sent. The stream then stays open until the request's waiting window
 /// closes, past the transport's wait: a reply inside the window is sealed
 /// as the response, and none by its close as a recorded absence. The caller
 /// still hears within the transport's wait.
@@ -424,9 +424,6 @@ pub(crate) async fn send_evidence_request(
         crate::requester_auth::Channel::EvidenceRequest
     };
     crate::requester_auth::sign_outgoing(channel, &mut request, &peer_id);
-    let request_bytes = evidence_request::jcs::to_string(&request)
-        .map_err(|error| SendError::Malformed(error.to_string()))?
-        .into_bytes();
     let wait = Duration::from_millis(requester_idle_timeout_ms());
     let asked = match asks {
         Some(capsules) if channel == crate::requester_auth::Channel::EvidenceRequest => {
@@ -440,6 +437,18 @@ pub(crate) async fn send_evidence_request(
             Some((capsules.clone(), asked))
         }
         _ => None,
+    };
+    // A recorded ask goes as its JCS bytes, so the record's digest is the
+    // wire digest (`check_request` has already written it so). Anything
+    // else goes as before: an `adjudicate` request carries non-integer
+    // numbers, which have no JCS form in `evidence_request::jcs`.
+    let request_bytes = match &asked {
+        Some(_) => evidence_request::jcs::to_string(&request)
+            .map_err(|error| SendError::Malformed(error.to_string()))?
+            .into_bytes(),
+        None => {
+            serde_json::to_vec(&request).map_err(|error| SendError::Malformed(error.to_string()))?
+        }
     };
     // A recorded ask's window closes at one fixed instant, which bounds
     // opening the stream and reading from it alike; anything else is bounded
