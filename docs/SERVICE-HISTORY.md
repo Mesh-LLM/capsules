@@ -7,7 +7,7 @@ the digest covers. This page explains it and changes nothing it says: a change o
 
 It is a Standard History under agent-action-capsule's inference-service history profile
 (`spec/inference-service-history-profile-v0.md`, action-state-group/agent-action-capsule#315 at
-cfb2462, cited here as ISH). Section numbers below are that document's.
+f8c946ed, merged 2026-10-29, cited here as ISH). Section numbers below are that document's.
 
 ## Identifier
 
@@ -80,7 +80,10 @@ card's checkpoints ride beside the envelope in `witness_receipts`, as for a dire
 
 `period_counts` is `{"policy": <policy digest>, "periods": [...]}`, in the form of ISH §9's vectors.
 There is one period per closed week, in order, from the week the stream's first checkpoint commits
-into to the week that ends at the anchor. Weeks with nothing served are listed too.
+into (the week that holds the stream's first record) to the week that ends at the anchor. Every
+closed week is listed and none is left out; weeks with nothing served are listed too, their cells
+suppressed below the floor like any other (ISH §6.1 item 3). A later answer never drops a week
+(item 4).
 
 - **Which week a record is in:** the week the first checkpoint that covers it commits into. A
   checkpoint commits into the week that holds its time, with one exception. The first checkpoint
@@ -96,6 +99,16 @@ into to the week that ends at the anchor. Weeks with nothing served are listed t
   suppressed too, with `complementary`, so the suppressed one cannot be worked out from the total.
 - **What is never counted:** latency (Steven, 2026-10-22), requested exchanges, quantization,
   weights digests, referee verdicts and anything about who asked.
+
+## Never beside `standard_history/1`
+
+A node that serves Service History serves no `standard_history/1` card under its key (ISH §6.1
+item 8): that card counts over a window ending at any anchor, with no floor, so two of its cards at
+consecutive checkpoints could be subtracted to isolate one exchange these weeks protect. This node
+refuses a request naming `standard_history/1` `derivation_unsupported` (`policy_declined` to a
+requester it does not answer Standard History), and its commitment does not list it. The bound
+covers only Service History's answers: `served_summary/1` is a separate answer, and whether it stays is
+tracked in Mesh-LLM/capsules-plugin#106.
 
 ## Checking a Service History
 

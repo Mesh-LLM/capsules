@@ -552,6 +552,14 @@ fn answer_from(
             Reason::PolicyDeclined
         });
     }
+    // This node serves Service History, so it serves no `standard_history/1`
+    // card under its key, whatever a later evidencebook registers (ISH §6.1
+    // item 8).
+    if matches!(&req.derivation,
+        Some(Derivation::Token(t)) if t == crate::service_history::STANDARD_HISTORY_TOKEN)
+    {
+        return Err(Reason::DerivationUnsupported);
+    }
     if crate::exchange_corroboration::is_derivation(req.derivation.as_ref()) {
         return corroboration_answer(req, request_bytes, principal, responder, view);
     }
@@ -1694,6 +1702,35 @@ pub(crate) mod tests {
                 verified["state"],
                 json!("artifact"),
                 "{request}: {verified}"
+            );
+        }
+    }
+
+    /// A node that serves Service History serves no `standard_history/1`
+    /// card under its key, to a counterparty or anyone, whatever the
+    /// sharing setting (ISH §6.1 item 8), and does not list it.
+    #[test]
+    fn standard_history_1_is_never_served_beside_service_history() {
+        assert!(!crate::commitment::DERIVATIONS.contains(&"standard_history/1"));
+        let dir = node(&corpus_ledger());
+        let pin = standard_history_requests()[0]["coverage"].clone();
+        let request = json!({
+            "subject": {"full_history": null},
+            "coverage": pin,
+            "derivation": crate::service_history::STANDARD_HISTORY_TOKEN,
+        });
+        for share in [true, false] {
+            let bytes = signed_by("node-a", &request);
+            let outcome = ask_with(
+                dir.path(),
+                &bytes,
+                crate::share_policy::history_segments_for(None),
+                share,
+            );
+            assert_eq!(
+                outcome.wire_bytes(),
+                Some(refusal_of(&bytes, Reason::DerivationUnsupported)),
+                "share_standard_history={share}: {outcome:?}"
             );
         }
     }

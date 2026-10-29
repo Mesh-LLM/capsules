@@ -543,6 +543,12 @@ fn a_tampered_history_does_not_check() {
                 periods(a).remove(0);
             }),
         ),
+        (
+            "the last closed period dropped",
+            Box::new(|a| {
+                periods(a).pop();
+            }),
+        ),
         ("no period listed", Box::new(|a| periods(a).clear())),
         (
             "a period twice",

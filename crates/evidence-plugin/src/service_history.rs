@@ -1,7 +1,7 @@
 //! The Service History (`service_history/1`, PRD-SERVICE-EVIDENCE §2, M2): a
 //! Standard History under agent-action-capsule's inference-service history
 //! profile (`spec/inference-service-history-profile-v0.md`, cited as ISH, at
-//! cfb2462): the `history_card/1` artifact embedded unchanged, and this
+//! f8c946ed): the `history_card/1` artifact embedded unchanged, and this
 //! node's served exchanges counted per closed week.
 //!
 //! **The derivation.** Unregistered, and named on the wire by the digest of
@@ -12,6 +12,13 @@
 //! Monday 2026-01-05 00:00 UTC, a floor of 5 per cell, complementary
 //! suppression. The token `service_history/1` is the document's `name`,
 //! never a request's `derivation`.
+//!
+//! **Never beside `standard_history/1`.** A node that serves this profile's
+//! Standard Histories serves no `standard_history/1` card under its key
+//! (ISH §6.1 item 8): two such cards at consecutive checkpoints could be
+//! subtracted to isolate one exchange the periods protect. The responder
+//! refuses [`STANDARD_HISTORY_TOKEN`] `derivation_unsupported`, and this
+//! node's commitment does not list it.
 //!
 //! **Answered** only for `full_history` under an `expected_pin` naming an
 //! anchor whose checkpoint time is a period boundary (ISH §6.1 items 2 and
@@ -37,8 +44,9 @@
 //!   octets, and `history_card_digest` is their SHA-256.
 //! - `period_counts` is `{policy, periods}` in the form of ISH §9's vectors:
 //!   `policy` the digest of the definition's `period_policy`, and one entry
-//!   per closed period from the one the stream's first checkpoint commits
-//!   into to the one ending at the anchor, each `{from, to, cells}`. The cells
+//!   per closed period, with none left out, from the one the stream's first
+//!   checkpoint commits into (the one that holds its first record) to the
+//!   one ending at the anchor, each `{from, to, cells}`. The cells
 //!   count `exchanges_served`, one per model the provider states and one
 //!   total (`dimension` null), all `self_reported`. A cell under the floor
 //!   is published with no value and `suppressed: "below_floor"`, and
@@ -73,6 +81,11 @@ use sha2::{Digest, Sha256};
 /// digest is used at run time; a test pins one to the other.
 #[cfg(test)]
 pub const DEFINITION_DOCUMENT: &str = include_str!("../../../derivations/service-history-1.json");
+
+/// The token of the Standard History card this node never serves beside a
+/// Service History (ISH §6.1 item 8): that card counts over a window ending
+/// at any anchor, with no floor.
+pub const STANDARD_HISTORY_TOKEN: &str = "standard_history/1";
 
 /// SHA-256 over the RFC 8785 bytes of [`DEFINITION_DOCUMENT`]: the
 /// derivation's name on the wire, and the artifact's `derivation`.

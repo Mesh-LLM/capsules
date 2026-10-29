@@ -16,7 +16,7 @@
   at each boundary. It is Standard History
   (`share_standard_history`), and this node checks a Service History it is sent, the card as a
   direct one and every period rule one History shows. The definition follows
-  action-state-group/agent-action-capsule#315 at cfb2462 and the period policy Steven ruled under
+  action-state-group/agent-action-capsule#315 at f8c946ed and the period policy Steven ruled under
   action-state-group/evidencebook#46; `served_summary/1` is unchanged. Ported from
   Mesh-LLM/mesh-llm#2506 (Steven's M2). Mesh-LLM/capsules-plugin#39.
 - **`settlement_check` and the Lightning adapter declaration (loop step 6).** The new read-only tool
