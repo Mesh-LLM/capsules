@@ -45,6 +45,18 @@
   action-state-group/agent-action-capsule#315 at f8c946ed and the period policy Steven ruled under
   action-state-group/evidencebook#46; `served_summary/1` is unchanged. Ported from
   Mesh-LLM/mesh-llm#2506 (Steven's M2). Mesh-LLM/capsules-plugin#39.
+- **Service evidence agreements (M4, first part).** With `CAPSULES_AGREEMENT_SPEND_CAP_MSAT` set,
+  a requester proposes a session-scoped agreement to a provider on its first exchange with it for
+  a model, beside the exchange and never holding it up, on the new private mesh channel
+  `x-capsules-agreement/1`. The agreement is the interop
+  profile's acceptance record (§11.1). The provider checks the session's Evidence Contract
+  (`x-capsules/paid-session@1`), model policy and terms against their digests and accepts. The
+  requester signs the §11.1.4 receipt and sends it back. Both sides keep the records, the
+  receipt and the documents byte-exact under `agreements/` in the ledger directory. The spend
+  cap is an agent-origin assertion, never a spend authorization. With no cap set, nothing
+  changes. Citing the agreement in halves and legs, and the coverage labels, follow.
+  `evidence-request` is taken at agent-action-capsule's merge of #454 (feature `acceptance`)
+  until a release carries it. See `docs/AGREEMENTS.md`. action-state-group/evidencebook#48.
 - **`settlement_check` and the Lightning adapter declaration (loop step 6).** The new read-only tool
   checks the Lightning settlement records this node holds for a paid exchange, under
   `adapters/lightning-v0.md`. Each check (object held, invoice join, amount, finality, preimage,

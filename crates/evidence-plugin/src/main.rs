@@ -1,5 +1,7 @@
 mod adjudication_records;
 mod admission;
+mod agreement;
+mod agreement_bridge;
 mod ask_book;
 // Library-shaped: the split-stage verifier, the frame fold and a few record
 // kinds are exercised by their own tests and the split-stage fixtures, not
@@ -471,6 +473,24 @@ async fn settlement_legs_on_exchange(
     .await;
     if let Ok((capsules, pushes)) = pushes {
         push_settlement_legs(context, &capsules, pushes, self_peer).await;
+        // A session with this provider for the model it states, when the
+        // operator set session terms and none holds now: this exchange is
+        // outside it, later ones cite it (R11). It runs in its own task, so
+        // the host's ordered channel handling never waits on the provider.
+        if envelope.phase == lifecycle_channel::Phase::Terminal {
+            let model = envelope
+                .serving_provenance
+                .as_ref()
+                .and_then(|p| p.model_canonical_ref.clone());
+            if let (Some(peer), Some(model)) = (push_counterparty(&envelope), model) {
+                agreement_bridge::ensure_session(
+                    context.owned(),
+                    capsules.clone(),
+                    peer.to_string(),
+                    model,
+                );
+            }
+        }
     }
 }
 
@@ -1270,6 +1290,8 @@ fn plugin_builder(admission: Option<&str>) -> DeclarativePluginBuilder {
     .mesh_item(mesh_channel(commitment_bridge::COMMITMENT_CHANNEL))
     .mesh_item(mesh_channel(network_join::JOIN_CHANNEL))
     .mesh_item(mesh_channel(settlement_channel::PAYMENT_LIFECYCLE_CHANNEL))
+    // Service evidence agreements with a provider (`agreement_bridge`).
+    .mesh_item(mesh_channel(agreement::CHANNEL))
     // The host's routing choices (blocks and unblocks), so a blocked peer is
     // never chosen as a referee or asked to be blocked again.
     .mesh_item(mesh_channel(peer_blocks_seen::ROUTING_CHOICE_CHANNEL))
@@ -1608,6 +1630,9 @@ async fn main() -> anyhow::Result<()> {
                 // distinct, stable value for exactly this purpose.
                 let answered = if request.content_type.as_deref() == Some(record_push_bridge::RECORD_PUSH_CONTENT_TYPE) {
                     record_push_bridge::handle_open_stream(request, context, capsules.clone(), collector).await
+                } else if agreement_bridge::is_agreement_request(&request) {
+                    // Tagged in `metadata_json`, as commitment/1 is.
+                    agreement_bridge::handle_open_stream(request, capsules.clone()).await
                 } else if commitment_bridge::is_commitment_request(&request) {
                     // Tagged in `metadata_json`, as ledger-fetch is.
                     commitment_bridge::handle_open_stream(request, capsules.clone(), self_peer.clone()).await
