@@ -241,6 +241,20 @@ history_card() {
 }
 wait_for 60 "the provider served its history card, verified under its key" history_card
 
+# --- the ask, recorded: one that nobody answers ends in a sealed absence ----
+# Each ask above was sealed as evidence_request before it was sent. Now the
+# requester asks a node that is not on the mesh. With its deadline already
+# passed, the window closes 60 s after the ask is recorded (the minimum), and
+# the requester then seals recorded_absence citing it. The tool call itself
+# fails: nothing can be reached. The window does not wait for it.
+unanswered_peer=$(printf '%064d' 7)
+curl -sS --max-time 90 -X POST -H 'content-type: application/json' \
+  "http://127.0.0.1:$REQUESTER_CONSOLE/api/plugins/capsules/tools/mesh_evidence_request" \
+  -d "$(jq -cn --arg p "$unanswered_peer" \
+  --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{peer_id: $p,
+    request: {subject: {full_history: null}, coverage: {min_freshness: 1}, derivation: "history_card/1", deadline: $d}}')" \
+  > "$out/unanswered.json" 2>&1 || true
+
 # --- the referee: a twin pair put to the provider, its verdict on both chains
 # The requester holds two twins' halves of the first exchange and puts the pair
 # to the provider over the mesh; the provider's answer to that exchange is the
@@ -261,6 +275,9 @@ jq -e '.status == "received"' "$out/delivered.json" > /dev/null \
 sealed() { grep -q '"adjudication_received"' "$(plugin_data requester)/ledger/capsules.jsonl"; }
 wait_for 30 "the requester sealed its adjudication_received record" sealed
 
+absent() { grep -q '"recorded_absence"' "$(plugin_data requester)/ledger/capsules.jsonl"; }
+wait_for 180 "the requester sealed the absence of its unanswered ask" absent
+
 # --- join again after the first exchange: now it is complete ----------------
 wait_for 120 "join on the requester says it has joined" joined
 
@@ -278,5 +295,5 @@ cp -a "$(plugin_data requester)" "$out/data/requester"
 cp -a "$(plugin_data provider)" "$out/data/provider"
 cd "$repo/crates/evidence-plugin"
 E2E_REQUESTER_DIR=$out/data/requester E2E_PROVIDER_DIR=$out/data/provider E2E_EXCHANGES=$EXCHANGES \
-  E2E_JOIN_DIR=$out \
+  E2E_JOIN_DIR=$out E2E_UNANSWERED_PEER=$unanswered_peer \
   cargo test --locked --bin capsules -- --ignored --test-threads=1 two_node_e2e::

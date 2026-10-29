@@ -80,7 +80,7 @@ fn responder_http_timeout() -> Duration {
 /// -- covers exactly the "peer never declared the channel, host drops the
 /// stream with no reply" case the acceptance check requires read as a clean
 /// failure, never a hang.
-fn requester_idle_timeout_ms() -> u64 {
+pub(crate) fn requester_idle_timeout_ms() -> u64 {
     env_millis("CAPSULES_MESH_REQUEST_TIMEOUT_MS", 8_000).as_millis() as u64
 }
 
@@ -367,6 +367,8 @@ async fn answer_in_process(
 /// Why an evidence request got no answer.
 #[derive(Debug)]
 pub(crate) enum SendError {
+    /// The request could not be recorded, so it was not sent.
+    NotRecorded(String),
     /// The stream to the peer's plugin could not be opened (unreachable, or
     /// it runs no plugin that takes the channel).
     NotOpened(String),
@@ -377,17 +379,36 @@ pub(crate) enum SendError {
     Malformed(String),
 }
 
-/// Send `request` to `peer_id` over the evidence stream and read the answer:
-/// `(the request bytes sent, the peer's JSON)`. Signed as this node
-/// (`requester_auth::sign_outgoing`) once its key is announced: under the
-/// referee's tag when it is an `adjudicate` request, which the referee's
-/// door on the far end checks it against, and the Evidence Request's
-/// otherwise.
+/// What came back for a request: the bytes sent, the peer's JSON, and, for
+/// a request recorded in this node's book of asks, its check under the
+/// peer's announced key ([`verify_announced`]), the one the response record
+/// holds.
+#[derive(Debug)]
+pub(crate) struct Answered {
+    pub sent: Vec<u8>,
+    pub answer: serde_json::Value,
+    pub verification: Option<serde_json::Value>,
+}
+
+/// Send `request` to `peer_id` over the evidence stream and read the answer.
+/// Signed as this node (`requester_auth::sign_outgoing`) once its key is
+/// announced: under the referee's tag when it is an `adjudicate` request,
+/// which the referee's door on the far end checks it against, and the
+/// Evidence Request's otherwise. Sent as its JCS bytes.
+///
+/// With `asks`, an evidence request (never an `adjudicate` one, which
+/// `requested-adjudications` records) is first sealed in this node's book
+/// of asks (`crate::ask_book`), exactly as sent; if that fails nothing is
+/// sent. The stream then stays open until the request's waiting window
+/// closes, past the transport's wait: a reply inside the window is sealed
+/// as the response, and none by its close as a recorded absence. The caller
+/// still hears within the transport's wait.
 pub(crate) async fn send_evidence_request(
     context: &mut PluginContext<'_>,
     peer_id: &str,
     request: &serde_json::Value,
-) -> Result<(Vec<u8>, serde_json::Value), SendError> {
+    asks: Option<&std::sync::Arc<crate::capsule_emit::CapsuleState>>,
+) -> Result<Answered, SendError> {
     // The host reads a hex id in either case; a node's own id is lowercase.
     // One form, for the stream and for the audience it is signed for.
     let peer_id = peer_id.trim();
@@ -396,6 +417,36 @@ pub(crate) async fn send_evidence_request(
     } else {
         peer_id.to_string()
     };
+    let mut request = request.clone();
+    let channel = if crate::referee::service::is_adjudicate_request(&request) {
+        crate::requester_auth::Channel::RefereeAdjudicate
+    } else {
+        crate::requester_auth::Channel::EvidenceRequest
+    };
+    crate::requester_auth::sign_outgoing(channel, &mut request, &peer_id);
+    let request_bytes = evidence_request::jcs::to_string(&request)
+        .map_err(|error| SendError::Malformed(error.to_string()))?
+        .into_bytes();
+    let wait = Duration::from_millis(requester_idle_timeout_ms());
+    let asked = match asks {
+        Some(capsules) if channel == crate::requester_auth::Channel::EvidenceRequest => {
+            let asked = crate::ask_book::record_request(
+                capsules,
+                &request,
+                &peer_id,
+                &crate::evidence_answer::now_utc(),
+                wait,
+            )
+            .map_err(|error| SendError::NotRecorded(error.to_string()))?;
+            Some((capsules.clone(), asked))
+        }
+        _ => None,
+    };
+    // How long the stream may stay open: to the window's close for a
+    // recorded ask, the transport's wait otherwise.
+    let listen = asked
+        .as_ref()
+        .map_or(wait, |(_, asked)| until(&asked.window_closes).max(wait));
     let open_request = OpenMeshStreamRequest {
         stream_id: next_stream_id("evidence-request"),
         target_peer_id: peer_id.clone(),
@@ -408,38 +459,122 @@ pub(crate) async fn send_evidence_request(
         correlation_id: Some(next_stream_id("evidence-correlation")),
         metadata_json: None,
         expected_bytes: None,
-        idle_timeout_ms: Some(requester_idle_timeout_ms()),
+        idle_timeout_ms: Some(u64::try_from(listen.as_millis()).unwrap_or(u64::MAX)),
     };
-    let stream: LocalStream = context
-        .connect_mesh_stream(open_request)
-        .await
-        .map_err(|error| SendError::NotOpened(error.to_string()))?;
+    let stream: LocalStream = match context.connect_mesh_stream(open_request).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            if let Some((capsules, asked)) = asked {
+                tokio::spawn(absence_when_window_closes(capsules, asked));
+            }
+            return Err(SendError::NotOpened(error.to_string()));
+        }
+    };
     let (mut read_half, mut write_half) = stream.into_split();
-    let mut request = request.clone();
-    let channel = if crate::referee::service::is_adjudicate_request(&request) {
-        crate::requester_auth::Channel::RefereeAdjudicate
-    } else {
-        crate::requester_auth::Channel::EvidenceRequest
-    };
-    crate::requester_auth::sign_outgoing(channel, &mut request, &peer_id);
-    let request_bytes =
-        serde_json::to_vec(&request).map_err(|error| SendError::Malformed(error.to_string()))?;
-    let write_and_read = async {
-        write_half.write_all(&request_bytes).await?;
+    let sent = request_bytes.clone();
+    let write_and_read = async move {
+        write_half.write_all(&sent).await?;
         write_half.shutdown().await?;
         // Bounded: the peer's answer is peer-controlled bytes too.
         read_to_end_bounded(&mut read_half, "peer evidence-request response").await
     };
-    let response_bytes = tokio::time::timeout(
-        Duration::from_millis(requester_idle_timeout_ms()),
-        write_and_read,
-    )
-    .await
-    .map_err(|_| SendError::NoAnswer(String::new()))?
-    .map_err(|error| SendError::NoAnswer(format!(": {error}")))?;
-    let answer = serde_json::from_slice(&response_bytes)
-        .map_err(|error| SendError::Malformed(error.to_string()))?;
-    Ok((request_bytes, answer))
+    let read = |result: Result<std::io::Result<Vec<u8>>, tokio::time::error::Elapsed>| {
+        let bytes = result
+            .map_err(|_| SendError::NoAnswer(String::new()))?
+            .map_err(|error| SendError::NoAnswer(format!(": {error}")))?;
+        serde_json::from_slice::<serde_json::Value>(&bytes)
+            .map_err(|error| SendError::Malformed(error.to_string()))
+    };
+    let Some((capsules, asked)) = asked else {
+        let answer = read(tokio::time::timeout(wait, write_and_read).await)?;
+        return Ok(Answered {
+            sent: request_bytes,
+            answer,
+            verification: None,
+        });
+    };
+    // The window outlives the caller's wait: the rest runs on its own, so a
+    // reply after the caller has been told "no answer yet" is still sealed.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let sent = request_bytes.clone();
+    let pending = asked.record_id.clone();
+    let closes = asked.window_closes.clone();
+    tokio::spawn(async move {
+        match read(tokio::time::timeout(listen, write_and_read).await) {
+            Ok(answer) => {
+                let verification = verify_announced(&sent, &answer, &peer_id);
+                if let Err(error) = crate::ask_book::record_response(
+                    &capsules,
+                    &asked.record_id,
+                    &evidence_request::digest::request_digest(&sent),
+                    &answer,
+                    &verification,
+                    &crate::evidence_answer::now_utc(),
+                ) {
+                    tracing::warn!(%error, request_record = %asked.record_id, "a reply could not be recorded");
+                }
+                let _ = tx.send(Ok((answer, verification)));
+            }
+            Err(error) => {
+                let _ = tx.send(Err(error));
+                absence_when_window_closes(capsules, asked).await;
+            }
+        }
+    });
+    match tokio::time::timeout(wait, rx).await {
+        Ok(Ok(Ok((answer, verification)))) => Ok(Answered {
+            sent: request_bytes,
+            answer,
+            verification: Some(verification),
+        }),
+        Ok(Ok(Err(error))) => Err(error),
+        _ => Err(SendError::NoAnswer(format!(
+            " yet: the ask is recorded as {pending} and is pending until {closes}"
+        ))),
+    }
+}
+
+/// How long from now until `at` (RFC 3339), zero once it has passed.
+fn until(at: &str) -> Duration {
+    chrono::DateTime::parse_from_rfc3339(at)
+        .ok()
+        .and_then(|at| (at.to_utc() - chrono::Utc::now()).to_std().ok())
+        .unwrap_or_default()
+}
+
+/// Wait for the ask's window to close, then seal its recorded absence.
+async fn absence_when_window_closes(
+    capsules: std::sync::Arc<crate::capsule_emit::CapsuleState>,
+    asked: crate::ask_book::Asked,
+) {
+    // A second past the close, so the book's whole-second clock reads it as
+    // passed.
+    tokio::time::sleep(until(&asked.window_closes) + Duration::from_secs(1)).await;
+    if let Err(error) = crate::ask_book::record_absence(
+        &capsules,
+        &asked.record_id,
+        &asked.window_closes,
+        &crate::evidence_answer::now_utc(),
+    ) {
+        tracing::warn!(%error, request_record = %asked.record_id, "an absence could not be recorded");
+    }
+}
+
+/// `answer` checked as the reply to `sent` under `peer_id`'s announced key
+/// (`evidence_answer::verify_response`), or `no_announced_key`.
+fn verify_announced(sent: &[u8], answer: &serde_json::Value, peer_id: &str) -> serde_json::Value {
+    let registry = crate::peer_keys::registry();
+    match crate::peer_keys::announced_key_in(registry.as_deref(), peer_id)
+        .and_then(|key_id| verifying_key(&key_id))
+    {
+        Some(key) => crate::evidence_answer::verify_response(
+            sent,
+            answer,
+            &key,
+            &crate::checkpoint_cadence::active_witness_keys(),
+        ),
+        None => serde_json::json!({"state": "no_announced_key"}),
+    }
 }
 
 /// The referee's answer to an `adjudicate` request, as wire bytes; `None`
@@ -602,9 +737,14 @@ pub async fn handle_mesh_evidence_request(
         add_requester_id(&mut args.request, self_id.as_deref());
     }
 
-    let (request_bytes, answer) =
-        match send_evidence_request(context, &args.peer_id, &args.request).await {
-            Ok(sent) => sent,
+    let answered =
+        match send_evidence_request(context, &args.peer_id, &args.request, Some(&capsules)).await {
+            Ok(answered) => answered,
+            Err(SendError::NotRecorded(error)) => {
+                return Err(PluginError::internal(format!(
+                    "could not record the request, so it was not sent: {error}"
+                )))
+            }
             Err(SendError::NotOpened(error)) => {
                 return Err(PluginError::internal(format!(
                     "could not reach peer: {error}"
@@ -621,21 +761,16 @@ pub async fn handle_mesh_evidence_request(
                 )))
             }
         };
+    let Answered {
+        sent: request_bytes,
+        answer,
+        verification,
+    } = answered;
     if !args.verify {
         return Ok(answer);
     }
-    let registry = crate::peer_keys::registry();
-    let verification = match crate::peer_keys::announced_key_in(registry.as_deref(), &args.peer_id)
-        .and_then(|key_id| verifying_key(&key_id))
-    {
-        Some(key) => crate::evidence_answer::verify_response(
-            &request_bytes,
-            &answer,
-            &key,
-            &crate::checkpoint_cadence::active_witness_keys(),
-        ),
-        None => serde_json::json!({"state": "no_announced_key"}),
-    };
+    let verification =
+        verification.unwrap_or_else(|| verify_announced(&request_bytes, &answer, &args.peer_id));
     let held = hold_asked_records(
         &capsules,
         &args.peer_id,

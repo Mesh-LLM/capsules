@@ -1,5 +1,6 @@
 mod adjudication_records;
 mod admission;
+mod ask_book;
 // Library-shaped: the split-stage verifier, the frame fold and a few record
 // kinds are exercised by their own tests and the split-stage fixtures, not
 // yet by a live path of this binary.
@@ -973,12 +974,12 @@ fn with_evidence_operations(
             )
             .input::<exchange_corroboration::RunArgs>()
             .handle({
-                let ledger_dir = capsules_for_delivery.ledger_dir().to_path_buf();
+                let capsules = capsules_for_delivery.clone();
                 move |args, context| {
                     Box::pin(exchange_corroboration::handle_historical_reference(
                         args,
                         context,
-                        ledger_dir.clone(),
+                        capsules.clone(),
                     ))
                 }
             }),
@@ -1343,6 +1344,18 @@ async fn main() -> anyhow::Result<()> {
     let own_public_key = capsules.public_key();
     let own_signing_key = capsules.signing_key().clone();
     owner_maintenance::finish_pending_after_open(&data_dir, &capsules, &log_id)?;
+    // Asks whose window closed while this node was stopped: their absences.
+    let overdue = ask_book::seal_overdue_absences(
+        &capsules,
+        &evidence_answer::now_utc(),
+        std::time::Duration::from_millis(mesh_evidence_bridge::requester_idle_timeout_ms()),
+    );
+    if overdue > 0 {
+        tracing::info!(
+            overdue,
+            "sealed the absences of asks whose window closed while stopped"
+        );
+    }
     tracing::info!(
         chain_head = ?capsules.chain_head(),
         "record sealing ready"

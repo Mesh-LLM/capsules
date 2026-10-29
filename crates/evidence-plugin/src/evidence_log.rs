@@ -120,8 +120,9 @@ pub struct Leaf {
     /// The other side of the exchange this record is of, if it names one
     /// (`evidence_panes::full_counterparty_node_id`).
     pub counterparty: Option<String>,
-    /// A local block or an owner-maintenance record: it never leaves this
-    /// node, whoever asks.
+    /// A local routing choice, a record of this node's asks
+    /// (`crate::ask_book`) or an owner-maintenance record: it never leaves
+    /// this node, whoever asks.
     pub never_leaves: bool,
     pub facts: LeafFacts,
 }
@@ -314,6 +315,7 @@ impl LedgerIndex {
             padding,
             counterparty: crate::evidence_panes::full_counterparty_node_id(&record),
             never_leaves: crate::evidence_panes::is_local_routing_choice(&record)
+                || crate::ask_book::is_ask_record(&record)
                 || record
                     .pointer("/model_attestation/compute_attestation")
                     .and_then(|c| c.get(crate::producer::capsule::OWNER_MAINTENANCE_BLOCK))
