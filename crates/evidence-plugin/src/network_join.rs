@@ -357,7 +357,7 @@ fn save(data_dir: &Path, acked: &Acked) -> std::io::Result<()> {
     write_atomically(&state_path(data_dir), &doc)
 }
 
-fn write_atomically(path: &Path, doc: &Value) -> std::io::Result<()> {
+pub(crate) fn write_atomically(path: &Path, doc: &Value) -> std::io::Result<()> {
     let tmp = path.with_extension("json.tmp");
     let mut bytes = serde_json::to_vec_pretty(doc).expect("a JSON value serializes");
     bytes.push(b'\n');

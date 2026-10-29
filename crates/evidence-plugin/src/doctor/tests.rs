@@ -48,7 +48,7 @@ fn corpus() -> tempfile::TempDir {
 fn serve(dir: &Path, policy: &Policy, node: Option<&str>) -> Served {
     let node = node.ok_or("this node's mesh id is not known yet")?;
     with(dir, policy, |r| {
-        commitment::build(r, node, policy).map_err(|u| u.why)
+        commitment::build(r, node, policy, None).map_err(|u| u.why)
     })
 }
 
@@ -56,7 +56,7 @@ fn doctor(dir: &Path, node: Option<&str>, probe: bool) -> Vec<Finding> {
     let policy = defaults();
     let served = serve(dir, &policy, node);
     with(dir, &policy, |r| {
-        findings(r, &policy, &served, &Witnesses::default(), probe).unwrap()
+        findings(r, &policy, &served, &Witnesses::default(), None, probe).unwrap()
     })
 }
 
@@ -175,7 +175,7 @@ fn a_served_commitment_under_another_policy_is_not_the_policy_in_commitment() {
         ..defaults()
     };
     let found = with(dir.path(), &wider, |r| {
-        findings(r, &wider, &served, &Witnesses::default(), false).unwrap()
+        findings(r, &wider, &served, &Witnesses::default(), None, false).unwrap()
     });
     let f = state(&found, POLICY_IN_COMMITMENT);
     assert_eq!(f.state, STATE_MISSING);
@@ -235,7 +235,7 @@ fn an_answer_under_another_policy_than_advertised_is_a_mismatch() {
     // The commitment advertises the defaults; the node now answers with
     // standard history shared.
     let advertised = with(dir.path(), &defaults(), |r| {
-        commitment::build(r, NODE, &defaults()).unwrap()
+        commitment::build(r, NODE, &defaults(), None).unwrap()
     });
     let wider = Policy {
         share_standard_history: true,
@@ -255,7 +255,7 @@ fn an_answer_under_another_policy_than_advertised_is_a_mismatch() {
 fn an_answer_under_another_key_than_advertised_is_a_mismatch() {
     let dir = corpus();
     let advertised = with(dir.path(), &defaults(), |r| {
-        commitment::build(r, NODE, &defaults()).unwrap()
+        commitment::build(r, NODE, &defaults(), None).unwrap()
     });
     // The same commitment, re-signed by another key: the answers do not
     // verify under the key it now names.
@@ -347,7 +347,7 @@ fn sharing_is_off_only_when_every_switch_is_off() {
     };
     let served = serve(dir.path(), &off, Some(NODE));
     let found = with(dir.path(), &off, |r| {
-        findings(r, &off, &served, &Witnesses::default(), false).unwrap()
+        findings(r, &off, &served, &Witnesses::default(), None, false).unwrap()
     });
     assert_eq!(state(&found, SHARING).state, STATE_OFF);
 }
@@ -359,7 +359,7 @@ fn join_is_idempotent_and_complete_on_a_node_with_a_checkpoint() {
     let served = serve(dir.path(), &policy, Some(NODE));
     let run = || {
         with(dir.path(), &policy, |r| {
-            join_report(r, &policy, &served, &Witnesses::default()).unwrap()
+            join_report(r, &policy, &served, &Witnesses::default(), None).unwrap()
         })
     };
     let first = run();
@@ -381,7 +381,7 @@ fn join_on_a_fresh_node_names_the_missing_checkpoint() {
     let policy = defaults();
     let served = serve(dir.path(), &policy, Some(NODE));
     let report = with(dir.path(), &policy, |r| {
-        join_report(r, &policy, &served, &Witnesses::default()).unwrap()
+        join_report(r, &policy, &served, &Witnesses::default(), None).unwrap()
     });
     assert_eq!(report["joined"], json!(false));
     let pending = report["pending"].as_array().unwrap();
@@ -413,4 +413,132 @@ fn install_md_carries_the_generated_quickstart() {
         "INSTALL.md's join quickstart differs from `capsules --print-join-quickstart`; \
          paste its output between the markers"
     );
+}
+
+fn doctor_with(binding: Option<&Value>) -> Finding {
+    let dir = corpus();
+    let policy = defaults();
+    let served = serve(dir.path(), &policy, Some(NODE));
+    let found = with(dir.path(), &policy, |r| {
+        findings(r, &policy, &served, &Witnesses::default(), binding, false).unwrap()
+    });
+    state(&found, CONTROLLER_BINDING).clone()
+}
+
+/// A binding of this node's key to its operator's, signed by both and in
+/// its window, reads `bound` and names the binding, never the operator's key.
+#[test]
+fn a_held_binding_of_this_nodes_key_reads_bound() {
+    let operator = SigningKey::from_bytes(&[9; 32]);
+    let record = crate::controller_binding::bind_for_test(
+        &key(),
+        &operator,
+        "2026-10-01T00:00:00Z",
+        "2027-10-01T00:00:00Z",
+    );
+    let f = doctor_with(Some(&record));
+    assert_eq!(f.state, STATE_BOUND, "{}", f.detail);
+    assert!(
+        !f.detail
+            .contains(&hex::encode(operator.verifying_key().to_bytes())),
+        "{}",
+        f.detail
+    );
+    let digest = crate::controller_binding::evaluate(&record, &[])
+        .digest
+        .unwrap();
+    assert_eq!(f.records, [digest]);
+}
+
+/// Every binding that does not count reads `unbound`, with the reason.
+#[test]
+fn a_binding_that_does_not_count_reads_unbound() {
+    let operator = SigningKey::from_bytes(&[9; 32]);
+    let other_node = SigningKey::from_bytes(&[8; 32]);
+    let (from, until) = ("2026-10-01T00:00:00Z", "2027-10-01T00:00:00Z");
+    let good = crate::controller_binding::bind_for_test(&key(), &operator, from, until);
+    let mut one_signed = good.clone();
+    one_signed["sigs"].as_array_mut().unwrap().pop();
+    let mut unsigned = good.clone();
+    unsigned["sigs"] = json!([]);
+    let mut mismatched = good.clone();
+    mismatched["nonce"] = json!("changed after signing");
+    let mut wrong_signer = good.clone();
+    let stranger = SigningKey::from_bytes(&[7; 32]);
+    let input = {
+        let mut covered = good.as_object().unwrap().clone();
+        covered.remove("sigs");
+        evidence_request::jcs::to_string(&Value::Object(covered)).unwrap()
+    };
+    let i = usize::from(wrong_signer["sigs"][0]["key_id"] == json!(commitment::key_id(&key())));
+    {
+        use ed25519_dalek::Signer;
+        wrong_signer["sigs"][i]["sig"] =
+            json!(hex::encode(stranger.sign(input.as_bytes()).to_bytes()));
+    }
+    let corpus: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../vectors/controller-binding-v0/vectors.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let binding_of = |id: &str| -> Value {
+        let case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .unwrap();
+        serde_json::from_str(case["inputs"]["binding"]["octets_text"].as_str().unwrap()).unwrap()
+    };
+    // An unknown key type is refused before its signatures are checked, so
+    // this record need not be signed again; the corpus's record binds other
+    // keys, and its signature failure is reached first.
+    let mut unknown_type = crate::controller_binding::bind_for_test(&key(), &operator, from, until);
+    unknown_type["key_types"] = json!(["ed25519", "org.example.key-type"]);
+    let read_as_ed25519 = binding_of("nostr-key-read-as-ed25519");
+    for (why, record, says) in [
+        ("one signature", one_signed, "do not both verify"),
+        ("no signatures", unsigned, "do not both verify"),
+        ("changed after signing", mismatched, "do not both verify"),
+        (
+            "the operator half signed by another key",
+            wrong_signer,
+            "do not both verify",
+        ),
+        (
+            "another node's key",
+            crate::controller_binding::bind_for_test(&other_node, &operator, from, until),
+            "does not bind this node's key",
+        ),
+        (
+            "expired",
+            crate::controller_binding::bind_for_test(
+                &key(),
+                &operator,
+                "2025-10-01T00:00:00Z",
+                "2026-10-01T00:00:00Z",
+            ),
+            "outside its window",
+        ),
+        ("not a record", Value::Null, "not a well-formed"),
+        (
+            "an unknown key type",
+            unknown_type,
+            "its key type org.example.key-type",
+        ),
+        (
+            "a Nostr key read as Ed25519",
+            read_as_ed25519,
+            "do not both verify",
+        ),
+    ] {
+        let f = doctor_with(Some(&record));
+        assert_eq!(f.state, STATE_UNBOUND, "{why}: {}", f.detail);
+        assert!(f.detail.contains(says), "{why}: {}", f.detail);
+        assert!(f.records.is_empty(), "{why}");
+    }
+    assert_eq!(doctor_with(None).state, STATE_UNBOUND);
 }

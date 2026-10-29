@@ -37,6 +37,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::capsule_emit::CapsuleState;
 use crate::commitment::{self, Signed};
+use crate::evidence_answer::Responder;
 use crate::mesh_evidence_bridge::{env_millis, next_stream_id, read_to_end_bounded};
 
 /// The mesh channel, declared on both ends, and the tag the requester puts
@@ -74,8 +75,9 @@ static LAST: Slot = std::sync::Mutex::new(None);
 
 type Slot = std::sync::Mutex<Option<(BuiltFrom, Result<Signed, String>)>>;
 
-/// This node's id, the policy's digest, the latest checkpoint's anchor.
-type BuiltFrom = (String, String, String);
+/// This node's id, the policy's digest, the latest checkpoint's anchor, and
+/// the digest of the held controller binding that applies, if any.
+type BuiltFrom = (String, String, String, Option<String>);
 
 /// What `slot` holds for `key`, or `build`'s result, kept in `slot` unless
 /// it is a failure that might not repeat. The lock is held through `build`,
@@ -108,10 +110,23 @@ pub(crate) fn own(capsules: &CapsuleState, node_id: Option<&str>) -> Result<Sign
     commitment::with_responder(capsules, &now, Some(node_id), |responder, policy| {
         let digest = responder.policy_digest.unwrap_or_default().to_string();
         let anchor = commitment::latest_anchor(responder)?;
-        cached(&LAST, (node_id.to_string(), digest, anchor), || {
-            commitment::build(responder, node_id, policy)
-        })
+        let binding = held_digest(capsules, responder);
+        cached(
+            &LAST,
+            (node_id.to_string(), digest, anchor, binding.clone()),
+            || commitment::build(responder, node_id, policy, binding.as_deref()),
+        )
     })
+}
+
+/// The digest of this node's own controller binding, when it holds one that
+/// binds its key and applies now (`controller_binding::binds_own`).
+fn held_digest(capsules: &CapsuleState, responder: &Responder<'_>) -> Option<String> {
+    let record = crate::controller_binding::read_held(capsules.ledger_dir().parent()?)?;
+    let at = evidence_request::time::parse_utc(responder.now)?;
+    crate::controller_binding::binds_own(&record, &commitment::key_id(responder.signing_key), at)
+        .ok()
+        .map(|applied| applied.digest)
 }
 
 /// The frame the responder writes.
@@ -389,7 +404,7 @@ mod tests {
     #[test]
     fn a_commitment_or_a_lasting_failure_is_built_once_per_key() {
         let slot: Slot = std::sync::Mutex::new(None);
-        let key = |anchor: &str| ("n".to_string(), "d".to_string(), anchor.to_string());
+        let key = |anchor: &str| ("n".to_string(), "d".to_string(), anchor.to_string(), None);
         let builds = std::sync::atomic::AtomicUsize::new(0);
         let (signed, _) = frame();
         let signed = Signed::from_wire(&signed).unwrap();
@@ -416,6 +431,15 @@ mod tests {
         assert_eq!(cached(&slot, key("a"), ok), Ok(signed.clone()));
         assert_eq!(cached(&slot, key("a"), ok), Ok(signed.clone()));
         assert_eq!(count(), 1, "the same key is not built again");
+        let bound = (
+            "n".to_string(),
+            "d".to_string(),
+            "a".to_string(),
+            Some("b".repeat(64)),
+        );
+        assert_eq!(cached(&slot, bound, ok), Ok(signed.clone()));
+        assert_eq!(count(), 2, "a new binding builds a new commitment");
+        builds.store(1, std::sync::atomic::Ordering::SeqCst);
 
         assert_eq!(cached(&slot, key("b"), lasting), Err("too large".into()));
         assert_eq!(cached(&slot, key("b"), lasting), Err("too large".into()));

@@ -8,6 +8,8 @@ mod checkpoint_cadence;
 mod commitment;
 mod commitment_bridge;
 mod controller_binding;
+#[cfg(test)]
+mod controller_binding_e2e_setup;
 mod data_dir;
 mod decision;
 mod doctor;
@@ -1118,15 +1120,16 @@ fn with_evidence_operations(
             .description(
                 "Check that this node is ready to join, idempotently: check the key, the book, the first checkpoint, \
                  the commitment served on commitment/1 and both stranger probes, and list what is \
-                 in place and what is not. Seals nothing, writes nothing and contacts nobody; a \
-                 fresh node's first checkpoint follows its first exchange.",
+                 in place and what is not. Seals nothing and contacts nobody; it writes only a \
+                 controller_binding it is given, after checking that it binds this node's key and \
+                 applies. A fresh node's first checkpoint follows its first exchange.",
             )
             .input::<doctor::JoinArgs>()
             .handle({
                 let capsules = capsules_for_delivery.clone();
                 let self_peer = self_peer.clone();
-                move |_args, _context| {
-                    Box::pin(doctor::handle_join(capsules.clone(), self_peer.current()))
+                move |args, _context| {
+                    Box::pin(doctor::handle_join(args, capsules.clone(), self_peer.current()))
                 }
             }),
     );
