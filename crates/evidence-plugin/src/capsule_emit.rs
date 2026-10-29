@@ -616,6 +616,20 @@ impl CapsuleState {
         Ok(ledger.pad_to_bucket(bucket, &self.keys.signing_key, &self.node_id)?)
     }
 
+    /// Append exactly one padding record under the same writer lock, so the
+    /// next checkpoint has a record to cover even when the last one covers
+    /// every other (the Service History's boundary checkpoint,
+    /// `crate::checkpoint_cadence`). Returns the line count.
+    pub fn pad_one(&self) -> anyhow::Result<u64> {
+        let mut ledger = self
+            .ledger
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A bucket one past the count is short exactly one line.
+        let bucket = ledger.entries() + 1;
+        Ok(ledger.pad_to_bucket(bucket, &self.keys.signing_key, &self.node_id)?)
+    }
+
     /// Looks up one previously-sealed capsule by id -- the `ledger-fetch/1`
     /// responder's only data source. A thin passthrough: whatever `Ledger::
     /// lookup` returns (or doesn't) is exactly what goes out, nothing
@@ -2019,7 +2033,7 @@ impl CapsuleState {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -3493,7 +3507,7 @@ mod tests {
         )
     }
 
-    fn sample_exchange<'a>(requesting_party: &'a str) -> ExchangeRecord<'a> {
+    pub(crate) fn sample_exchange<'a>(requesting_party: &'a str) -> ExchangeRecord<'a> {
         ExchangeRecord {
             model: "m",
             client_nonce: Some("nonce-1"),
