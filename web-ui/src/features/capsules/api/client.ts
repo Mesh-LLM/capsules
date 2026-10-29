@@ -17,7 +17,8 @@ import { PluginRouteError, getPluginJson } from '@/plugin-host/host'
 export const PLUGIN_ROUTES = {
   ledger: 'http/ledger',
   signedStatement: (capsuleId: string) => `http/ledger/signed-statement?capsule_id=${encodeURIComponent(capsuleId)}`,
-  disclosure: (capsuleId: string) => `http/ledger/disclosure?capsule_id=${encodeURIComponent(capsuleId)}`
+  disclosure: (capsuleId: string) => `http/ledger/disclosure?capsule_id=${encodeURIComponent(capsuleId)}`,
+  historyPage: 'http/history-page'
 } as const
 
 type LedgerBody = { records?: unknown; node_pub_key_pem?: unknown }
@@ -65,4 +66,14 @@ export async function fetchDisclosurePreimage(capsuleId: string): Promise<Disclo
   } catch {
     return null
   }
+}
+
+/** What this node answers a stranger who asks for its history: the reply's
+ *  bytes as text, unchanged, for the History page (`saved-pages.ts`). */
+export async function fetchServedHistory(): Promise<{ replyText: string; outcome: 'answered' | 'refused' }> {
+  const body = await getPluginJson<{ reply?: unknown; outcome?: unknown }>(PLUGIN_ROUTES.historyPage)
+  if (typeof body.reply !== 'string' || (body.outcome !== 'answered' && body.outcome !== 'refused')) {
+    throw new Error('this node did not give its history')
+  }
+  return { replyText: body.reply, outcome: body.outcome }
 }

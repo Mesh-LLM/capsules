@@ -4,6 +4,20 @@
 
 ### Added
 
+- **The Exchanges tab saves a History page and a Settlement page, each one .html file that checks
+  itself when it opens (Mesh-LLM/capsules-plugin#96, Steven's 10-29 ruling).** They replace the
+  tab's "Save evidence file" JSON download for an outside party. The History page is what the node
+  answers a stranger who asks for its history (`history_card/1`, new route `history-page`), so it
+  carries no more than the node's disclosure policy sends to that party. It embeds the reply byte for
+  byte, checks it on open with `@action-state-group/cll`'s browser build (the artifact is the bytes
+  its digest names, every checkpoint is signed by the key that answered, each consistency proof
+  holds, the log starts at its beginning, the last checkpoint is the anchor), shows nothing from a
+  reply that does not check, and lists what it could not check: witness receipts, the signature on
+  the reply, and which request it answers. "Save the JSON" returns the embedded bytes unchanged. The
+  Settlement page gives the honest refusal until the settlement terms pack exists
+  (action-state-group/evidencebook-skills#71). The per-exchange receipt page, the Service History
+  form when `share_standard_history` is on, and the 9b wording are not in this change. The CSV and
+  the integrity, peers, twin-bracket and "Your records" JSON exports are unchanged. No release.
 - **The Service History (`service_history/1`), a Standard History under the inference-service
   history profile.** A requester asks for it by the digest of
   `derivations/service-history-1.json` (`cbc96d80…`), for `full_history`, pinned to a checkpoint

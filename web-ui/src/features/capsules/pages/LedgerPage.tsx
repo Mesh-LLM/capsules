@@ -19,7 +19,8 @@ import { StatusBadge } from '@/components/ui/StatusBadge'
 import { navigateHost } from '@/plugin-host/host'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { TabPanel } from '@/components/ui/TabPanel'
-import { fetchCapsuleLedger } from '@/features/capsules/api/client'
+import { fetchCapsuleLedger, fetchServedHistory } from '@/features/capsules/api/client'
+import { historyPage, settlementPage } from '@/features/capsules/lib/saved-pages'
 import { announcedKeyFor, askForHistory, askForRecord } from '@/features/capsules/api/evidenceRequestClient'
 import {
   judgeAskReply,
@@ -91,7 +92,6 @@ import {
 } from '@/features/capsules/lib/exchange-pages'
 import { deriveRightCellState, LEDGER_STATE_FILTER_VALUES } from '@/features/capsules/lib/exchange-row-state'
 import {
-  exchangeEvidenceBundle,
   exchangeRowsToCsv,
   integrityEvidenceBundle,
   saveTextFile
@@ -527,6 +527,24 @@ function ExchangesSection({
   // Per row, the latest reply and the latest verified one (`settleRowAsk`):
   // a failed retry never erases what an earlier reply proved.
   const [askOutcomes, setAskOutcomes] = useState<ReadonlyMap<string, RowAsk>>(() => new Map())
+  // "Save History page" / "Save Settlement page": the node's own answer to a
+  // stranger, saved as a page that checks itself (`saved-pages.ts`).
+  const [savingPage, setSavingPage] = useState<'history' | 'settlement' | null>(null)
+  const [pageNote, setPageNote] = useState<string | null>(null)
+  const savePage = useCallback(async (which: 'history' | 'settlement') => {
+    setSavingPage(which)
+    setPageNote(null)
+    try {
+      const savedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z')
+      const page =
+        which === 'settlement' ? settlementPage(savedAt) : historyPage((await fetchServedHistory()).replyText, savedAt)
+      if (!saveTextFile(page.fileName, page.html, 'text/html')) setPageNote('This browser could not save the page.')
+    } catch (error) {
+      setPageNote(`Could not save the page: ${error instanceof Error ? error.message : 'this node did not answer'}.`)
+    } finally {
+      setSavingPage(null)
+    }
+  }, [])
   const queryClient = useQueryClient()
   const handleAskForRecord = useCallback((row: ExchangeLedgerRow, target: AskTarget) => {
     const askedAt = new Date().toISOString()
@@ -987,21 +1005,33 @@ function ExchangesSection({
           >
             Export view (CSV)
           </Button>
+          {/* For an outside party: one .html page each, carrying its own
+             bundle and checking it when it opens (saved-pages.ts). */}
           <Button
             className="ui-control h-8 gap-1.5 rounded-[var(--radius)] px-2.5 text-[length:var(--density-type-caption)]"
-            onClick={() =>
-              saveTextFile(
-                'mesh-exchanges-evidence.json',
-                exchangeEvidenceBundle(visibleRows.map((visibleRow) => visibleRow.raw)),
-                'application/json'
-              )
-            }
+            disabled={savingPage !== null}
+            onClick={() => void savePage('history')}
             size="sm"
             type="button"
             variant="outline"
           >
-            Save evidence file
+            Save History page
           </Button>
+          <Button
+            className="ui-control h-8 gap-1.5 rounded-[var(--radius)] px-2.5 text-[length:var(--density-type-caption)]"
+            disabled={savingPage !== null}
+            onClick={() => void savePage('settlement')}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            Save Settlement page
+          </Button>
+          {pageNote ? (
+            <span className="text-xs text-fg-faint" role="status">
+              {pageNote}
+            </span>
+          ) : null}
         </div>
       </div>
 

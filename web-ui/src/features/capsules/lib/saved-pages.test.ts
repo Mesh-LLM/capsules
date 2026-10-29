@@ -1,0 +1,107 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { webcrypto } from 'node:crypto'
+import { JSDOM } from 'jsdom'
+import { describe, expect, it } from 'vitest'
+import { BUNDLE_ELEMENT_ID, SETTLEMENT_REFUSAL_WORDS, historyPage, settlementPage } from '@/features/capsules/lib/saved-pages'
+
+// The page as a person opens it: no server, no network. jsdom runs the page's
+// own scripts; the only thing given to it is the platform (`crypto`, text
+// codecs) a browser has and jsdom lacks.
+async function open(html: string) {
+  const requested: string[] = []
+  const dom = new JSDOM(html, {
+    runScripts: 'dangerously',
+    url: 'file:///saved/page.html',
+    beforeParse(window) {
+      const w = window as unknown as Record<string, unknown>
+      Object.defineProperty(w, 'crypto', { value: webcrypto, configurable: true })
+      w.TextEncoder = TextEncoder
+      w.TextDecoder = TextDecoder
+      w.fetch = (url: string) => {
+        requested.push(String(url))
+        return Promise.reject(new Error('offline'))
+      }
+      w.XMLHttpRequest = function () {
+        requested.push('xhr')
+      }
+    }
+  })
+  // The page checks its bundle asynchronously.
+  for (let i = 0; i < 200 && !dom.window.document.querySelector('#result')?.childElementCount; i++) await new Promise((r) => setTimeout(r, 10))
+  return { dom, requested, text: dom.window.document.querySelector('main')?.textContent ?? '' }
+}
+
+const fixture = JSON.parse(
+  readFileSync(path.resolve(process.cwd(), '../crates/evidence-plugin/tests/fixtures/evidence_answers_5d2d102.json'), 'utf8')
+) as Record<string, Record<string, unknown>>
+// The bytes a node served: the reply as the node wrote it.
+const served = `${JSON.stringify(fixture.history_card)}\n`
+const SAVED = '2026-10-29T18:00:00Z'
+
+const embedded = (html: string): Uint8Array => {
+  const match = new RegExp(`id="${BUNDLE_ELEMENT_ID}"[^>]*>([^<]*)<`).exec(html)
+  return Uint8Array.from(atob(match![1]), (c) => c.charCodeAt(0))
+}
+
+describe('the History page, opened offline', () => {
+  it('verifies the embedded answer itself and hands back the JSON byte for byte', async () => {
+    const { html } = historyPage(served, SAVED)
+    expect(Buffer.from(embedded(html)).equals(Buffer.from(served, 'utf8'))).toBe(true)
+
+    const { dom, requested, text } = await open(html)
+    expect(text).toContain('this is the node’s own answer, unchanged')
+    expect(text).toMatch(/Checked: All \d+ checkpoints verify/)
+    expect(text).toContain('Not checked: Witness receipts')
+    expect(requested).toEqual([])
+
+    let saved: Blob | undefined
+    dom.window.URL.createObjectURL = (blob: Blob | MediaSource) => {
+      saved = blob as Blob
+      return 'blob:x'
+    }
+    dom.window.URL.revokeObjectURL = () => {}
+    ;(dom.window.document.getElementById('save-json') as HTMLButtonElement).click()
+    expect(Buffer.from(await saved!.arrayBuffer()).equals(Buffer.from(served, 'utf8'))).toBe(true)
+  })
+
+  it('refers to nothing outside itself', () => {
+    const { html } = historyPage(served, SAVED)
+    expect(html).not.toMatch(/(?:src|href)\s*=\s*["']?(?:https?:)?\/\//i)
+    expect(html).not.toMatch(/<link\b/i)
+    expect(html).not.toMatch(/<script[^>]*\ssrc=/i)
+  })
+
+  it('shows none of a bundle that does not check', async () => {
+    const tampered = served.replace(/"artifact_digest":"[0-9a-f]{4}/, '"artifact_digest":"0000')
+    expect(tampered).not.toBe(served)
+    const { text } = await open(historyPage(tampered, SAVED).html)
+    expect(text).toContain('could not check its answer, so it shows none of it')
+    expect(text).toContain('Failed: The artifact is not the bytes its digest names')
+    expect(text).not.toContain('The log, checkpoint by checkpoint')
+  })
+
+  it('shows a refusal as a refusal', async () => {
+    const refusal = `${JSON.stringify(fixture.refused_unknown_pin)}\n`
+    const { text } = await open(historyPage(refusal, SAVED).html)
+    expect(text).toContain('The node declined to answer')
+    expect(text).not.toContain('this is the node’s own answer')
+  })
+
+  it('draws nothing from the bundle as markup', async () => {
+    const hostile = `${JSON.stringify({ reason: '<img src=x onerror=alert(1)>' })}\n`
+    const { dom } = await open(historyPage(hostile, SAVED).html)
+    expect(dom.window.document.querySelector('#result img')).toBeNull()
+  })
+})
+
+describe('the Settlement page, opened offline', () => {
+  it('gives the honest refusal, never an empty page, and carries its JSON', async () => {
+    const { html } = settlementPage(SAVED)
+    const json = JSON.parse(new TextDecoder().decode(embedded(html))) as { reason: string; words: string }
+    expect(json.reason).toBe('no_terms_pack')
+    const { text, requested } = await open(html)
+    expect(text).toContain(SETTLEMENT_REFUSAL_WORDS)
+    expect(requested).toEqual([])
+  })
+})
