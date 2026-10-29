@@ -151,6 +151,11 @@ fn propose_answer(
     known_requester: &dyn Fn(&str) -> bool,
     now: i64,
 ) -> Result<String, String> {
+    // A proposal sent again gets its first answer back, whenever it comes:
+    // the window rule below is for a new session, not for one answered.
+    if let Some(answer) = first_answer(store, frame, &own_key(capsules)) {
+        return Ok(answer);
+    }
     let checked =
         agreement::check_proposal(frame, &own_key(capsules), now).map_err(|e| e.to_string())?;
     let proposer = checked
@@ -221,6 +226,27 @@ fn propose_answer(
         .put(Kind::Record, answer_text.as_bytes())
         .map_err(keep_error)?;
     Ok(answer_text)
+}
+
+/// The answer this provider kept for the proposal `frame` carries, when it
+/// kept that proposal, byte for byte, and answered it.
+fn first_answer(store: &Store, frame: &[u8], own_key: &str) -> Option<String> {
+    let record_text = parse(frame).and_then(|m| text(&m, "proposed").map(String::from))?;
+    let record = parse(record_text.as_bytes())?;
+    let digest = evidence_request::acceptance::record_digest(&record).ok()?;
+    if store.get(Kind::Record, &digest)? != record_text.as_bytes() {
+        return None;
+    }
+    let _serial = PROPOSALS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    store.all(Kind::Record).into_iter().find_map(|o| {
+        let r = parse(&o)?;
+        (text(&r, "proposal_digest") == Some(digest.as_str())
+            && text(&r, "acceptor") == Some(own_key))
+        .then(|| String::from_utf8(o).ok())
+        .flatten()
+    })
 }
 
 fn keep_error(e: std::io::Error) -> String {
@@ -771,6 +797,11 @@ mod tests {
         let first = p.propose(&proposal, NOW);
         let again = p.propose(&proposal, NOW + 5);
         assert_eq!(first, again, "one proposal, one answer (§11.1.1)");
+        let much_later = p.propose(&proposal, NOW + agreement::CLOCK_SKEW_SECONDS + 1);
+        assert_eq!(
+            first, much_later,
+            "even once a new window from it would be refused"
+        );
         let answers = p
             .pstore
             .all(Kind::Record)

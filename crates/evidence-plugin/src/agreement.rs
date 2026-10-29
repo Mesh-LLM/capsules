@@ -562,7 +562,7 @@ pub fn check_records(
             .is_some_and(is_profile_time)
             || rc.get("profile").and_then(Value::as_str) != Some(PROFILE)
         {
-            return Err("a receipt's received_at is not a profile time".into());
+            return Err("a receipt's profile or received_at is not the profile's".into());
         }
     }
     for r in &res.receipts {
