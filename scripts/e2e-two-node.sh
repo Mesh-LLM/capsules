@@ -176,7 +176,10 @@ export CAPSULES_SHARE_RECORD_AT_COMPLETION=counterparty
 # --- the provider: serves the model -----------------------------------------
 # It cuts a checkpoint every 5 s once it has a record, so it has one to answer
 # a history card under.
-NODE_ENV=(CAPSULES_CHECKPOINT_CADENCE_SECONDS=5)
+# A Service History is Standard History: with share_standard_history off it
+# goes only to a proven counterparty, and the requester is a client node whose
+# key the provider cannot hold. So the provider shares it with anyone here.
+NODE_ENV=(CAPSULES_CHECKPOINT_CADENCE_SECONDS=5 CAPSULES_SHARE_STANDARD_HISTORY=on)
 start_node provider "$PROVIDER_API" "$PROVIDER_CONSOLE" --gguf "$model" --model "$MODEL_NAME"
 wait_for 600 "the provider has loaded the model" status_field "$PROVIDER_CONSOLE" '.llama_ready == true'
 token=$(status_field "$PROVIDER_CONSOLE" '.token')
