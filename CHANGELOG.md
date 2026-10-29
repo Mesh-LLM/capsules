@@ -12,6 +12,21 @@
   the reason. The commitment names the binding by its digest alone (`controller_binding.digest`),
   never the operator's key, and the binding stays optional (Steven's ruling). Verification of the
   `bip340` key type uses `k256`. Mesh-LLM/capsules-plugin#54, #97.
+- **The Service History (`service_history/1`), a Standard History under the inference-service
+  history profile.** A requester asks for it by the digest of
+  `derivations/service-history-1.json` (`cbc96d80…`), for `full_history`, pinned to a checkpoint
+  whose time is a period boundary: Mondays 00:00 UTC from 2026-01-05. The answer embeds this node's
+  `history_card/1` artifact byte for byte, with its SHA-256, and counts the exchanges it served in
+  each closed week, per model it states and in total. A count under 5 is withheld, and so is the
+  smallest other model when the total would give a withheld one away. Latency is never counted.
+  Any other subject, coverage or anchor is refused `policy_declined`, the same for every
+  requester. The checkpoint cadence now appends one padding record and cuts a checkpoint
+  at each boundary. It is Standard History
+  (`share_standard_history`), and this node checks a Service History it is sent, the card as a
+  direct one and every period rule one History shows. The definition follows
+  action-state-group/agent-action-capsule#315 at f8c946ed and the period policy Steven ruled under
+  action-state-group/evidencebook#46; `served_summary/1` is unchanged. Ported from
+  Mesh-LLM/mesh-llm#2506 (Steven's M2). Mesh-LLM/capsules-plugin#39.
 - **`settlement_check` and the Lightning adapter declaration (loop step 6).** The new read-only tool
   checks the Lightning settlement records this node holds for a paid exchange, under
   `adapters/lightning-v0.md`. Each check (object held, invoice join, amount, finality, preimage,

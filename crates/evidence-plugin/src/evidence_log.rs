@@ -702,6 +702,9 @@ impl Responder for LogView<'_> {
             Derivation::Token(t) if t == SERVED_SUMMARY_DERIVATION_TOKEN => {
                 Some(vec![SubjectForm::FullHistory])
             }
+            d if crate::service_history::is_derivation(Some(d)) => {
+                Some(vec![SubjectForm::FullHistory])
+            }
             _ => None,
         }
     }
