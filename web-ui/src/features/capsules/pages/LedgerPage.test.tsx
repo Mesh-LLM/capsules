@@ -645,7 +645,8 @@ describe('LedgerPageContent', () => {
       }
       // The downloads work on the sample, so they stay enabled.
       expect(screen.getByRole('button', { name: /export view/i })).toBeEnabled()
-      expect(screen.getByRole('button', { name: /save evidence file/i })).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'Save History page' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'Save Settlement page' })).toBeEnabled()
     } finally {
       vi.unstubAllEnvs()
     }
@@ -976,7 +977,7 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('Export view (CSV) and Save evidence file are two distinct, present toolbar actions', async () => {
+  it('Export view (CSV), Save History page and Save Settlement page are distinct, present toolbar actions', async () => {
     const { fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
     vi.mocked(fetchPaneCList).mockResolvedValue({
       rows: [
@@ -1005,10 +1006,12 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     await screen.findByRole('group', { name: 'Exchange exch-1' })
 
     const exportButton = screen.getByRole('button', { name: /export view \(csv\)/i })
-    const evidenceButton = screen.getByRole('button', { name: /save evidence file/i })
+    const historyButton = screen.getByRole('button', { name: 'Save History page' })
+    const settlementButton = screen.getByRole('button', { name: 'Save Settlement page' })
     expect(exportButton).toBeInTheDocument()
-    expect(evidenceButton).toBeInTheDocument()
-    expect(exportButton).not.toBe(evidenceButton)
+    expect(new Set([exportButton, historyButton, settlementButton]).size).toBe(3)
+    // The old JSON download of every exchange is gone from this row.
+    expect(screen.queryByRole('button', { name: /save evidence file/i })).not.toBeInTheDocument()
   })
 
   it('§3A sticky day headers: one per calendar day, tallying the whole day', async () => {

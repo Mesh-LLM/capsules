@@ -4,6 +4,21 @@
 
 ### Added
 
+- **The Exchanges tab saves a History page and a Settlement page, each one .html file that checks
+  itself when it opens (Mesh-LLM/capsules-plugin#96, Steven's 10-29 ruling).** They replace the
+  tab's "Save evidence file" JSON download for an outside party. The History page is what the node
+  answers a stranger who asks for its history (`history_card/1`, new route `history-page`), so it
+  carries no more than the node's disclosure policy sends to that party. It embeds the reply byte for
+  byte, checks it on open with `@action-state-group/cll`'s browser build (the artifact is the bytes
+  its digest names, every checkpoint is signed by the key that answered, each consistency proof
+  holds, the log starts at its beginning, the last checkpoint is the anchor), shows nothing from a
+  reply that does not check, shows the key id the checkpoints were checked under, and lists what it
+  could not check: witness receipts, the signature on the reply, that the key is the node's, and
+  which request it answers. "Save the JSON" returns the embedded bytes unchanged. The
+  Settlement page says it holds no evidence from the node, with the dashboard's own note, until the settlement terms pack exists
+  (action-state-group/evidencebook-skills#71). The per-exchange receipt page, the Service History
+  form when `share_standard_history` is on, and the 9b wording are not in this change. The CSV and
+  the integrity, peers, twin-bracket and "Your records" JSON exports are unchanged. No release.
 - **The node key bound to its operator (loop step 12).** `join` takes an optional
   `controller_binding`: a Controller Binding record (AAC `spec/controller-binding-v0.md`) that binds
   this node's key to its operator's, which may be the operator's Nostr key (`bip340`, signed with a
