@@ -1344,17 +1344,20 @@ async fn main() -> anyhow::Result<()> {
     let own_public_key = capsules.public_key();
     let own_signing_key = capsules.signing_key().clone();
     owner_maintenance::finish_pending_after_open(&data_dir, &capsules, &log_id)?;
-    // Asks whose window closed while this node was stopped: their absences.
-    let overdue = ask_book::seal_overdue_absences(
-        &capsules,
-        &evidence_answer::now_utc(),
-        std::time::Duration::from_millis(mesh_evidence_bridge::requester_idle_timeout_ms()),
-    );
+    // Asks still pending from the last run: the absence of each whose
+    // window closed while this node was stopped, and the close of the rest.
+    let (overdue, open) = ask_book::resume_asks(&capsules, &evidence_answer::now_utc());
     if overdue > 0 {
         tracing::info!(
             overdue,
             "sealed the absences of asks whose window closed while stopped"
         );
+    }
+    for asked in open {
+        tokio::spawn(mesh_evidence_bridge::absence_when_window_closes(
+            capsules.clone(),
+            asked,
+        ));
     }
     tracing::info!(
         chain_head = ?capsules.chain_head(),

@@ -4,7 +4,6 @@ use sha2::{Digest, Sha256};
 
 const ASKED_AT: &str = "2026-10-29T12:00:00Z";
 const PEER: &str = "peer-asked";
-const WAIT: Duration = Duration::from_secs(8);
 
 fn state() -> (CapsuleState, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -59,7 +58,7 @@ fn cites(header: &Map<String, Value>) -> Vec<String> {
 fn the_ask_is_sealed_as_an_evidence_request_holding_the_request_sent() {
     let (capsules, _dir) = state();
     let sent = request(None);
-    let asked = record_request(&capsules, &sent, PEER, ASKED_AT, WAIT).unwrap();
+    let asked = record_request(&capsules, &sent, PEER, ASKED_AT).unwrap();
 
     let header = header_of(&capsules, &asked.record_id);
     assert_eq!(header["record_type"], "evidence_request");
@@ -77,7 +76,7 @@ fn the_ask_is_sealed_as_an_evidence_request_holding_the_request_sent() {
 #[test]
 fn an_ask_record_never_leaves_this_node() {
     let (capsules, _dir) = state();
-    let asked = record_request(&capsules, &request(None), PEER, ASKED_AT, WAIT).unwrap();
+    let asked = record_request(&capsules, &request(None), PEER, ASKED_AT).unwrap();
     let record = capsules.lookup(&asked.record_id).unwrap().unwrap().capsule;
     assert!(is_ask_record(&record));
     let index = crate::evidence_log::with_index(capsules.ledger_dir(), "k", |index| {
@@ -92,39 +91,65 @@ fn an_ask_record_never_leaves_this_node() {
 }
 
 #[test]
-fn the_window_closes_at_the_later_of_the_deadline_and_the_minimum_wait() {
+fn the_window_closes_at_the_later_of_the_deadline_and_the_minimum() {
     assert_eq!(
-        window_closes(None, ASKED_AT, WAIT).as_deref(),
+        window_closes(None, ASKED_AT).as_deref(),
         Some("2026-10-29T12:01:00Z"),
         "never before the crate's 60 s minimum"
     );
     assert_eq!(
-        window_closes(None, ASKED_AT, Duration::from_secs(90)).as_deref(),
-        Some("2026-10-29T12:01:30Z"),
-        "never before the transport stops waiting"
-    );
-    assert_eq!(
-        window_closes(Some("2026-10-29T12:02:00Z"), ASKED_AT, WAIT).as_deref(),
+        window_closes(Some("2026-10-29T12:02:00Z"), ASKED_AT).as_deref(),
         Some("2026-10-29T12:02:00Z"),
         "never before the request's own deadline"
     );
     assert_eq!(
-        window_closes(Some("2026-10-29T12:00:30Z"), ASKED_AT, WAIT).as_deref(),
+        window_closes(Some("2026-10-29T12:00:30Z"), ASKED_AT).as_deref(),
         Some("2026-10-29T12:01:00Z")
     );
     assert_eq!(
-        window_closes(None, "2026-10-29T12:00:00.250Z", WAIT).as_deref(),
+        window_closes(None, "2026-10-29T12:00:00.250Z").as_deref(),
         Some("2026-10-29T12:01:01Z"),
         "rounded up to a whole second"
     );
-    assert_eq!(window_closes(Some("tomorrow"), ASKED_AT, WAIT), None);
+    assert_eq!(window_closes(Some("tomorrow"), ASKED_AT), None);
+}
+
+#[test]
+fn a_request_the_book_could_not_resolve_is_never_recorded() {
+    let (capsules, _dir) = state();
+    let refused = |request: Value| {
+        let result = record_request(&capsules, &request, PEER, ASKED_AT);
+        assert!(
+            matches!(result, Err(AskError::Invalid(_))),
+            "{request}: {result:?}"
+        );
+    };
+    refused(request(Some("tomorrow")));
+    refused(json!({"subject": {"kind": "record", "capsule_id": "aa"}}));
+    let mut bad_derivation = request(None);
+    bad_derivation["derivation"] = json!("Foo");
+    refused(bad_derivation);
+    assert!(records(&capsules).is_empty(), "nothing sealed");
+    assert_eq!(capsules.chain_head(), None);
+}
+
+#[test]
+fn a_nonce_is_never_used_twice() {
+    let (capsules, _dir) = state();
+    record_request(&capsules, &request(None), PEER, ASKED_AT).unwrap();
+    let again = record_request(&capsules, &request(None), PEER, ASKED_AT);
+    assert!(matches!(again, Err(AskError::Invalid(_))), "{again:?}");
+    let mut fresh = request(None);
+    fresh["nonce"] = json!("n-2");
+    record_request(&capsules, &fresh, PEER, ASKED_AT).unwrap();
+    assert_eq!(records(&capsules).len(), 2);
 }
 
 #[test]
 fn no_answer_by_the_close_is_a_recorded_absence_citing_the_request() {
     let (capsules, _dir) = state();
     let sent = request(None);
-    let asked = record_request(&capsules, &sent, PEER, ASKED_AT, WAIT).unwrap();
+    let asked = record_request(&capsules, &sent, PEER, ASKED_AT).unwrap();
 
     let absence = record_absence(
         &capsules,
@@ -149,7 +174,7 @@ fn no_answer_by_the_close_is_a_recorded_absence_citing_the_request() {
 #[test]
 fn a_pending_request_is_never_recorded_as_absent() {
     let (capsules, _dir) = state();
-    let asked = record_request(&capsules, &request(None), PEER, ASKED_AT, WAIT).unwrap();
+    let asked = record_request(&capsules, &request(None), PEER, ASKED_AT).unwrap();
     let early = record_absence(
         &capsules,
         &asked.record_id,
@@ -171,7 +196,7 @@ fn a_pending_request_is_never_recorded_as_absent() {
 fn a_reply_in_the_window_is_the_response_and_forecloses_an_absence() {
     let (capsules, _dir) = state();
     let sent = request(None);
-    let asked = record_request(&capsules, &sent, PEER, ASKED_AT, WAIT).unwrap();
+    let asked = record_request(&capsules, &sent, PEER, ASKED_AT).unwrap();
     let answer = json!({"artifact": "AAAA", "derivation": "history_card/1"});
     let verification = json!({"state": "artifact", "anchor": "a", "records": [], "checkpoints": 1});
 
@@ -205,7 +230,7 @@ fn a_reply_in_the_window_is_the_response_and_forecloses_an_absence() {
 fn a_late_reply_never_replaces_the_absence() {
     let (capsules, _dir) = state();
     let sent = request(None);
-    let asked = record_request(&capsules, &sent, PEER, ASKED_AT, WAIT).unwrap();
+    let asked = record_request(&capsules, &sent, PEER, ASKED_AT).unwrap();
     record_absence(
         &capsules,
         &asked.record_id,
@@ -263,11 +288,17 @@ fn each_reply_is_recorded_as_what_it_is_never_as_an_absence() {
     assert_eq!(outcome(&artifact, &state("no_announced_key")), "artifact");
 }
 
+fn with_nonce(mut request: Value, nonce: &str) -> Value {
+    request["nonce"] = json!(nonce);
+    request
+}
+
 #[test]
-fn at_start_the_absences_owed_for_closed_windows_are_sealed_once() {
+fn at_start_the_absences_owed_are_sealed_once_and_open_windows_returned() {
     let (capsules, _dir) = state();
-    let overdue = record_request(&capsules, &request(None), PEER, ASKED_AT, WAIT).unwrap();
-    let answered = record_request(&capsules, &request(None), PEER, ASKED_AT, WAIT).unwrap();
+    let overdue = record_request(&capsules, &request(None), PEER, ASKED_AT).unwrap();
+    let answered =
+        record_request(&capsules, &with_nonce(request(None), "n-2"), PEER, ASKED_AT).unwrap();
     record_response(
         &capsules,
         &answered.record_id,
@@ -279,15 +310,21 @@ fn at_start_the_absences_owed_for_closed_windows_are_sealed_once() {
     .unwrap();
     let still_open = record_request(
         &capsules,
-        &request(Some("2026-10-29T12:10:00Z")),
+        &with_nonce(request(Some("2026-10-29T12:10:00Z")), "n-3"),
         PEER,
         ASKED_AT,
-        WAIT,
     )
     .unwrap();
 
     let now = "2026-10-29T12:05:00Z";
-    assert_eq!(seal_overdue_absences(&capsules, now, WAIT), 1);
+    let (sealed, open) = resume_asks(&capsules, now);
+    assert_eq!(sealed, 1);
+    assert_eq!(
+        open,
+        std::slice::from_ref(&still_open),
+        "the open window is the caller's to close"
+    );
+    assert_eq!(still_open.window_closes, "2026-10-29T12:10:00Z");
     let absences: Vec<_> = records(&capsules)
         .into_iter()
         .filter(|(_, h)| h["record_type"] == "recorded_absence")
@@ -297,11 +334,12 @@ fn at_start_the_absences_owed_for_closed_windows_are_sealed_once() {
         absences,
         [(vec![overdue.record_id], json!("2026-10-29T12:01:00Z"))]
     );
-    assert_eq!(seal_overdue_absences(&capsules, now, WAIT), 0, "once");
+    assert_eq!(resume_asks(&capsules, now).0, 0, "once");
 
+    let (sealed, open) = resume_asks(&capsules, "2026-10-29T12:10:00Z");
     assert_eq!(
-        seal_overdue_absences(&capsules, "2026-10-29T12:10:00Z", WAIT),
-        1,
+        (sealed, open.len()),
+        (1, 0),
         "the third, once its deadline passed"
     );
     let last = records(&capsules).pop().expect("a record").1;

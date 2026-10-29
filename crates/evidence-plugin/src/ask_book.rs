@@ -21,20 +21,17 @@
 //! (`evidence_log`'s `never_leaves`).
 //!
 //! **The window.** It closes at the later of the request's own `deadline`
-//! and the transport's wait or the crate's minimum
+//! and the crate's minimum
 //! ([`evidencebook::ask::MINIMUM_ABSENCE_WINDOW_SECONDS`]) after the request
-//! was recorded ([`window_closes`]). Until then the request is pending and
+//! was recorded ([`window_closes`]), read from the record alone. Until then the request is pending and
 //! nothing is recorded for it. A reply read inside the window is recorded
 //! as a response; none by the close is recorded as an absence. The stream
 //! is closed at the window's end, so a later reply is never read, and the
 //! crate refuses a second outcome for a request: an absence is never
 //! converted into an answer (ER "The Three-State Discipline").
 //!
-//! **A node that stopped inside a window** seals the absences it owes when
-//! it starts again ([`seal_overdue_absences`]): the request record is all
-//! it needs.
-
-use std::time::Duration;
+//! **A node that stopped inside a window** closes it when it starts again
+//! ([`resume_asks`]): the request record is all it needs.
 
 use evidencebook::ask::{AskError, Book, Entry, SealError, Sealed};
 use evidencebook::record::{record_types, EpistemicType, Link, LinkType};
@@ -193,16 +190,25 @@ pub struct Asked {
 
 /// Seal `request`, exactly as it will be transmitted to `responder`, as an
 /// `evidence_request` record (the statement `ask::request` seals:
-/// `request` and `responder_ref`). `now` is whole-second RFC 3339 UTC;
-/// `wait` is how long the transport waits for a reply.
+/// `request` and `responder_ref`). `now` is whole-second RFC 3339 UTC.
+///
+/// Refused, with nothing sealed, as `ask::request` refuses: a request this
+/// node would not read as well formed, or one reusing a nonce an earlier
+/// request in this book carried (a response to that one could otherwise be
+/// replayed onto it). A request the book could not later resolve is never
+/// recorded, so every recorded request reaches an outcome.
 pub fn record_request(
     capsules: &CapsuleState,
     request: &Value,
     responder: &str,
     now: &str,
-    wait: Duration,
 ) -> Result<Asked, AskError> {
     let mut book = AskBook::open(capsules, now);
+    check_request(&book, request)?;
+    let window_closes = window_closes(request.get("deadline").and_then(Value::as_str), now)
+        .ok_or_else(|| {
+            AskError::Invalid("the request's deadline is not an RFC 3339 time".into())
+        })?;
     let mut statement = Map::new();
     statement.insert("request".into(), request.clone());
     if !responder.is_empty() {
@@ -214,31 +220,65 @@ pub fn record_request(
         links: Vec::new(),
         statement: Value::Object(statement),
     })?;
-    let window_closes = window_closes(
-        request.get("deadline").and_then(Value::as_str),
-        &sealed.committed_at,
-        wait,
-    )
-    .ok_or_else(|| AskError::Invalid(format!("the request's deadline: {request}")))?;
     Ok(Asked {
         record_id: sealed.record_id,
         window_closes,
     })
 }
 
+/// The checks `evidencebook::ask::request` makes before it records a
+/// request (its `parse_request` and nonce scan, which the crate keeps
+/// private): the reader the responder uses, a derivation that is a token
+/// `name/N` or a digest, and a nonce no earlier request here carried.
+fn check_request(book: &AskBook<'_>, request: &Value) -> Result<(), AskError> {
+    let bytes = evidence_request::jcs::to_string(request)
+        .map_err(|e| AskError::Invalid(format!("request: {e}")))?;
+    evidence_request::request::parse_json(bytes.as_bytes())
+        .map_err(|e| AskError::Invalid(format!("request: {e}")))?;
+    if let Some(derivation) = request.get("derivation").and_then(Value::as_str) {
+        if !derivation_is_well_formed(derivation) {
+            return Err(AskError::Invalid(format!(
+                "request: derivation {derivation:?} is neither a token name/N nor a digest"
+            )));
+        }
+    }
+    let Some(nonce) = request.get("nonce").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let reused = book.records.iter().any(|(_, h)| {
+        h.get("record_type") == Some(&json!(record_types::REQUEST))
+            && h.get("statement").and_then(|s| s.pointer("/request/nonce")) == Some(&json!(nonce))
+    });
+    if reused {
+        return Err(AskError::Invalid(format!(
+            "nonce {nonce:?} was already used by a request in this book"
+        )));
+    }
+    Ok(())
+}
+
+/// Go's `ValidDerivation` (profile §5.2), as `evidencebook::ask` checks it.
+fn derivation_is_well_formed(text: &str) -> bool {
+    let digest = text.len() == 64 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    digest
+        || text.split_once('/').is_some_and(|(name, version)| {
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_'))
+                && !version.is_empty()
+                && version.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
 /// When the waiting window of a request recorded at `committed_at` closes:
-/// the later of its `deadline` and `committed_at` plus the longer of `wait`
-/// and the crate's minimum. `None` when a time does not parse.
-pub fn window_closes(deadline: Option<&str>, committed_at: &str, wait: Duration) -> Option<String> {
+/// the later of its `deadline` and the crate's minimum after `committed_at`,
+/// in whole seconds, rounded up. It depends on the record alone, so a node
+/// that restarts reads the same close. `None` when a time does not parse.
+pub fn window_closes(deadline: Option<&str>, committed_at: &str) -> Option<String> {
     let parse = |t: &str| chrono::DateTime::parse_from_rfc3339(t).ok();
-    let minimum = Duration::from_secs(
-        evidencebook::ask::MINIMUM_ABSENCE_WINDOW_SECONDS
-            .try_into()
-            .unwrap_or(60),
-    );
-    let after =
-        parse(committed_at)?.to_utc() + chrono::Duration::from_std(wait.max(minimum)).ok()?;
-    // Whole seconds, rounded up, so the close is never before either bound.
+    let after = parse(committed_at)?.to_utc()
+        + chrono::Duration::seconds(evidencebook::ask::MINIMUM_ABSENCE_WINDOW_SECONDS);
     let ceil = |t: chrono::DateTime<chrono::Utc>| {
         let whole = t.timestamp() + i64::from(t.timestamp_subsec_nanos() > 0);
         chrono::DateTime::from_timestamp(whole, 0)
@@ -323,16 +363,19 @@ pub fn record_absence(
     evidencebook::ask::record_absence(&mut book, request_record_id, window_closes, "")
 }
 
-/// At start: seal `recorded_absence` for every recorded request with no
-/// outcome whose window (as [`window_closes`] computes it with `wait`) has
-/// closed by `now`. Returns how many were sealed; one that cannot be is
+/// At start, for every recorded request with no outcome: seal its
+/// `recorded_absence` when its window has closed by `now`, and return the
+/// rest, whose window is still open, for the caller to close
+/// (`mesh_evidence_bridge::absence_when_window_closes`). The stream each
+/// was sent on ended with the process that sent it, so no reply can arrive
+/// for any of them. Returns how many were sealed; one that cannot be is
 /// logged and left pending.
-pub fn seal_overdue_absences(capsules: &CapsuleState, now: &str, wait: Duration) -> usize {
+pub fn resume_asks(capsules: &CapsuleState, now: &str) -> (usize, Vec<Asked>) {
     let mut book = AskBook::open(capsules, now);
     let Some(now_t) = chrono::DateTime::parse_from_rfc3339(now).ok() else {
-        return 0;
+        return (0, Vec::new());
     };
-    let overdue: Vec<(String, String)> = book
+    let (overdue, open): (Vec<Asked>, Vec<Asked>) = book
         .records
         .iter()
         .filter(|(_, h)| h.get("record_type") == Some(&json!(record_types::REQUEST)))
@@ -343,21 +386,30 @@ pub fn seal_overdue_absences(capsules: &CapsuleState, now: &str, wait: Duration)
                 .get("statement")
                 .and_then(|s| s.pointer("/request/deadline"))
                 .and_then(Value::as_str);
-            let closes = window_closes(deadline, committed_at, wait)?;
-            (chrono::DateTime::parse_from_rfc3339(&closes).ok()? <= now_t)
-                .then(|| (id.clone(), closes))
+            Some(Asked {
+                record_id: id.clone(),
+                window_closes: window_closes(deadline, committed_at)?,
+            })
         })
-        .collect();
+        .partition(|asked| {
+            chrono::DateTime::parse_from_rfc3339(&asked.window_closes)
+                .is_ok_and(|closes| closes <= now_t)
+        });
     let mut sealed = 0;
-    for (id, closes) in overdue {
-        match evidencebook::ask::record_absence(&mut book, &id, &closes, "") {
+    for asked in overdue {
+        match evidencebook::ask::record_absence(
+            &mut book,
+            &asked.record_id,
+            &asked.window_closes,
+            "",
+        ) {
             Ok(_) => sealed += 1,
             Err(error) => {
-                tracing::warn!(%error, request_record = %id, "an overdue absence could not be sealed");
+                tracing::warn!(%error, request_record = %asked.record_id, "an overdue absence could not be sealed");
             }
         }
     }
-    sealed
+    (sealed, open)
 }
 
 #[cfg(test)]

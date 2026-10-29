@@ -435,18 +435,21 @@ pub(crate) async fn send_evidence_request(
                 &request,
                 &peer_id,
                 &crate::evidence_answer::now_utc(),
-                wait,
             )
             .map_err(|error| SendError::NotRecorded(error.to_string()))?;
             Some((capsules.clone(), asked))
         }
         _ => None,
     };
-    // How long the stream may stay open: to the window's close for a
-    // recorded ask, the transport's wait otherwise.
-    let listen = asked
+    // A recorded ask's window closes at one fixed instant, which bounds
+    // opening the stream and reading from it alike; anything else is bounded
+    // by the transport's wait.
+    let closes_at = asked
         .as_ref()
-        .map_or(wait, |(_, asked)| until(&asked.window_closes).max(wait));
+        .map(|(_, asked)| tokio::time::Instant::now() + until(&asked.window_closes));
+    let listen = closes_at.map_or(wait, |at| {
+        at.saturating_duration_since(tokio::time::Instant::now())
+    });
     let open_request = OpenMeshStreamRequest {
         stream_id: next_stream_id("evidence-request"),
         target_peer_id: peer_id.clone(),
@@ -459,68 +462,50 @@ pub(crate) async fn send_evidence_request(
         correlation_id: Some(next_stream_id("evidence-correlation")),
         metadata_json: None,
         expected_bytes: None,
-        idle_timeout_ms: Some(u64::try_from(listen.as_millis()).unwrap_or(u64::MAX)),
+        idle_timeout_ms: Some(u64::try_from(listen.max(wait).as_millis()).unwrap_or(u64::MAX)),
     };
-    let stream: LocalStream = match context.connect_mesh_stream(open_request).await {
-        Ok(stream) => stream,
-        Err(error) => {
-            if let Some((capsules, asked)) = asked {
-                tokio::spawn(absence_when_window_closes(capsules, asked));
-            }
-            return Err(SendError::NotOpened(error.to_string()));
-        }
-    };
-    let (mut read_half, mut write_half) = stream.into_split();
-    let sent = request_bytes.clone();
-    let write_and_read = async move {
-        write_half.write_all(&sent).await?;
-        write_half.shutdown().await?;
-        // Bounded: the peer's answer is peer-controlled bytes too.
-        read_to_end_bounded(&mut read_half, "peer evidence-request response").await
-    };
-    let read = |result: Result<std::io::Result<Vec<u8>>, tokio::time::error::Elapsed>| {
-        let bytes = result
-            .map_err(|_| SendError::NoAnswer(String::new()))?
-            .map_err(|error| SendError::NoAnswer(format!(": {error}")))?;
-        serde_json::from_slice::<serde_json::Value>(&bytes)
-            .map_err(|error| SendError::Malformed(error.to_string()))
-    };
-    let Some((capsules, asked)) = asked else {
-        let answer = read(tokio::time::timeout(wait, write_and_read).await)?;
+    let Some(((capsules, asked), closes_at)) = asked.zip(closes_at) else {
+        let stream: LocalStream = context
+            .connect_mesh_stream(open_request)
+            .await
+            .map_err(|error| SendError::NotOpened(error.to_string()))?;
+        let answer = read_answer(
+            tokio::time::timeout(wait, write_and_read(stream, request_bytes.clone())).await,
+        )?;
         return Ok(Answered {
             sent: request_bytes,
             answer,
             verification: None,
         });
     };
+    let stream: LocalStream =
+        match tokio::time::timeout_at(closes_at, context.connect_mesh_stream(open_request)).await {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(error)) => {
+                tokio::spawn(absence_when_window_closes(capsules, asked));
+                return Err(SendError::NotOpened(error.to_string()));
+            }
+            Err(_) => {
+                tokio::spawn(absence_when_window_closes(capsules, asked));
+                return Err(SendError::NotOpened(
+                    "no stream before the window closed".into(),
+                ));
+            }
+        };
     // The window outlives the caller's wait: the rest runs on its own, so a
     // reply after the caller has been told "no answer yet" is still sealed.
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let sent = request_bytes.clone();
     let pending = asked.record_id.clone();
     let closes = asked.window_closes.clone();
-    tokio::spawn(async move {
-        match read(tokio::time::timeout(listen, write_and_read).await) {
-            Ok(answer) => {
-                let verification = verify_announced(&sent, &answer, &peer_id);
-                if let Err(error) = crate::ask_book::record_response(
-                    &capsules,
-                    &asked.record_id,
-                    &evidence_request::digest::request_digest(&sent),
-                    &answer,
-                    &verification,
-                    &crate::evidence_answer::now_utc(),
-                ) {
-                    tracing::warn!(%error, request_record = %asked.record_id, "a reply could not be recorded");
-                }
-                let _ = tx.send(Ok((answer, verification)));
-            }
-            Err(error) => {
-                let _ = tx.send(Err(error));
-                absence_when_window_closes(capsules, asked).await;
-            }
-        }
-    });
+    tokio::spawn(settle_ask(
+        capsules,
+        asked,
+        peer_id,
+        request_bytes.clone(),
+        write_and_read(stream, request_bytes.clone()),
+        closes_at,
+        tx,
+    ));
     match tokio::time::timeout(wait, rx).await {
         Ok(Ok(Ok((answer, verification)))) => Ok(Answered {
             sent: request_bytes,
@@ -534,6 +519,65 @@ pub(crate) async fn send_evidence_request(
     }
 }
 
+/// Write `sent` on `stream`, half-close it, and read the reply to its end.
+async fn write_and_read(stream: LocalStream, sent: Vec<u8>) -> std::io::Result<Vec<u8>> {
+    let (mut read_half, mut write_half) = stream.into_split();
+    write_half.write_all(&sent).await?;
+    write_half.shutdown().await?;
+    // Bounded: the peer's answer is peer-controlled bytes too.
+    read_to_end_bounded(&mut read_half, "peer evidence-request response").await
+}
+
+/// What a bounded read came to: the peer's JSON, or why there is none.
+fn read_answer(
+    result: Result<std::io::Result<Vec<u8>>, tokio::time::error::Elapsed>,
+) -> Result<serde_json::Value, SendError> {
+    let bytes = result
+        .map_err(|_| SendError::NoAnswer(String::new()))?
+        .map_err(|error| SendError::NoAnswer(format!(": {error}")))?;
+    serde_json::from_slice(&bytes).map_err(|error| SendError::Malformed(error.to_string()))
+}
+
+/// The answer to a recorded ask, or its error, as [`settle_ask`] hands it
+/// to the caller still waiting.
+type Settled = Result<(serde_json::Value, serde_json::Value), SendError>;
+
+/// Read the reply to the recorded `asked` from `exchange` until the window
+/// closes at `closes_at`. A reply is checked under the peer's announced key
+/// and sealed as the response; none (or one that is not JSON) is sealed as
+/// the absence once the window has closed. The caller hears through `tx`,
+/// if it is still listening.
+async fn settle_ask(
+    capsules: std::sync::Arc<crate::capsule_emit::CapsuleState>,
+    asked: crate::ask_book::Asked,
+    peer_id: String,
+    sent: Vec<u8>,
+    exchange: impl std::future::Future<Output = std::io::Result<Vec<u8>>>,
+    closes_at: tokio::time::Instant,
+    tx: tokio::sync::oneshot::Sender<Settled>,
+) {
+    match read_answer(tokio::time::timeout_at(closes_at, exchange).await) {
+        Ok(answer) => {
+            let verification = verify_announced(&sent, &answer, &peer_id);
+            if let Err(error) = crate::ask_book::record_response(
+                &capsules,
+                &asked.record_id,
+                &evidence_request::digest::request_digest(&sent),
+                &answer,
+                &verification,
+                &crate::evidence_answer::now_utc(),
+            ) {
+                tracing::warn!(%error, request_record = %asked.record_id, "a reply could not be recorded");
+            }
+            let _ = tx.send(Ok((answer, verification)));
+        }
+        Err(error) => {
+            let _ = tx.send(Err(error));
+            absence_when_window_closes(capsules, asked).await;
+        }
+    }
+}
+
 /// How long from now until `at` (RFC 3339), zero once it has passed.
 fn until(at: &str) -> Duration {
     chrono::DateTime::parse_from_rfc3339(at)
@@ -543,7 +587,7 @@ fn until(at: &str) -> Duration {
 }
 
 /// Wait for the ask's window to close, then seal its recorded absence.
-async fn absence_when_window_closes(
+pub(crate) async fn absence_when_window_closes(
     capsules: std::sync::Arc<crate::capsule_emit::CapsuleState>,
     asked: crate::ask_book::Asked,
 ) {
@@ -689,7 +733,10 @@ pub struct MeshEvidenceRequestArgs {
     /// is also signed (`requester_auth`): its `audience` is set to `peer_id`,
     /// a `nonce` and a `deadline` are added unless it carries them, then
     /// `requester_auth` over the whole map. The responder answers what
-    /// depends on who asks only to a signed request addressed to it.
+    /// depends on who asks only to a signed request addressed to it. It is
+    /// sealed in this node's book of asks before it is sent
+    /// (`crate::ask_book`); a request that is not well formed, or reuses a
+    /// nonce, is refused there and never sent.
     pub request: serde_json::Value,
     /// Check what comes back against the peer's announced key
     /// (`CAPSULES_PEER_KEYS`). **On unless the caller turns it off**
@@ -1263,5 +1310,105 @@ mod tests {
         assert!(requested_adjudication("peer", &request).is_none());
         let one_half = serde_json::json!({"subject": {"kind": "adjudicate"}, "halves": [{"capsule": {"capsule_id": "a"}}]});
         assert!(requested_adjudication("peer", &one_half).is_none());
+    }
+
+    /// A recorded ask, its window closing `window` from now, on a fresh
+    /// ledger.
+    fn recorded_ask(
+        window: Duration,
+    ) -> (
+        std::sync::Arc<crate::capsule_emit::CapsuleState>,
+        crate::ask_book::Asked,
+        tokio::time::Instant,
+        Vec<u8>,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let capsules = std::sync::Arc::new(
+            crate::capsule_emit::CapsuleState::open(dir.path(), "node-under-test").unwrap(),
+        );
+        let request =
+            serde_json::json!({"subject": {"checkpoints": null}, "coverage": {"min_freshness": 1}});
+        let asked = crate::ask_book::record_request(
+            &capsules,
+            &request,
+            "peer",
+            &crate::evidence_answer::now_utc(),
+        )
+        .unwrap();
+        let sent = evidence_request::jcs::to_string(&request)
+            .unwrap()
+            .into_bytes();
+        (
+            capsules,
+            asked,
+            tokio::time::Instant::now() + window,
+            sent,
+            dir,
+        )
+    }
+
+    fn record_types(capsules: &crate::capsule_emit::CapsuleState) -> Vec<serde_json::Value> {
+        crate::evidence_panes::read_capsule_records(capsules.ledger_dir())
+            .into_iter()
+            .filter_map(|r| {
+                r.pointer("/model_attestation/compute_attestation")?
+                    .get(crate::ask_book::BLOCK)?
+                    .get("record_type")
+                    .cloned()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_reply_after_the_callers_wait_but_inside_the_window_is_sealed() {
+        let (capsules, asked, closes_at, sent, _dir) = recorded_ask(Duration::from_secs(60));
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        drop(rx); // the caller has already been told "no answer yet".
+        let reply = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok(br#"{"reason":"policy_declined"}"#.to_vec())
+        };
+        settle_ask(
+            capsules.clone(),
+            asked,
+            "peer".into(),
+            sent.clone(),
+            reply,
+            closes_at,
+            tx,
+        )
+        .await;
+        assert_eq!(
+            record_types(&capsules),
+            ["evidence_request", "evidence_response"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reply_after_the_window_closes_is_never_read() {
+        let (capsules, asked, closes_at, sent, _dir) = recorded_ask(Duration::from_millis(20));
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let late = async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            Ok(br#"{"artifact":"AAAA"}"#.to_vec())
+        };
+        // The task goes on to wait out the recorded window for the absence.
+        let task = tokio::spawn(settle_ask(
+            capsules.clone(),
+            asked,
+            "peer".into(),
+            sent,
+            late,
+            closes_at,
+            tx,
+        ));
+        let settled = rx.await.expect("the caller hears");
+        assert!(
+            matches!(settled, Err(SendError::NoAnswer(_))),
+            "{settled:?}"
+        );
+        task.abort();
+        assert_eq!(record_types(&capsules), ["evidence_request"], "no response");
     }
 }
