@@ -1,4 +1,5 @@
 mod adjudication_records;
+mod admission;
 // Library-shaped: the split-stage verifier, the frame fold and a few record
 // kinds are exercised by their own tests and the split-stage fixtures, not
 // yet by a live path of this binary.
@@ -1380,6 +1381,14 @@ async fn main() -> anyhow::Result<()> {
     let capsules_for_handler = capsules.clone();
     // Local routing choices seal onto the same single-writer chain.
     let capsules_for_routing_choice = capsules.clone();
+    // Basic admission (loop step 4): the operator's lists, read once here.
+    // Unreadable settings fail closed inside `Admission`, never stop the
+    // plugin (under a `best_effort` grant a host routes to every peer past a
+    // plugin it has no manifest for).
+    let peer_admission = Arc::new(admission::Admission::new(
+        admission::Policy::from_settings(),
+        capsules.clone(),
+    ));
     // the record-push responder's
     // citing-record seal writes to the SAME single-writer ledger -- one
     // `CapsuleState`, shared by Arc, never a second writer.
@@ -1599,6 +1608,7 @@ async fn main() -> anyhow::Result<()> {
             })
         })
     })
+    .customize(move |plugin| with_admission_hook(plugin, peer_admission))
     .customize(move |plugin| {
         // This node's own key, announced through the host
         // (`peer_keys::own`), and peers' keys for this plugin, when the host
@@ -1633,6 +1643,31 @@ async fn main() -> anyhow::Result<()> {
     .build();
 
     PluginRuntime::run(plugin).await
+}
+
+/// Declare the admission hook and answer it (`admission`). The declaration
+/// grants nothing: the host calls the hook only when the operator's grant
+/// for this plugin allows admission.
+fn with_admission_hook(
+    plugin: mesh_llm_plugin::SimplePlugin,
+    admission: Arc<admission::Admission>,
+) -> mesh_llm_plugin::SimplePlugin {
+    let mut manifest = mesh_llm_plugin::Plugin::manifest(&plugin).unwrap_or_default();
+    manifest.openai_exchange_hook = Some(Box::new(admission::hook_manifest()));
+    plugin
+        .with_manifest(manifest)
+        .with_openai_exchange_handler(move |_handler, event, _context| {
+            let admission = admission.clone();
+            // Seal on `spawn_blocking`, like every other seal path: the emit
+            // holds the std ledger mutex across two `sync_all()`s.
+            Box::pin(async move {
+                Ok(
+                    tokio::task::spawn_blocking(move || admission.answer(&event))
+                        .await
+                        .unwrap_or_else(|_| admission::seal_failed()),
+                )
+            })
+        })
 }
 
 /// Ask the host to announce this node's key (`peer_keys::own::announce`),

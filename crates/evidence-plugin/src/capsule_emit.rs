@@ -1827,6 +1827,48 @@ impl CapsuleState {
             peer_commitment: crate::producer::capsule::peer_commitment(peer_id, salt),
         })
     }
+
+    /// Seal one admission decision (`crate::admission`) onto the same
+    /// single-writer chain: a local record whose one block is the decision's
+    /// facts, which name the peer only by commitment.
+    pub fn emit_admission_decision(
+        &self,
+        block: serde_json::Map<String, Value>,
+    ) -> anyhow::Result<EmittedCapsule> {
+        let mut ledger = self
+            .ledger
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let chain = ledger
+            .chain_head()
+            .map(|parent| crate::producer::capsule::ChainLink {
+                parent_capsule_id: parent.to_string(),
+                relation: crate::producer::capsule::CHAIN_RELATION_FOLLOWS.to_string(),
+            });
+        let action_id = format!(
+            "mesh-poc/admission-decision/{}",
+            crate::producer::capsule::fresh_store_nonce()
+        );
+        let mut blocks = serde_json::Map::new();
+        blocks.insert(crate::admission::BLOCK.into(), Value::Object(block));
+        let capsule = crate::producer::capsule::seal_local_record(
+            action_id,
+            "n/a-admission-decision",
+            blocks,
+            None,
+            chain,
+            &self.keys.signing_key,
+        )?;
+        let capsule_id = capsule["capsule_id"]
+            .as_str()
+            .expect("seal_local_record always sets capsule_id")
+            .to_string();
+        self.append_local(&mut ledger, &capsule, &capsule_id)?;
+        Ok(EmittedCapsule {
+            capsule_id,
+            capsule,
+        })
+    }
 }
 
 /// What [`CapsuleState::emit_local_routing_choice`] hands back to the host's
