@@ -52,7 +52,7 @@ const RUNTIME = `
     setTimeout(function(){URL.revokeObjectURL(url)},0)});
   var kind=document.body.getAttribute('data-kind');
   function show(verdict){
-    var status=el('p',verdict.verified?'ok':'bad',verdict.verified?'Checked when this page opened: this is the node\\u2019s own answer, unchanged.':verdict.kind==='refused'?'The node declined to answer.':'This page could not check its answer, so it shows none of it.');
+    var status=el('p',verdict.verified?'ok':'bad',verdict.verified?'Checked when this page opened: the history card matches its digest, and every checkpoint is signed by key '+verdict.keyId+' and extends the one before. To know this is the node\\u2019s, compare that key with the node\\u2019s published commitment.':verdict.kind==='refused'?'The node declined to answer.':'This page could not check its answer, so it shows none of it.');
     out.appendChild(status);
     if(verdict.kind==='refused'&&verdict.reason)out.appendChild(el('p','muted','Its reason: '+verdict.reason));
     var h=el('h2',null,'What was checked');out.appendChild(h);
@@ -66,7 +66,10 @@ const RUNTIME = `
       out.appendChild(t)}}
   if(kind==='settlement-refusal'){
     var doc;try{doc=JSON.parse(text)}catch(e){doc=null}
-    out.appendChild(el('p','warn',doc&&doc.words?doc.words:'This page holds a refusal it could not read.'));
+    if(doc&&doc.source==='dashboard'&&doc.reason==='no_terms_pack'&&typeof doc.words==='string'){
+      out.appendChild(el('p','warn','No report: this page holds no evidence from the node.'));
+      out.appendChild(el('p',null,doc.words))}
+    else out.appendChild(el('p','bad','This page could not read its own note, so it shows nothing.'));
     return}
   CapsulesSavedPage.verifyHistoryReply(text).then(show,function(e){show({kind:'unreadable',verified:false,checks:[{status:'fail',detail:'The check itself failed: '+String(e&&e.message||e)}],checkpoints:[]})});
 })();
@@ -78,9 +81,11 @@ type Shell = {
   intro: string
   bundleText: string
   jsonName: string
+  /** What the saved bytes are, in a sentence. */
+  inside: string
 }
 
-function shell({ title, kind, intro, bundleText, jsonName }: Shell): string {
+function shell({ title, kind, intro, bundleText, jsonName, inside }: Shell): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -94,9 +99,9 @@ function shell({ title, kind, intro, bundleText, jsonName }: Shell): string {
 <h1>${escapeHtml(title)}</h1>
 <p class="muted">${escapeHtml(intro)}</p>
 <div id="result"></div>
-<h2>The file inside</h2>
-<p class="muted">This page carries the exact bytes below. Save them to check them with your own tools.</p>
-<p><button id="save-json" type="button">Save the JSON</button> <code>${escapeHtml(jsonName)}</code></p>
+<h2>${kind === 'history' ? 'The file inside' : 'The note inside'}</h2>
+<p class="muted">${escapeHtml(inside)}</p>
+<p><button id="save-json" type="button">${kind === 'history' ? 'Save the JSON' : 'Save the note'}</button> <code>${escapeHtml(jsonName)}</code></p>
 </main>
 <script type="application/octet-stream" id="${BUNDLE_ELEMENT_ID}" data-encoding="base64">${toBase64(bundleText)}</script>
 ${kind === 'history' ? `<script>${inlineScript(verifierSource)}</script>` : ''}
@@ -123,7 +128,8 @@ export function historyPage(replyText: string, savedAt: string): SavedPage {
         savedAt +
         '.',
       bundleText: replyText,
-      jsonName: `${name}.json`
+      jsonName: `${name}.json`,
+      inside: 'This page carries the exact bytes the node served, below. Save them to check them with your own tools.'
     })
   }
 }
@@ -137,7 +143,7 @@ export const SETTLEMENT_REFUSAL_WORDS =
  *  (action-state-group/evidencebook-skills#71) the node gives the refusal. */
 export function settlementPage(savedAt: string): SavedPage {
   const name = `mesh-settlement-${stamp(savedAt)}`
-  const refusal = `${JSON.stringify({ schema: 'mesh-settlement-report-refusal/1', reason: 'no_terms_pack', words: SETTLEMENT_REFUSAL_WORDS })}\n`
+  const refusal = `${JSON.stringify({ source: 'dashboard', reason: 'no_terms_pack', words: SETTLEMENT_REFUSAL_WORDS })}\n`
   return {
     fileName: `${name}.html`,
     html: shell({
@@ -145,7 +151,8 @@ export function settlementPage(savedAt: string): SavedPage {
       kind: 'settlement-refusal',
       intro: 'Saved ' + savedAt + '.',
       bundleText: refusal,
-      jsonName: `${name}.json`
+      jsonName: `${name}.json`,
+      inside: 'Written by this dashboard when you saved the page. It is not from the node, and it holds no evidence.'
     })
   }
 }

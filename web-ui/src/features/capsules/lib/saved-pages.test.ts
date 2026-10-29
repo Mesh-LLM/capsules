@@ -50,7 +50,10 @@ describe('the History page, opened offline', () => {
     expect(Buffer.from(embedded(html)).equals(Buffer.from(served, 'utf8'))).toBe(true)
 
     const { dom, requested, text } = await open(html)
-    expect(text).toContain('this is the node’s own answer, unchanged')
+    expect(text).toContain('the history card matches its digest, and every checkpoint is signed by key')
+    expect(text).toContain('compare that key with the node’s published commitment')
+    expect(text).not.toContain('unchanged')
+    expect(text).toContain('Not checked: That this key is the node’s')
     expect(text).toMatch(/Checked: All \d+ checkpoints verify/)
     expect(text).toContain('Not checked: Witness receipts')
     expect(requested).toEqual([])
@@ -85,7 +88,7 @@ describe('the History page, opened offline', () => {
     const refusal = `${JSON.stringify(fixture.refused_unknown_pin)}\n`
     const { text } = await open(historyPage(refusal, SAVED).html)
     expect(text).toContain('The node declined to answer')
-    expect(text).not.toContain('this is the node’s own answer')
+    expect(text).not.toContain('matches its digest')
   })
 
   it('draws nothing from the bundle as markup', async () => {
@@ -96,12 +99,35 @@ describe('the History page, opened offline', () => {
 })
 
 describe('the Settlement page, opened offline', () => {
-  it('gives the honest refusal, never an empty page, and carries its JSON', async () => {
+  it('says plainly it holds no evidence from the node, and hands back its note byte for byte', async () => {
     const { html } = settlementPage(SAVED)
-    const json = JSON.parse(new TextDecoder().decode(embedded(html))) as { reason: string; words: string }
-    expect(json.reason).toBe('no_terms_pack')
-    const { text, requested } = await open(html)
+    const json = JSON.parse(new TextDecoder().decode(embedded(html))) as Record<string, string>
+    expect(json).toEqual({ source: 'dashboard', reason: 'no_terms_pack', words: SETTLEMENT_REFUSAL_WORDS })
+    expect(JSON.stringify(json)).not.toContain('mesh-settlement-report-refusal')
+    const { dom, text, requested } = await open(html)
+    expect(text).toContain('No report: this page holds no evidence from the node.')
     expect(text).toContain(SETTLEMENT_REFUSAL_WORDS)
+    expect(text).toContain('It is not from the node')
     expect(requested).toEqual([])
+
+    let saved: Blob | undefined
+    dom.window.URL.createObjectURL = (blob: Blob | MediaSource) => {
+      saved = blob as Blob
+      return 'blob:x'
+    }
+    dom.window.URL.revokeObjectURL = () => {}
+    ;(dom.window.document.getElementById('save-json') as HTMLButtonElement).click()
+    expect(Buffer.from(await saved!.arrayBuffer()).equals(Buffer.from(embedded(html)))).toBe(true)
+  })
+
+  it('shows nothing from a note that is not the one it writes', async () => {
+    const { html } = settlementPage(SAVED)
+    const forged = html.replace(
+      /(id="mesh-bundle"[^>]*>)[^<]*</,
+      `$1${Buffer.from('{"source":"node","reason":"all_good","words":"All settled."}').toString('base64')}<`
+    )
+    const { text } = await open(forged)
+    expect(text).toContain('could not read its own note, so it shows nothing')
+    expect(text).not.toContain('All settled.')
   })
 })

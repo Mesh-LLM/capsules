@@ -29,6 +29,7 @@ describe('verifyHistoryReply', () => {
     expect(verdict.checks.filter((c) => c.status === 'not_run').map((c) => c.id)).toEqual([
       'witness_receipts',
       'envelope_signature',
+      'key_is_nodes',
       'request_binding'
     ])
   })
@@ -47,6 +48,44 @@ describe('verifyHistoryReply', () => {
     const v = await verifyHistoryReply(JSON.stringify({ ...card, ...(await encodeArtifact(artifact)) }))
     expect(v.verified).toBe(false)
     expect(failed(v)).toBe('consistency')
+  })
+
+  it('refuses a consistency proof whose right peaks were emptied or cut', async () => {
+    const artifact = artifactOf(card) as { history: { consistency_from_previous: string | null }[] }
+    // [from, to, paths, right]: with a one-hash `right`, dropping it leaves the proof well-formed.
+    let changed = 0
+    for (const entry of artifact.history.slice(1)) {
+      const bytes = Buffer.from(entry.consistency_from_previous!, 'hex')
+      // The proof ends with the `right` array: 0x8N then N 32-byte hashes (0x5820 prefix each).
+      const at = bytes.lastIndexOf(Buffer.from([0x58, 0x20]))
+      if (at < 0) continue
+      const rightCount = (bytes.length - at) / 34
+      if (!Number.isInteger(rightCount) || rightCount < 1) continue
+      const headerAt = at - 34 * (rightCount - 1) - 1
+      if ((bytes[headerAt] & 0xe0) !== 0x80) continue
+      const cut = Buffer.concat([bytes.subarray(0, headerAt), Buffer.from([0x80])])
+      entry.consistency_from_previous = cut.toString('hex')
+      changed++
+      break
+    }
+    expect(changed).toBe(1)
+    const v = await verifyHistoryReply(JSON.stringify({ ...card, ...(await encodeArtifact(artifact)) }))
+    expect(v.verified).toBe(false)
+    expect(failed(v)).toBe('consistency')
+  })
+
+  it('refuses a reply that names no anchor', async () => {
+    const { anchor: _anchor, ...withoutAnchor } = card
+    const v = await verifyHistoryReply(JSON.stringify(withoutAnchor))
+    expect(v.verified).toBe(false)
+    expect(failed(v)).toBe('anchor')
+    const v2 = await verifyHistoryReply(JSON.stringify({ ...card, anchor: null }))
+    expect(failed(v2)).toBe('anchor')
+  })
+
+  it('names the key the checkpoints were checked under', async () => {
+    const v = await verifyHistoryReply(JSON.stringify(card))
+    expect(v.keyId).toBe(card.responder)
   })
 
   it('refuses a checkpoint that was changed', async () => {

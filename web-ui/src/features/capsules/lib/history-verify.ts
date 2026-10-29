@@ -15,9 +15,13 @@
 // those). A page never calls those checks passed.
 //
 // This file is bundled twice: into the Evidence page (tests) and, as an IIFE,
-// into every saved page (`history-page.ts`), so it imports only the cll
+// into every saved page (`saved-pages.ts`), so it imports only the cll
 // browser build and uses no DOM.
-import { checkpointMetadata, verifyCheckpoint, verifyConsistency } from '@cll-browser'
+import { checkpointMetadata, leafCount, verifyCheckpoint, verifyConsistency } from '@cll-browser'
+
+/** The most checkpoints a node puts in one card (`MAX_ANSWER_CHECKPOINTS`,
+ *  crates/evidence-plugin/src/evidence_answer.rs): a longer list is not one. */
+const MAX_CHECKPOINTS = 1024
 
 export type CheckStatus = 'pass' | 'fail' | 'not_run'
 
@@ -34,6 +38,9 @@ export type HistoryVerdict = {
   checkpoints: { size: number; time: string }[]
   /** The refusal's reason, for a refusal. */
   reason?: string
+  /** The key every checkpoint was checked under: the one the reply names as
+   *  its responder. Whether it is the node's is not checked. */
+  keyId?: string
 }
 
 /** The checks this page cannot run, always listed, whatever else passed. */
@@ -43,6 +50,11 @@ export const NOT_RUN: readonly Check[] = [
     id: 'envelope_signature',
     status: 'not_run',
     detail: 'The signature over the reply itself was not checked: this page has no verifier for it.'
+  },
+  {
+    id: 'key_is_nodes',
+    status: 'not_run',
+    detail: 'That this key is the node’s was not checked: compare it with the node’s published commitment.'
   },
   {
     id: 'request_binding',
@@ -118,6 +130,26 @@ function decodeCbor(bytes: Uint8Array): Cbor | null {
   }
 }
 
+/** How many peaks of the MMR of `newSize` nodes hold a leaf of the MMR of
+ *  `oldSize` nodes: peaks run from the largest subtree down, each covering
+ *  the next run of leaves. */
+function peaksCoveringOldLeaves(oldSize: bigint, newSize: bigint): number | null {
+  const oldLeaves = leafCount(oldSize)
+  let remaining = leafCount(newSize)
+  if (oldLeaves === undefined || remaining === undefined) return null
+  let start = 0n
+  let covering = 0
+  for (let bit = 62n; bit >= 0n; bit--) {
+    const span = 1n << bit
+    if (remaining & span) {
+      if (start < oldLeaves) covering++
+      start += span
+      remaining -= span
+    }
+  }
+  return covering
+}
+
 const isHashes = (value: Cbor | undefined): value is Uint8Array[] =>
   Array.isArray(value) && value.every((h) => h instanceof Uint8Array && h.length === 32)
 
@@ -180,7 +212,7 @@ export async function verifyHistoryReply(replyText: string): Promise<HistoryVerd
     artifact = null
   }
   const history = artifact && Array.isArray(artifact.history) ? artifact.history : null
-  if (!artifact || !history || history.length === 0 || history.length > 1024) {
+  if (!artifact || !history || history.length === 0 || history.length > MAX_CHECKPOINTS) {
     return fail('card', 'The artifact is not a history card.')
   }
   if (artifact.derivation !== 'history_card/1' || reply.derivation !== 'history_card/1') {
@@ -236,8 +268,16 @@ export async function verifyHistoryReply(replyText: string): Promise<HistoryVerd
     }
     // The proof's `right` peaks are the new peaks no old peak folds into: the
     // tail of the signed checkpoint's own peaks, never anything else.
+    // How many is fixed by the sizes: the new peaks that cover no old leaf.
+    const covering = peaksCoveringOldLeaves(prev.size, next.size)
+    if (covering === null) return fail('consistency', `Checkpoint ${i + 1} has a size no log can have.`)
+    const expectedRight = next.peaks.length - covering
     const tail = next.peaks.slice(next.peaks.length - right.length)
-    if (right.length > next.peaks.length || !right.every((h, k) => bytesToHex(h) === bytesToHex(tail[k]))) {
+    if (
+      right.length !== expectedRight ||
+      right.length > next.peaks.length ||
+      !right.every((h, k) => bytesToHex(h) === bytesToHex(tail[k]))
+    ) {
       return fail('consistency', `The proof for checkpoint ${i + 1} names peaks the checkpoint does not have.`)
     }
     const oldRoot = hexToBytes(prev.root)
@@ -263,7 +303,7 @@ export async function verifyHistoryReply(replyText: string): Promise<HistoryVerd
 
   const last = links[links.length - 1]
   const anchor = object(reply.anchor)
-  if (artifact.anchor !== last.digest || (anchor && anchor.digest !== last.digest)) {
+  if (artifact.anchor !== last.digest || !anchor || anchor.digest !== last.digest) {
     return fail('anchor', 'The last checkpoint is not the anchor the answer names.')
   }
   if (artifact.evidence_stream !== last.logId) return fail('anchor', 'The answer names another log than its checkpoints.')
@@ -273,6 +313,7 @@ export async function verifyHistoryReply(replyText: string): Promise<HistoryVerd
     kind: 'answered',
     verified: true,
     checks: [...checks, ...NOT_RUN],
-    checkpoints: links.map((l) => ({ size: Number(l.size), time: l.time }))
+    checkpoints: links.map((l) => ({ size: Number(l.size), time: l.time })),
+    keyId: last.keyId
   }
 }

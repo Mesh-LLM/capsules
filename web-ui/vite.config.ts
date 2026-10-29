@@ -86,7 +86,7 @@ export default defineConfig({
     alias: {
       '@': path.resolve(dirname, './src'),
       // The cll package's `browser` condition, named directly: the saved History
-      // page bundles the same file (history-page.ts), and a test under node
+      // page bundles the same file (saved-pages.ts), and a test under node
       // must not pick the package's node build.
       '@cll-browser': cllBrowser
     }

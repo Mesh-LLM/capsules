@@ -71,9 +71,16 @@ export async function fetchDisclosurePreimage(capsuleId: string): Promise<Disclo
 /** What this node answers a stranger who asks for its history: the reply's
  *  bytes as text, unchanged, for the History page (`saved-pages.ts`). */
 export async function fetchServedHistory(): Promise<{ replyText: string; outcome: 'answered' | 'refused' }> {
-  const body = await getPluginJson<{ reply?: unknown; outcome?: unknown }>(PLUGIN_ROUTES.historyPage)
+  const body = await getPluginJson<{ reply?: unknown; outcome?: unknown; node_key_id?: unknown }>(PLUGIN_ROUTES.historyPage)
   if (typeof body.reply !== 'string' || (body.outcome !== 'answered' && body.outcome !== 'refused')) {
     throw new Error('this node did not give its history')
+  }
+  // A card signed under another key is not this node's: save nothing.
+  if (body.outcome === 'answered') {
+    const responder = (JSON.parse(body.reply) as { responder?: unknown }).responder
+    if (typeof body.node_key_id !== 'string' || responder !== body.node_key_id) {
+      throw new Error('the history it gave is signed under another key')
+    }
   }
   return { replyText: body.reply, outcome: body.outcome }
 }

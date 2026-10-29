@@ -31,14 +31,17 @@ pub const FORM_HISTORY_CARD: &str = "history_card/1";
 /// This node's answer to a stranger asking for its history card.
 pub fn served(capsules: &CapsuleState, node_id: Option<&str>) -> Result<Value, String> {
     let now = evidence_answer::now_utc();
+    crate::commitment::with_responder(capsules, &now, node_id, |responder, _| serve(responder))
+}
+
+/// [`served`], from the responder it would use.
+fn serve(responder: &evidence_answer::Responder<'_>) -> Result<Value, String> {
     let request = crate::doctor::probe_requests()
         .into_iter()
         .find(|(name, _)| *name == crate::doctor::PROBE_HISTORY_CARD)
         .map(|(_, bytes)| bytes)
         .expect("doctor asks for the history card");
-    let outcome = crate::commitment::with_responder(capsules, &now, node_id, |responder, _| {
-        evidence_answer::answer(&request, responder)
-    });
+    let outcome = evidence_answer::answer(&request, responder);
     let (label, bytes) = match &outcome {
         Outcome::Answered { .. } => ("answered", outcome.wire_bytes()),
         Outcome::Refused { .. } => ("refused", outcome.wire_bytes()),
@@ -51,7 +54,7 @@ pub fn served(capsules: &CapsuleState, node_id: Option<&str>) -> Result<Value, S
         "form": FORM_HISTORY_CARD,
         "outcome": label,
         "reply": reply,
-        "node_key_id": crate::commitment::key_id(capsules.signing_key()),
+        "node_key_id": crate::commitment::key_id(responder.signing_key),
     }))
 }
 
@@ -124,5 +127,40 @@ mod tests {
             crate::commitment::key_id(capsules.signing_key())
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The card a node gives a stranger is the answer the page embeds: it
+    /// names the node's own key as its responder, which the page shows and
+    /// the Evidence page compares with `node_key_id` before saving.
+    #[test]
+    fn a_node_with_checkpoints_serves_its_card_under_its_own_key() {
+        use crate::evidence_request_parity::{corpus_ledger_dir, NODE_KEY_SEED};
+        let key = ed25519_dalek::SigningKey::from_bytes(&NODE_KEY_SEED);
+        let dir = tempfile::tempdir().unwrap();
+        corpus_ledger_dir(dir.path(), &key);
+        let announced = std::collections::BTreeMap::new();
+        let replay = crate::requester_auth::ReplayCache::default();
+        let responder = evidence_answer::Responder {
+            ledger_dir: dir.path(),
+            signing_key: &key,
+            now: "2026-10-28T00:00:00Z",
+            history_segments: "none",
+            share_standard_history: false,
+            share_exchange_corroboration: false,
+            keys: crate::requester_auth::Keys {
+                announced: &announced,
+                configured: None,
+                own_key: None,
+            },
+            replay: &replay,
+            node_id: None,
+            policy_digest: None,
+        };
+        let served = serve(&responder).unwrap();
+        assert_eq!(served["outcome"], "answered");
+        let reply: Value = serde_json::from_str(served["reply"].as_str().unwrap()).unwrap();
+        assert_eq!(reply["derivation"], FORM_HISTORY_CARD);
+        assert_eq!(reply["responder"], served["node_key_id"]);
+        assert_eq!(served["node_key_id"], crate::commitment::key_id(&key));
     }
 }
