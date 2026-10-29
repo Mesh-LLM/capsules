@@ -16,8 +16,8 @@
 //! **Answered** only for `full_history` under an `expected_pin` naming an
 //! anchor whose checkpoint time is a period boundary (ISH §6.1 items 2 and
 //! 5, §8.4); anything else is `policy_declined`, the same for every
-//! requester. The checkpoint cadence cuts a checkpoint at each boundary
-//! (`crate::checkpoint_cadence`). It is Standard History
+//! requester. The checkpoint cadence appends one padding record and cuts a
+//! checkpoint at each boundary (`crate::checkpoint_cadence`). It is Standard History
 //! (`share_standard_history`), and when either member cannot be built the
 //! whole History is refused, never served with a member dropped.
 //!
@@ -77,7 +77,7 @@ pub const DEFINITION_DOCUMENT: &str = include_str!("../../../derivations/service
 /// SHA-256 over the RFC 8785 bytes of [`DEFINITION_DOCUMENT`]: the
 /// derivation's name on the wire, and the artifact's `derivation`.
 pub const DEFINITION_DIGEST: &str =
-    "eecfeed1ccfdf08b86b55748f91684d2fdaf138e71122912c7a50dc18fb62771";
+    "cbc96d800ad206791db7e0793b80a2720c1908468ba99692b739aa8e74aab2d8";
 
 /// SHA-256 over the RFC 8785 bytes of the definition's `period_policy`.
 pub const POLICY_DIGEST: &str = "0d4b28af7ebfca01a49c1ad59e74b7d9bff0e6712dd3478b4ee35b8ff6af5150";
@@ -500,13 +500,15 @@ fn check_cells(cells: &Value) -> Result<Vec<Cell>, String> {
         if models.iter().filter(|c| c.value.is_err()).count() == 1 {
             return Err(bad("a suppressed cell can be derived from the total"));
         }
-        if models.iter().all(|c| c.value.is_ok())
-            && models
-                .iter()
-                .filter_map(|c| c.value.as_ref().ok())
-                .sum::<u64>()
-                != total
-        {
+        // The published models never exceed the total, and are the total
+        // when none is suppressed. A sum past u64 is no count at all.
+        let published = models
+            .iter()
+            .filter_map(|c| c.value.as_ref().ok())
+            .try_fold(0u64, |sum, n| sum.checked_add(*n))
+            .ok_or_else(|| bad("the models do not add up to the total"))?;
+        let all_published = models.iter().all(|c| c.value.is_ok());
+        if published > total || (all_published && published != total) {
             return Err(bad("the models do not add up to the total"));
         }
     }
@@ -537,9 +539,15 @@ pub const DENY_LIST: [&str; 8] = [
 pub fn render(
     counts: &Counts,
     checkpoints: usize,
-    verified: usize,
-    receipts: usize,
+    receipts: &[crate::evidence_artifact::ReceiptStatus],
 ) -> Vec<String> {
+    use crate::evidence_artifact::ReceiptStatus;
+    let count = |status| receipts.iter().filter(|&&r| r == status).count();
+    let (verified, no_key, stub) = (
+        count(ReceiptStatus::Verified),
+        count(ReceiptStatus::NoKey),
+        count(ReceiptStatus::Stub),
+    );
     let mut lines = vec![
         "Every count is this node's own statement (self_reported). Checkpoint continuity, \
          witness receipts and signatures never show what was computed."
@@ -573,14 +581,30 @@ pub fn render(
         }
     }
     lines.push(format!("{checkpoints} checkpoints of this node's own log"));
-    lines.push(if receipts == 0 {
-        "witness receipts: no witness named".to_string()
+    if receipts.is_empty() {
+        lines.push("witness receipts: no witness named".to_string());
     } else {
-        format!(
-            "witness receipts counted: {verified} of {receipts} (a later rewrite of this log is \
-             detectable); the rest are under no configured witness key"
-        )
-    });
+        lines.push(format!(
+            "witness receipts counted: {verified} of {}",
+            receipts.len()
+        ));
+        if verified > 0 {
+            lines.push(
+                "a counted receipt means a later rewrite of its checkpoint is detectable"
+                    .to_string(),
+            );
+        }
+        if no_key > 0 {
+            lines.push(format!(
+                "{no_key} not counted: no witness key is configured for its witness"
+            ));
+        }
+        if stub > 0 {
+            lines.push(format!(
+                "{stub} not counted: a placeholder the witness never registered"
+            ));
+        }
+    }
     lines.push(
         "Not checked: anchor_inclusion, coverage_declaration_population, \
          coverage_declaration_commitment, and period_fixed (one History held)."

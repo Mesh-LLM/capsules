@@ -6,13 +6,14 @@
 
 - **The Service History (`service_history/1`), a Standard History under the inference-service
   history profile.** A requester asks for it by the digest of
-  `derivations/service-history-1.json` (`eecfeed1…`), for `full_history`, pinned to a checkpoint
+  `derivations/service-history-1.json` (`cbc96d80…`), for `full_history`, pinned to a checkpoint
   whose time is a period boundary: Mondays 00:00 UTC from 2026-01-05. The answer embeds this node's
   `history_card/1` artifact byte for byte, with its SHA-256, and counts the exchanges it served in
   each closed week, per model it states and in total. A count under 5 is withheld, and so is the
   smallest other model when the total would give a withheld one away. Latency is never counted.
   Any other subject, coverage or anchor is refused `policy_declined`, the same for every
-  requester. The checkpoint cadence now cuts a checkpoint at each boundary. It is Standard History
+  requester. The checkpoint cadence now appends one padding record and cuts a checkpoint
+  at each boundary. It is Standard History
   (`share_standard_history`), and this node checks a Service History it is sent, the card as a
   direct one and every period rule one History shows. The definition follows
   action-state-group/agent-action-capsule#315 at cfb2462 and the period policy Steven ruled under

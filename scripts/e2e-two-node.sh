@@ -245,16 +245,23 @@ wait_for 60 "the provider served its history card, verified under its key" histo
 # The provider's newest checkpoint is not at a Monday 00:00 UTC boundary, so
 # the Service History (docs/SERVICE-HISTORY.md) pinned to it is a signed
 # policy_declined, checked on the requester under the provider's key.
-SERVICE_HISTORY=eecfeed1ccfdf08b86b55748f91684d2fdaf138e71122912c7a50dc18fb62771
+SERVICE_HISTORY=cbc96d800ad206791db7e0793b80a2720c1908468ba99692b739aa8e74aab2d8
 service_history_declined() {
   local pin
   pin=$(jq -r '.verification.anchor' "$out/history-card.json")
   tool "$REQUESTER_CONSOLE" mesh_evidence_request "$(jq -cn --arg p "$provider_id" --arg pin "$pin" \
     --arg d "$SERVICE_HISTORY" '{peer_id: $p,
     request: {subject: {full_history: null}, coverage: {expected_pin: $pin}, derivation: $d}}')" \
-    > "$out/service-history.json" \
-    && jq -e '.verification.state == "refusal" and .verification.reason == "policy_declined"' \
+    > "$out/service-history.json" || return 1
+  # A run that spans Monday 00:00 UTC may have cut its pin at the boundary,
+  # where the History is answered instead.
+  if [ "$(date -u +%u%H)" = 100 ]; then
+    jq -e '.verification.state == "artifact" or .verification.reason == "policy_declined"' \
       "$out/service-history.json"
+  else
+    jq -e '.verification.state == "refusal" and .verification.reason == "policy_declined"' \
+      "$out/service-history.json"
+  fi
 }
 wait_for 60 "the provider declined a Service History off a period boundary, signed" service_history_declined
 

@@ -947,16 +947,11 @@ pub fn verify_response(
                 "checkpoints": v.checkpoints,
             });
             if let Some(history) = &v.history {
-                let verified = v
-                    .receipts
-                    .iter()
-                    .filter(|r| r.status == ReceiptStatus::Verified)
-                    .count();
+                let statuses: Vec<ReceiptStatus> = v.receipts.iter().map(|r| r.status).collect();
                 out["lines"] = json!(crate::service_history::render(
                     history,
                     v.checkpoints,
-                    verified,
-                    v.receipts.len(),
+                    &statuses
                 ));
             }
             if !witness_keys.is_empty() {

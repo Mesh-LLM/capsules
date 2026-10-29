@@ -88,7 +88,7 @@ fn the_definition_carries_the_standard_frame_and_nothing_else() {
     );
     assert_eq!(
         d["spec"],
-        json!("https://github.com/Mesh-LLM/capsules/blob/main/docs/SERVICE-HISTORY.md")
+        json!("https://github.com/Mesh-LLM/capsules-plugin/blob/main/docs/SERVICE-HISTORY.md")
     );
     assert!(d["excludes"]
         .as_array()
@@ -427,7 +427,11 @@ fn a_history_at_a_boundary_is_answered_and_checks() {
     assert!(lines.contains(
         &"2026-01-12T00:00:00Z to 2026-01-19T00:00:00Z: exchanges served, model b (as the provider states it): 12 (self_reported)"
     ));
+    // The corpus's receipts are stubs: none counted, none read as a witness.
+    assert!(lines.contains(&"witness receipts counted: 0 of 3"));
+    assert!(lines.contains(&"3 not counted: a placeholder the witness never registered"));
     let text = lines.join("\n").to_lowercase();
+    assert!(!text.contains("detectable"));
     for word in DENY_LIST {
         assert!(!text.contains(word), "{word}");
     }
@@ -594,6 +598,19 @@ fn a_tampered_history_does_not_check() {
             }),
         ),
         (
+            "a sum past u64",
+            Box::new(|a| {
+                periods(a)[1]["cells"][0] = cell(Some("a"), Ok(u64::MAX));
+            }),
+        ),
+        (
+            "a published model above the total",
+            Box::new(|a| {
+                periods(a)[0]["cells"][1] = cell(Some("b"), Ok(13));
+                periods(a)[0]["cells"][0] = cell(Some("a"), Err("below_floor"));
+            }),
+        ),
+        (
             "a count labelled peer_confirmed",
             Box::new(|a| {
                 periods(a)[1]["cells"][2]["label"] = json!("peer_confirmed");
@@ -663,4 +680,61 @@ fn an_anchor_off_a_boundary_does_not_check() {
     *times.last_mut().unwrap() = "2026-01-19T00:01:00Z".into();
     let why = check(&art, &times, &anchor).unwrap_err();
     assert!(why.starts_with("period_anchor"), "{why}");
+}
+
+#[test]
+fn a_card_digest_that_is_not_the_card_does_not_check() {
+    let (mut art, times, anchor) = checked_parts();
+    art.insert("history_card_digest".into(), json!("00".repeat(32)));
+    assert!(check(&art, &times, &anchor).is_err());
+}
+
+/// An answer re-signed by the node over `request`, with `artifact` and
+/// `verification`, as a requester would receive it.
+fn resigned(
+    request: &Value,
+    artifact: &Map<String, Value>,
+    verification: Vec<(String, Vec<u8>)>,
+) -> Value {
+    use evidence_request::envelope::{self, Anchor, Binding, EnvelopeParts};
+    let bytes = serde_json::to_vec(request).unwrap();
+    let req = evidence_request::request::parse_json(&bytes).unwrap();
+    let env = envelope::sign(
+        &bytes,
+        EnvelopeParts {
+            subject: req.subject,
+            derivation: req.derivation,
+            anchor: Anchor {
+                digest: artifact["anchor"].as_str().unwrap().to_string(),
+                freshness: None,
+            },
+            artifact: jcs::to_string(&Value::Object(artifact.clone()))
+                .unwrap()
+                .into_bytes(),
+            verification,
+            issued_at: NOW.into(),
+        },
+        &key(),
+    )
+    .unwrap();
+    serde_json::from_slice(&env.encode(Binding::Json)).unwrap()
+}
+
+#[test]
+fn an_answer_with_material_or_without_a_pin_is_not_evidence() {
+    let (art, _, anchor) = checked_parts();
+    let request = history_request(&anchor);
+    // The same artifact, re-signed with no change, checks.
+    let same = verified(&request, &resigned(&request, &art, Vec::new()));
+    assert_eq!(same["state"], json!("artifact"), "{same}");
+    let material = vec![(
+        "cll-checkpoint".to_string(),
+        checkpoints()[3].statement.clone(),
+    )];
+    let v = verified(&request, &resigned(&request, &art, material));
+    assert_eq!(v["state"], json!("not_evidence"), "{v}");
+    let mut fresh = request.clone();
+    fresh["coverage"] = json!({"min_freshness": 1});
+    let v = verified(&fresh, &resigned(&fresh, &art, Vec::new()));
+    assert_eq!(v["state"], json!("not_evidence"), "{v}");
 }

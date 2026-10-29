@@ -12,7 +12,7 @@ cfb2462, cited here as ISH). Section numbers below are that document's.
 ## Identifier
 
 - **A request names it by the digest of its definition:**
-  `eecfeed1ccfdf08b86b55748f91684d2fdaf138e71122912c7a50dc18fb62771`. That is SHA-256 over the RFC
+  `cbc96d800ad206791db7e0793b80a2720c1908468ba99692b739aa8e74aab2d8`. That is SHA-256 over the RFC
   8785 bytes of `service-history-1.json`.
 - `service_history/1` is the document's name, not a token. A request naming it is refused
   `derivation_unsupported`.
@@ -47,8 +47,10 @@ Its digest, which the counts name, is
   - To find such a pin, ask for `history_card/1` and take a checkpoint whose `timestamp` is a
     boundary. Any boundary checkpoint is answered, not only the newest.
   - The node's checkpoint cadence cuts a checkpoint one second after each boundary, so its
-    minute-granular time is the boundary. If nothing was written since the last checkpoint,
-    nothing is cut, and that boundary has no anchor.
+    minute-granular time is the boundary. It first appends one padding record, so there is always
+    a record to cut at, even when the last checkpoint covers every other. A node that is not
+    running at a boundary, or reaches it more than a minute late (a host asleep, a clock off),
+    has no anchor there, and the records it then commits count in the next week.
 - **The gate:** it is Standard History, answered only as `share_standard_history` allows
   ([SHARING-POLICY.md](SHARING-POLICY.md)).
 - **Answered whole or refused whole.** If either member cannot be served, the whole answer is

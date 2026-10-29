@@ -414,7 +414,7 @@ pub fn spawn(
             );
         }
     }
-    state.set_padding_sink(Box::new(LedgerPadder(capsules)));
+    state.set_padding_sink(Box::new(LedgerPadder(capsules.clone())));
     tracing::info!(
         leaves_indexed_this_load = report.leaves_indexed_this_load,
         leaf_count = state.leaf_count(),
@@ -447,6 +447,10 @@ pub fn spawn(
         run("startup reconnect", |s, k, a| s.reconnect(k, a));
 
         let mut ticker = tokio::time::interval(interval);
+        // The next Service History period boundary to checkpoint at. Kept
+        // across iterations, so a tick (or a slow witness refresh) that
+        // runs over the boundary never skips it.
+        let mut boundary = crate::service_history::next_boundary_after(unix_now());
         // The first tick fires immediately; the startup reconnect above
         // already did that work, so skip it.
         ticker.tick().await;
@@ -470,10 +474,15 @@ pub fn spawn(
                 }
                 // A checkpoint at each Service History period boundary, cut
                 // in the boundary's minute so its time is the boundary
-                // (`crate::service_history`). Nothing new since the last
-                // checkpoint, nothing cut: that boundary is not answered at.
-                _ = tokio::time::sleep(until_period_boundary(unix_now())) => {
-                    run("period boundary", |s, k, a| s.reconnect(k, a));
+                // (`crate::service_history`). One padding record first, so
+                // there is always a record to cut at, however recently the
+                // last checkpoint was cut.
+                _ = tokio::time::sleep(until_boundary(boundary, unix_now())) => {
+                    match capsules.pad_one() {
+                        Ok(_) => run("period boundary", |s, k, a| s.reconnect(k, a)),
+                        Err(err) => tracing::warn!(%err, "period boundary padding failed"),
+                    }
+                    boundary = crate::service_history::next_boundary_after(unix_now());
                 }
                 _ = shutdown.changed() => {
                     if *shutdown.borrow() {
@@ -497,13 +506,12 @@ fn unix_now() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// How long from the Unix time `now` until one second after the next
-/// Service History period boundary: late enough that the wall clock has
-/// reached the boundary, and well inside its minute, which a checkpoint's
-/// minute-granular time then names.
-fn until_period_boundary(now: i64) -> Duration {
-    let next = crate::service_history::next_boundary_after(now);
-    Duration::from_secs((next - now).max(0) as u64 + 1)
+/// How long from the Unix time `now` until one second after the period
+/// boundary `boundary`: late enough that the wall clock has reached it, and
+/// well inside its minute, which a checkpoint's minute-granular time then
+/// names. Zero once that second has passed.
+fn until_boundary(boundary: i64, now: i64) -> Duration {
+    Duration::from_secs((boundary + 1 - now).max(0) as u64)
 }
 
 /// The client capsule-emit's checkpoint calls take. Since capsule-emit
@@ -656,18 +664,16 @@ mod tests {
     }
 
     #[test]
-    fn the_boundary_wait_ends_one_second_into_the_next_period() {
-        // 2026-01-05T00:00:00Z, the policy's epoch, and the week after.
+    fn the_boundary_wait_ends_one_second_after_it_and_never_skips_it() {
+        // 2026-01-05T00:00:00Z, the policy's epoch.
         let epoch = 1_767_571_200;
-        let week = crate::service_history::LENGTH_S;
-        assert_eq!(until_period_boundary(epoch - 10), Duration::from_secs(11));
+        assert_eq!(until_boundary(epoch, epoch - 10), Duration::from_secs(11));
+        assert_eq!(until_boundary(epoch, epoch), Duration::from_secs(1));
+        // Reached late (a tick ran over it): still due, at once.
+        assert_eq!(until_boundary(epoch, epoch + 30), Duration::ZERO);
         assert_eq!(
-            until_period_boundary(epoch),
-            Duration::from_secs(week as u64 + 1)
-        );
-        assert_eq!(
-            until_period_boundary(epoch + week - 1),
-            Duration::from_secs(2)
+            crate::service_history::next_boundary_after(epoch),
+            epoch + crate::service_history::LENGTH_S
         );
     }
 

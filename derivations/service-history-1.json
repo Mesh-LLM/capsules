@@ -77,5 +77,5 @@
     "floor": 5,
     "suppression": "complementary"
   },
-  "spec": "https://github.com/Mesh-LLM/capsules/blob/main/docs/SERVICE-HISTORY.md"
+  "spec": "https://github.com/Mesh-LLM/capsules-plugin/blob/main/docs/SERVICE-HISTORY.md"
 }
