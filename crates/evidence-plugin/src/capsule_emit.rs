@@ -2002,7 +2002,7 @@ impl CapsuleState {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -3476,7 +3476,7 @@ mod tests {
         )
     }
 
-    fn sample_exchange<'a>(requesting_party: &'a str) -> ExchangeRecord<'a> {
+    pub(crate) fn sample_exchange<'a>(requesting_party: &'a str) -> ExchangeRecord<'a> {
         ExchangeRecord {
             model: "m",
             client_nonce: Some("nonce-1"),

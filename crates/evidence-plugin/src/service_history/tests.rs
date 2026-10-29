@@ -604,13 +604,6 @@ fn a_tampered_history_does_not_check() {
             }),
         ),
         (
-            "a published model above the total",
-            Box::new(|a| {
-                periods(a)[0]["cells"][1] = cell(Some("b"), Ok(13));
-                periods(a)[0]["cells"][0] = cell(Some("a"), Err("below_floor"));
-            }),
-        ),
-        (
             "a count labelled peer_confirmed",
             Box::new(|a| {
                 periods(a)[1]["cells"][2]["label"] = json!("peer_confirmed");
@@ -737,4 +730,19 @@ fn an_answer_with_material_or_without_a_pin_is_not_evidence() {
     fresh["coverage"] = json!({"min_freshness": 1});
     let v = verified(&fresh, &resigned(&fresh, &art, Vec::new()));
     assert_eq!(v["state"], json!("not_evidence"), "{v}");
+}
+
+/// Two models withheld and one published above the total: not the
+/// complementary rule, the sum.
+#[test]
+fn a_published_model_above_the_total_does_not_check() {
+    let (mut art, times, anchor) = checked_parts();
+    periods(&mut art)[1]["cells"] = json!([
+        cell(Some("a"), Err("below_floor")),
+        cell(Some("b"), Err("below_floor")),
+        cell(Some("c"), Ok(20)),
+        cell(None, Ok(12)),
+    ]);
+    let why = check(&art, &times, &anchor).unwrap_err();
+    assert!(why.contains("do not add up"), "{why}");
 }

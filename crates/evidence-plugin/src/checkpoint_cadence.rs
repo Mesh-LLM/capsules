@@ -478,9 +478,12 @@ pub fn spawn(
                 // there is always a record to cut at, however recently the
                 // last checkpoint was cut.
                 _ = tokio::time::sleep(until_boundary(boundary, unix_now())) => {
-                    match capsules.pad_one() {
-                        Ok(_) => run("period boundary", |s, k, a| s.reconnect(k, a)),
-                        Err(err) => tracing::warn!(%err, "period boundary padding failed"),
+                    let result = {
+                        let mut state = task.state.lock().unwrap_or_else(PoisonError::into_inner);
+                        boundary_cut(&capsules, &mut state, &task.signer, &task.anchor)
+                    };
+                    if let Some(cp) = report_checkpoint(result, "period boundary") {
+                        task.latest_head.set(cp);
                     }
                     boundary = crate::service_history::next_boundary_after(unix_now());
                 }
@@ -504,6 +507,22 @@ fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// The checkpoint at a period boundary: one padding record, so there is a
+/// record to cut at however recently the last checkpoint was cut, then the
+/// cut. An empty ledger has nothing to pad or count, and nothing is cut.
+fn boundary_cut(
+    capsules: &CapsuleState,
+    state: &mut CheckpointState,
+    signer: &SigningKey,
+    anchor: &AnchorClient,
+) -> Result<Option<CheckpointRecord>, crate::producer::checkpoint::CheckpointStateError> {
+    if let Err(err) = capsules.pad_one() {
+        tracing::warn!(%err, "period boundary padding failed");
+        return Ok(None);
+    }
+    state.reconnect(signer, anchor)
 }
 
 /// How long from the Unix time `now` until one second after the period
@@ -675,6 +694,44 @@ mod tests {
             crate::service_history::next_boundary_after(epoch),
             epoch + crate::service_history::LENGTH_S
         );
+    }
+
+    /// A ledger whose last checkpoint covers every record still gets a
+    /// boundary checkpoint: one padding record, then the cut.
+    #[test]
+    fn a_boundary_cuts_even_when_the_last_checkpoint_covers_every_record() {
+        let dir =
+            TempDir(std::env::temp_dir().join(format!("boundary-cut-{}", std::process::id())));
+        let _ = std::fs::remove_dir_all(dir.path());
+        let capsules = CapsuleState::open(dir.path(), "node-under-test").unwrap();
+        capsules
+            .emit_for_exchange(&crate::capsule_emit::tests::sample_exchange("node-a"))
+            .unwrap();
+        let ledger = capsules.ledger_dir().to_path_buf();
+        let lines = || {
+            std::fs::read_to_string(ledger.join("capsules.jsonl"))
+                .unwrap()
+                .lines()
+                .count()
+        };
+        let (mut state, _) =
+            CheckpointState::load(&ledger, "test-log", CheckpointCadenceConfig::default()).unwrap();
+        let signer = SigningKey::from_bytes(&[9u8; 32]);
+        let anchor = anchor_for();
+        assert!(state.reconnect(&signer, &anchor).unwrap().is_some());
+        // Everything is covered: a plain reconnect cuts nothing.
+        assert!(state.reconnect(&signer, &anchor).unwrap().is_none());
+        let before = lines();
+        let cut = boundary_cut(&capsules, &mut state, &signer, &anchor).unwrap();
+        assert_eq!(lines(), before + 1);
+        assert_eq!(
+            leaf_count_of(&cut.expect("a boundary checkpoint")),
+            before as u64 + 1
+        );
+    }
+
+    fn leaf_count_of(cp: &CheckpointRecord) -> u64 {
+        cll::mmr::leaf_count(cp.mmr_size).unwrap()
     }
 
     fn handle_over(dir: &std::path::Path) -> CheckpointHandle {

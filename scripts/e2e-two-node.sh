@@ -253,11 +253,19 @@ service_history_declined() {
     --arg d "$SERVICE_HISTORY" '{peer_id: $p,
     request: {subject: {full_history: null}, coverage: {expected_pin: $pin}, derivation: $d}}')" \
     > "$out/service-history.json" || return 1
-  # A run that spans Monday 00:00 UTC may have cut its pin at the boundary,
-  # where the History is answered instead.
-  if [ "$(date -u +%u%H)" = 100 ]; then
-    jq -e '.verification.state == "artifact" or .verification.reason == "policy_declined"' \
-      "$out/service-history.json"
+  # The pin's own time decides: a run that spans Monday 00:00 UTC may have
+  # pinned the boundary checkpoint, where the History is answered instead.
+  local at
+  at=$(python3 -I - "$(plugin_data provider)/ledger/checkpoints.jsonl" "$pin" <<'PY'
+import hashlib, json, sys
+for line in open(sys.argv[1]):
+    cp = json.loads(line)
+    if hashlib.sha256(bytes.fromhex(cp.get("checkpoint_cose", ""))).hexdigest() == sys.argv[2]:
+        print(cp["timestamp"])
+PY
+)
+  if [ -n "$at" ] && [ "$(date -u -d "$at" +%u%H%M%S)" = 1000000 ]; then
+    jq -e '.verification.state == "artifact"' "$out/service-history.json"
   else
     jq -e '.verification.state == "refusal" and .verification.reason == "policy_declined"' \
       "$out/service-history.json"
