@@ -427,10 +427,15 @@ pub(crate) async fn send_evidence_request(
     let wait = Duration::from_millis(requester_idle_timeout_ms());
     let asked = match asks {
         Some(capsules) if channel == crate::requester_auth::Channel::EvidenceRequest => {
+            let commitment = capsules
+                .ledger_dir()
+                .parent()
+                .and_then(|data_dir| crate::peer_commitments::pinned(data_dir, &peer_id));
             let asked = crate::ask_book::record_request(
                 capsules,
                 &request,
                 &peer_id,
+                commitment,
                 &crate::evidence_answer::now_utc(),
             )
             .map_err(|error| SendError::NotRecorded(error.to_string()))?;
@@ -576,17 +581,21 @@ async fn settle_ask(
     };
     match read {
         Ok(answer) => {
-            let verification = verify_announced(&sent, &answer, &peer_id);
-            if let Err(error) = crate::ask_book::record_response(
+            let checked = verify_announced(&sent, &answer, &peer_id);
+            let verification = match crate::ask_book::record_response(
                 &capsules,
                 &asked.record_id,
                 &evidence_request::digest::request_digest(&sent),
                 &answer,
-                &verification,
+                &checked,
                 &crate::evidence_answer::now_utc(),
             ) {
-                tracing::warn!(%error, request_record = %asked.record_id, "a reply could not be recorded");
-            }
+                Ok((_, recorded)) => recorded,
+                Err(error) => {
+                    tracing::warn!(%error, request_record = %asked.record_id, "a reply could not be recorded");
+                    checked
+                }
+            };
             let _ = tx.send(Ok((answer, verification)));
         }
         Err(error) => {
@@ -1351,6 +1360,7 @@ mod tests {
             &capsules,
             &request,
             "peer",
+            None,
             &crate::evidence_answer::now_utc(),
         )
         .unwrap();

@@ -58,7 +58,7 @@ fn cites(header: &Map<String, Value>) -> Vec<String> {
 fn the_ask_is_sealed_as_an_evidence_request_holding_the_request_sent() {
     let (capsules, _dir) = state();
     let sent = request(None);
-    let asked = record_request(&capsules, &sent, PEER, ASKED_AT).unwrap();
+    let asked = record_request(&capsules, &sent, PEER, None, ASKED_AT).unwrap();
 
     let header = header_of(&capsules, &asked.record_id);
     assert_eq!(header["record_type"], "evidence_request");
@@ -76,7 +76,7 @@ fn the_ask_is_sealed_as_an_evidence_request_holding_the_request_sent() {
 #[test]
 fn an_ask_record_never_leaves_this_node() {
     let (capsules, _dir) = state();
-    let asked = record_request(&capsules, &request(None), PEER, ASKED_AT).unwrap();
+    let asked = record_request(&capsules, &request(None), PEER, None, ASKED_AT).unwrap();
     let record = capsules.lookup(&asked.record_id).unwrap().unwrap().capsule;
     assert!(is_ask_record(&record));
     let index = crate::evidence_log::with_index(capsules.ledger_dir(), "k", |index| {
@@ -118,7 +118,7 @@ fn the_window_closes_at_the_later_of_the_deadline_and_the_minimum() {
 fn a_request_the_book_could_not_resolve_is_never_recorded() {
     let (capsules, _dir) = state();
     let refused = |request: Value| {
-        let result = record_request(&capsules, &request, PEER, ASKED_AT);
+        let result = record_request(&capsules, &request, PEER, None, ASKED_AT);
         assert!(
             matches!(result, Err(AskError::Invalid(_))),
             "{request}: {result:?}"
@@ -136,12 +136,12 @@ fn a_request_the_book_could_not_resolve_is_never_recorded() {
 #[test]
 fn a_nonce_is_never_used_twice() {
     let (capsules, _dir) = state();
-    record_request(&capsules, &request(None), PEER, ASKED_AT).unwrap();
-    let again = record_request(&capsules, &request(None), PEER, ASKED_AT);
+    record_request(&capsules, &request(None), PEER, None, ASKED_AT).unwrap();
+    let again = record_request(&capsules, &request(None), PEER, None, ASKED_AT);
     assert!(matches!(again, Err(AskError::Invalid(_))), "{again:?}");
     let mut fresh = request(None);
     fresh["nonce"] = json!("n-2");
-    record_request(&capsules, &fresh, PEER, ASKED_AT).unwrap();
+    record_request(&capsules, &fresh, PEER, None, ASKED_AT).unwrap();
     assert_eq!(records(&capsules).len(), 2);
 }
 
@@ -149,7 +149,7 @@ fn a_nonce_is_never_used_twice() {
 fn no_answer_by_the_close_is_a_recorded_absence_citing_the_request() {
     let (capsules, _dir) = state();
     let sent = request(None);
-    let asked = record_request(&capsules, &sent, PEER, ASKED_AT).unwrap();
+    let asked = record_request(&capsules, &sent, PEER, None, ASKED_AT).unwrap();
 
     let absence = record_absence(
         &capsules,
@@ -174,7 +174,7 @@ fn no_answer_by_the_close_is_a_recorded_absence_citing_the_request() {
 #[test]
 fn a_pending_request_is_never_recorded_as_absent() {
     let (capsules, _dir) = state();
-    let asked = record_request(&capsules, &request(None), PEER, ASKED_AT).unwrap();
+    let asked = record_request(&capsules, &request(None), PEER, None, ASKED_AT).unwrap();
     let early = record_absence(
         &capsules,
         &asked.record_id,
@@ -196,7 +196,7 @@ fn a_pending_request_is_never_recorded_as_absent() {
 fn a_reply_in_the_window_is_the_response_and_forecloses_an_absence() {
     let (capsules, _dir) = state();
     let sent = request(None);
-    let asked = record_request(&capsules, &sent, PEER, ASKED_AT).unwrap();
+    let asked = record_request(&capsules, &sent, PEER, None, ASKED_AT).unwrap();
     let answer = json!({"artifact": "AAAA", "derivation": "history_card/1"});
     let verification = json!({"state": "artifact", "anchor": "a", "records": [], "checkpoints": 1});
 
@@ -209,7 +209,7 @@ fn a_reply_in_the_window_is_the_response_and_forecloses_an_absence() {
         "2026-10-29T12:00:02Z",
     )
     .unwrap();
-    let header = header_of(&capsules, &response.record_id);
+    let header = header_of(&capsules, &response.0.record_id);
     assert_eq!(header["record_type"], "evidence_response");
     assert_eq!(cites(&header), std::slice::from_ref(&asked.record_id));
     assert_eq!(
@@ -230,7 +230,7 @@ fn a_reply_in_the_window_is_the_response_and_forecloses_an_absence() {
 fn a_late_reply_never_replaces_the_absence() {
     let (capsules, _dir) = state();
     let sent = request(None);
-    let asked = record_request(&capsules, &sent, PEER, ASKED_AT).unwrap();
+    let asked = record_request(&capsules, &sent, PEER, None, ASKED_AT).unwrap();
     record_absence(
         &capsules,
         &asked.record_id,
@@ -296,9 +296,15 @@ fn with_nonce(mut request: Value, nonce: &str) -> Value {
 #[test]
 fn at_start_the_absences_owed_are_sealed_once_and_open_windows_returned() {
     let (capsules, _dir) = state();
-    let overdue = record_request(&capsules, &request(None), PEER, ASKED_AT).unwrap();
-    let answered =
-        record_request(&capsules, &with_nonce(request(None), "n-2"), PEER, ASKED_AT).unwrap();
+    let overdue = record_request(&capsules, &request(None), PEER, None, ASKED_AT).unwrap();
+    let answered = record_request(
+        &capsules,
+        &with_nonce(request(None), "n-2"),
+        PEER,
+        None,
+        ASKED_AT,
+    )
+    .unwrap();
     record_response(
         &capsules,
         &answered.record_id,
@@ -312,6 +318,7 @@ fn at_start_the_absences_owed_are_sealed_once_and_open_windows_returned() {
         &capsules,
         &with_nonce(request(Some("2026-10-29T12:10:00Z")), "n-3"),
         PEER,
+        None,
         ASKED_AT,
     )
     .unwrap();
@@ -345,4 +352,52 @@ fn at_start_the_absences_owed_are_sealed_once_and_open_windows_returned() {
     let last = records(&capsules).pop().expect("a record").1;
     assert_eq!(last["record_type"], "recorded_absence");
     assert_eq!(cites(&last), [still_open.record_id]);
+}
+
+#[test]
+fn a_signed_refusal_is_checked_against_the_commitment_the_ask_recorded() {
+    let (capsules, _dir) = state();
+    let commitment = json!({
+        "digest": "c".repeat(64),
+        "policy_digest": "p".repeat(64),
+        "policy": {"stranger_safe": ["checkpoints", "history_card/1"]},
+        "subjects": ["checkpoints", "full_history"],
+    });
+    let sent = request(None);
+    let asked = record_request(&capsules, &sent, PEER, Some(commitment.clone()), ASKED_AT).unwrap();
+    assert_eq!(
+        header_of(&capsules, &asked.record_id)["statement"]["commitment"],
+        commitment
+    );
+
+    let (response, verification) = record_response(
+        &capsules,
+        &asked.record_id,
+        &digest_of(&sent),
+        &json!({"reason": "not_authorized"}),
+        &json!({"state": "refusal", "reason": "not_authorized"}),
+        "2026-10-29T12:00:02Z",
+    )
+    .unwrap();
+    assert_eq!(verification["policy_check"]["status"], "MISMATCH");
+    let header = header_of(&capsules, &response.record_id);
+    assert_eq!(header["statement"]["outcome"], "refusal");
+    assert_eq!(header["statement"]["verification"], verification);
+}
+
+#[test]
+fn an_artifact_carries_no_policy_check() {
+    let (capsules, _dir) = state();
+    let sent = request(None);
+    let asked = record_request(&capsules, &sent, PEER, None, ASKED_AT).unwrap();
+    let (_, verification) = record_response(
+        &capsules,
+        &asked.record_id,
+        &digest_of(&sent),
+        &json!({"artifact": "AAAA"}),
+        &json!({"state": "artifact"}),
+        "2026-10-29T12:00:02Z",
+    )
+    .unwrap();
+    assert_eq!(verification, json!({"state": "artifact"}));
 }

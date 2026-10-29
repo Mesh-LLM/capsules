@@ -29,6 +29,7 @@ mod mesh_evidence_bridge;
 mod network_join;
 mod owner_maintenance;
 mod peer_blocks_seen;
+mod peer_commitments;
 mod peer_keys;
 /// Not wired into `on_mesh_event` yet -- see the module doc for why
 /// (`mesh-llm-plugin = "0.75"` predates the `checkpoint` field this needs to
@@ -1138,7 +1139,19 @@ fn with_evidence_operations(
                  stapled history_card/1's bytes, no counts, and the peer's announced key.",
             )
             .input::<commitment_bridge::MeshCommitmentFetchArgs>()
-            .handle(move |args, context| Box::pin(commitment_bridge::handle_fetch(args, context))),
+            .handle({
+                let data_dir = capsules_for_delivery
+                    .ledger_dir()
+                    .parent()
+                    .map(std::path::Path::to_path_buf);
+                move |args, context| {
+                    Box::pin(commitment_bridge::handle_fetch(
+                        args,
+                        context,
+                        data_dir.clone(),
+                    ))
+                }
+            }),
     );
     builder = builder.mcp_item(
         mcp::tool(LEDGER_FETCH_OPERATION)

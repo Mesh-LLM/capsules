@@ -194,9 +194,13 @@ pub struct MeshCommitmentFetchArgs {
 }
 
 /// `mesh_commitment_fetch`: the peer's pair, beside what checking it found.
+/// A pair that passed every check is held for the peer
+/// (`crate::peer_commitments`) when `data_dir` is known, so this node's
+/// later asks of the peer are judged against it.
 pub async fn handle_fetch(
     args: MeshCommitmentFetchArgs,
     context: &mut PluginContext<'_>,
+    data_dir: Option<std::path::PathBuf>,
 ) -> PluginResult<Value> {
     let peer_id = args.peer_id.trim().to_ascii_lowercase();
     if peer_id.is_empty() {
@@ -233,11 +237,17 @@ pub async fn handle_fetch(
         PluginError::internal(format!("peer returned a malformed commitment frame: {e}"))
     })?;
     let registry = crate::peer_keys::registry();
-    Ok(checked(
-        &frame,
-        &peer_id,
-        announced(registry.as_deref(), &peer_id),
-    ))
+    let result = checked(&frame, &peer_id, announced(registry.as_deref(), &peer_id));
+    let passed = result
+        .get("problems")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty);
+    if let (true, Some(data_dir)) = (passed, data_dir) {
+        if let Err(error) = crate::peer_commitments::hold(&data_dir, &peer_id, &frame) {
+            tracing::warn!(%error, peer_id, "a fetched commitment could not be held");
+        }
+    }
+    Ok(result)
 }
 
 /// What the keys this node holds say about `peer_id`'s key.

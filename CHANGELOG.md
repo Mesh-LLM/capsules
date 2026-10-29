@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Each ask is recorded (loop step 7).** Every evidence request this node sends is sealed as an
+  `evidence_request` record, holding the request exactly as sent, before it is sent; a request
+  that is not well formed, or reuses a nonce, is refused and never sent. A reply inside the
+  waiting window (the later of the request's deadline and 60 s) is sealed as `evidence_response`
+  citing the request; none by the close is sealed as `recorded_absence`. A late reply never
+  replaces an absence. A node that restarts seals the absences it owes and closes the windows
+  still open. The records are evidencebook's (`evidencebook::ask`) and never leave the node in an
+  answer. `mesh_commitment_fetch` now holds a peer's commitment that passed every check; an ask
+  records the commitment held for the peer, and a signed refusal is checked against the policy
+  it pins (`policy_check`: `MATCH`, `MISMATCH`, or `NOT_CHECKED` with no commitment held or where
+  the answer depends on who asks). Mesh-LLM/capsules-plugin#56.
 - **`settlement_check` and the Lightning adapter declaration (loop step 6).** The new read-only tool
   checks the Lightning settlement records this node holds for a paid exchange, under
   `adapters/lightning-v0.md`. Each check (object held, invoice join, amount, finality, preimage,
