@@ -426,7 +426,7 @@ fn doctor_with(binding: Option<&Value>) -> Finding {
 }
 
 /// A binding of this node's key to its operator's, signed by both and in
-/// its window, reads `bound` and names the operator's key and the binding.
+/// its window, reads `bound` and names the binding, never the operator's key.
 #[test]
 fn a_held_binding_of_this_nodes_key_reads_bound() {
     let operator = SigningKey::from_bytes(&[9; 32]);
@@ -439,7 +439,7 @@ fn a_held_binding_of_this_nodes_key_reads_bound() {
     let f = doctor_with(Some(&record));
     assert_eq!(f.state, STATE_BOUND, "{}", f.detail);
     assert!(
-        f.detail
+        !f.detail
             .contains(&hex::encode(operator.verifying_key().to_bytes())),
         "{}",
         f.detail

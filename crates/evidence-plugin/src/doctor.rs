@@ -238,8 +238,10 @@ fn long_log_note(book: &Book) -> String {
 }
 
 /// Whether this node's own binding (`controller_binding::read_held`) binds
-/// `key_id` and applies now: `bound`, naming the other key and the binding
-/// digest, or `unbound` with the reason.
+/// `key_id` and applies now: `bound`, with the binding digest, or `unbound`
+/// with the reason. It never names the other key: that is the operator's,
+/// often a Nostr identity used elsewhere, and a finding may be shown to
+/// anyone the operator shows `doctor` to (CB §9.3).
 fn controller_binding(binding: Option<&Value>, key_id: &str, now: &str) -> Finding {
     let Some(record) = binding else {
         return Finding::new(
@@ -258,9 +260,9 @@ fn controller_binding(binding: Option<&Value>, key_id: &str, now: &str) -> Findi
             CONTROLLER_BINDING,
             STATE_BOUND,
             format!(
-                "this node's key {key_id} is bound to the controller key {}: both keys signed the \
-                 binding, and it is inside its window",
-                applied.other(key_id).unwrap_or_default()
+                "this node's key {key_id} is bound to its operator's key by the binding {}: both \
+                 keys signed it, and it is inside its window",
+                applied.digest
             ),
         )
         .with(applied.digest),
