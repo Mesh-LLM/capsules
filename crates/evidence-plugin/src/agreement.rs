@@ -53,6 +53,8 @@ const MAX_INTEGER: u64 = (1 << 53) - 1;
 pub const CLOCK_SKEW_SECONDS: i64 = 300;
 /// The longest session window a provider accepts.
 pub const MAX_WINDOW_SECONDS: u64 = 86_400;
+/// The shortest session window a provider accepts.
+pub const MIN_WINDOW_SECONDS: u64 = 60;
 /// The most models a model policy may name, and the longest reference.
 const MAX_POLICY_MODELS: usize = 16;
 const MAX_MODEL_REF_LEN: usize = 512;
@@ -98,7 +100,7 @@ impl SessionTerms {
         };
         let window_seconds = match window {
             Some(w) if !w.trim().is_empty() => {
-                uint(w).filter(|n| *n > 0 && *n <= MAX_WINDOW_SECONDS)?
+                uint(w).filter(|n| (MIN_WINDOW_SECONDS..=MAX_WINDOW_SECONDS).contains(n))?
             }
             _ => DEFAULT_WINDOW_SECONDS,
         };
@@ -224,6 +226,14 @@ pub fn profile_time(unix_seconds: i64) -> String {
     chrono::DateTime::from_timestamp(unix_seconds, 0)
         .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
         .unwrap_or_default()
+}
+
+/// The profile's time form (§5.2): `YYYY-MM-DDTHH:MM:SSZ`, a real instant.
+fn is_profile_time(s: &str) -> bool {
+    s.len() == 20
+        && s.ends_with('Z')
+        && evidence_request::time::parse_rfc3339(s).is_some()
+        && s.as_bytes()[10] == b'T'
 }
 
 fn hex_key(key: &SigningKey) -> String {
@@ -355,9 +365,38 @@ pub fn check_proposal(message: &[u8], own_key: &str, now: i64) -> Result<Checked
         return Err(Refusal::Record("proposed"));
     };
     let text = |k: &str| r.get(k).and_then(Value::as_str);
-    if text("profile") != Some(PROFILE)
+    // The record's whole form (§11.1.2): the profile's verifier checks the
+    // form of an answer, not of the proposal it answers.
+    const MEMBERS: [&str; 10] = [
+        "profile",
+        "state",
+        "contract_ref",
+        "contract_digest",
+        "transaction",
+        "proposer",
+        "acceptor",
+        "issued_at",
+        "session",
+        "sig",
+    ];
+    if r.len() != MEMBERS.len()
+        || !MEMBERS.iter().all(|k| r.contains_key(*k))
+        || text("profile") != Some(PROFILE)
         || text("state") != Some("proposed")
-        || r.contains_key("authority")
+        || !text("issued_at").is_some_and(is_profile_time)
+        || !text("proposer").is_some_and(evidence_request::registry::is_digest)
+        || !r
+            .get("session")
+            .and_then(Value::as_object)
+            .is_some_and(|s| {
+                s.len() == 4
+                    && ["not_before", "not_after", "policy", "terms"]
+                        .iter()
+                        .all(|k| s.get(*k).is_some_and(Value::is_string))
+                    && ["not_before", "not_after"]
+                        .iter()
+                        .all(|k| s[*k].as_str().is_some_and(is_profile_time))
+            })
     {
         return Err(Refusal::Record("proposed"));
     }
@@ -392,12 +431,14 @@ pub fn check_proposal(message: &[u8], own_key: &str, now: i64) -> Result<Checked
             .and_then(evidence_request::time::parse_rfc3339)
             .map(|t| t.seconds)
     };
+    // A window that starts now (within the clock skew), lasts a minute to a
+    // day, and has not ended.
     match (window("not_before"), window("not_after")) {
         (Some(nb), Some(na))
-            if nb - CLOCK_SKEW_SECONDS <= now
-                && now <= na + CLOCK_SKEW_SECONDS
+            if (nb - now).abs() <= CLOCK_SKEW_SECONDS
+                && now <= na
                 && na >= nb
-                && (na - nb) as u64 <= MAX_WINDOW_SECONDS => {}
+                && (MIN_WINDOW_SECONDS..=MAX_WINDOW_SECONDS).contains(&((na - nb) as u64)) => {}
         _ => return Err(Refusal::Window),
     }
     match r.get("transaction") {
@@ -510,6 +551,19 @@ pub fn check_records(
     }
     if res.receipts.len() != receipts.len() {
         return Err("a receipt is not for this acceptance".into());
+    }
+    // The verifier checks a receipt's members and signature, not the value
+    // of its time: a receipt is the ordering point only when that is a time.
+    for rc in receipts {
+        let rc = acceptance::parse(rc).ok_or("a receipt is not JSON")?;
+        if !rc
+            .get("received_at")
+            .and_then(Value::as_str)
+            .is_some_and(is_profile_time)
+            || rc.get("profile").and_then(Value::as_str) != Some(PROFILE)
+        {
+            return Err("a receipt's received_at is not a profile time".into());
+        }
     }
     for r in &res.receipts {
         for p in ["receipt_signature", "receipt_signer"] {
@@ -747,6 +801,7 @@ mod tests {
             ("3000", "0", ""),
             ("3000", "x", ""),
             ("3000", "", "0"),
+            ("3000", "", "59"),
             ("3000", "", "86401"),
         ] {
             assert_eq!(
@@ -782,6 +837,20 @@ mod tests {
                 NOW + 8,
             ),
             Ok(())
+        );
+        let mut no_time = receipt(&d, &p, NOW + 7);
+        no_time["received_at"] = Value::Null;
+        no_time.as_object_mut().unwrap().remove("sig");
+        let no_time = sign(no_time, &p).to_string();
+        assert!(
+            check_records(
+                proposal.record_text.as_bytes(),
+                accepted.as_bytes(),
+                &[no_time.as_bytes()],
+                NOW + 8
+            )
+            .is_err(),
+            "a receipt whose received_at is not a time"
         );
         let by_provider = receipt(&d, &q, NOW + 7).to_string();
         assert!(
@@ -877,6 +946,53 @@ mod tests {
             Some(Refusal::Window),
             "a window longer than a day"
         );
+        for (label, nb, na) in [
+            ("ended", NOW - 120, NOW - 1),
+            ("shorter than a minute", NOW, NOW + 59),
+            ("starting in the past", NOW - 3_000, NOW + 600),
+        ] {
+            assert_eq!(
+                refused(
+                    &tampered(&proposal, &|m| re_sign_record(m, &p, &|r| {
+                        r["session"]["not_before"] = json!(profile_time(nb));
+                        r["session"]["not_after"] = json!(profile_time(na));
+                    })),
+                    NOW
+                ),
+                Some(Refusal::Window),
+                "{label}"
+            );
+        }
+        // Signed by the proposer, but not a well-formed proposed record.
+        for (label, change) in [
+            (
+                "no issued_at",
+                &(|r: &mut Value| {
+                    r.as_object_mut().unwrap().remove("issued_at");
+                }) as &dyn Fn(&mut Value),
+            ),
+            ("a proposal_digest", &|r: &mut Value| {
+                r["proposal_digest"] = json!("0".repeat(64))
+            }),
+            ("an unknown member", &|r: &mut Value| {
+                r["extra"] = json!("x")
+            }),
+            ("issued_at not a profile time", &|r: &mut Value| {
+                r["issued_at"] = json!("2026-10-12T00:00:00.5Z")
+            }),
+            ("a session member too many", &|r: &mut Value| {
+                r["session"]["count"] = json!("2")
+            }),
+        ] {
+            assert_eq!(
+                refused(
+                    &tampered(&proposal, &|m| re_sign_record(m, &p, change)),
+                    NOW
+                ),
+                Some(Refusal::Record("proposed")),
+                "{label}"
+            );
+        }
     }
 
     #[test]

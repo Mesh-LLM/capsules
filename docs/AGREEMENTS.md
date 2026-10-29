@@ -17,7 +17,7 @@ nothing is proposed and nothing changes.
 | --- | --- |
 | `CAPSULES_AGREEMENT_SPEND_CAP_MSAT` | The cumulative settled amount a session covers, in msat. Setting it turns agreements on. |
 | `CAPSULES_AGREEMENT_MAX_EXCHANGES` | Optional: how many exchanges a session covers. |
-| `CAPSULES_AGREEMENT_WINDOW_SECONDS` | Optional: how long a session lasts, from its proposal. Default 3600, at most 86400. |
+| `CAPSULES_AGREEMENT_WINDOW_SECONDS` | Optional: how long a session lasts, from its proposal. Default 3600; 60 to 86400. |
 | `CAPSULES_AGREEMENT_TIMEOUT_MS` | Optional: how long the requester waits for each round trip with the provider, connecting included. Default 8000. |
 | `CAPSULES_AGREEMENT_RESPONDER_TIMEOUT_MS` | Optional: how long a provider waits at each step of an inbound agreement stream. Default 10000. |
 
@@ -42,8 +42,9 @@ minutes before proposing to that provider again.
 
 A provider answers only a requester whose plugin key a peer announced, works
 on at most four agreement messages at once, and holds at most eight unexpired
-sessions per requester. It accepts a session window of at most a day, and
-allows five minutes of clock difference between the two nodes. A proposal sent
+sessions, and accepts at most 48 sessions a day, per requester. It accepts a
+session window that starts when it is proposed and lasts a minute to a day,
+allowing five minutes of clock difference between the two nodes. A proposal sent
 again gets the same answer back.
 
 ## What is sent

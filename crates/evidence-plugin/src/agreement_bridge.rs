@@ -53,6 +53,9 @@ use crate::mesh_evidence_bridge::{env_millis, next_stream_id, read_to_end_bounde
 pub const MAX_IN_FLIGHT: usize = 4;
 /// The most unexpired sessions a provider holds with one requester.
 pub const MAX_OPEN_SESSIONS_PER_REQUESTER: usize = 8;
+/// The most sessions a provider accepts from one requester in a day, so
+/// what it keeps grows by a bounded amount per requester.
+pub const MAX_SESSIONS_PER_REQUESTER_PER_DAY: usize = 48;
 /// How long a requester waits before proposing again to a provider after a
 /// set-up that did not end in an agreement.
 pub const RETRY_AFTER: Duration = Duration::from_secs(600);
@@ -85,6 +88,15 @@ fn parse(octets: &[u8]) -> Option<Value> {
 
 fn text<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(Value::as_str)
+}
+
+fn window_start(record: &Value) -> Option<i64> {
+    record
+        .get("session")?
+        .get("not_before")?
+        .as_str()
+        .and_then(evidence_request::time::parse_rfc3339)
+        .map(|t| t.seconds)
 }
 
 fn window_end(record: &Value) -> Option<i64> {
@@ -165,16 +177,26 @@ fn propose_answer(
     {
         return String::from_utf8(octets.clone()).map_err(|e| e.to_string());
     }
-    let open = records
+    let mine: Vec<&Value> = records
         .iter()
-        .filter(|(_, r)| {
-            text(r, "state") == Some("accepted")
-                && text(r, "proposer") == Some(proposer.as_str())
-                && window_end(r).is_some_and(|end| now <= end)
+        .map(|(_, r)| r)
+        .filter(|r| {
+            text(r, "state") == Some("accepted") && text(r, "proposer") == Some(proposer.as_str())
         })
+        .collect();
+    let open = mine
+        .iter()
+        .filter(|r| window_end(r).is_some_and(|end| now <= end + agreement::CLOCK_SKEW_SECONDS))
         .count();
     if open >= MAX_OPEN_SESSIONS_PER_REQUESTER {
         return Err("the requester already holds the most open sessions".into());
+    }
+    let today = mine
+        .iter()
+        .filter(|r| window_start(r).is_some_and(|nb| now - nb < 86_400))
+        .count();
+    if today >= MAX_SESSIONS_PER_REQUESTER_PER_DAY {
+        return Err("the requester has set up the most sessions for a day".into());
     }
     let answer_text = agreement::answer(&checked, capsules.signing_key(), true, now).to_string();
     // The profile's verifier checks the proposal's own form and signature
@@ -494,18 +516,9 @@ async fn set_up(
         tracing::debug!(%peer_id, "no announced key for the provider; no agreement proposed");
         return Ok(None);
     };
-    let held = {
-        let (capsules, provider_key, model) =
-            (capsules.clone(), provider_key.clone(), model.clone());
-        tokio::task::spawn_blocking(move || {
-            let store = Store::open(capsules.ledger_dir());
-            active_session(&store, &own_key(&capsules), &provider_key, &model, now()).is_some()
-        })
-        .await?
-    };
-    if held {
-        return Ok(None);
-    }
+    // The in-flight mark first, then the session check, so two exchange
+    // events never both find no session and both propose; and the cheap
+    // in-memory check before the scan of what is kept.
     let started = {
         let mut attempts = ATTEMPTS
             .lock()
@@ -519,6 +532,20 @@ async fn set_up(
         peer_id: peer_id.clone(),
         agreed: false,
     };
+    let held = {
+        let (capsules, provider_key, model) =
+            (capsules.clone(), provider_key.clone(), model.clone());
+        tokio::task::spawn_blocking(move || {
+            let store = Store::open(capsules.ledger_dir());
+            active_session(&store, &own_key(&capsules), &provider_key, &model, now()).is_some()
+        })
+        .await?
+    };
+    if held {
+        // Not a failure: no cool-down.
+        attempt.agreed = true;
+        return Ok(None);
+    }
     let proposal = Proposal::new(
         capsules.signing_key(),
         &provider_key,
@@ -778,9 +805,67 @@ mod tests {
         let reply = p.propose(&p.proposal(NOW + 20), NOW + 20);
         assert!(reply.get("error").is_some(), "{reply}");
         // Once the first sessions end, the requester may open more.
-        let later = NOW + 3_600 + 10;
+        let later = NOW + 3_600 + agreement::CLOCK_SKEW_SECONDS + 10;
         let reply = p.propose(&p.proposal(later), later);
         assert!(reply.get("answer").is_some(), "{reply}");
+    }
+
+    #[test]
+    fn a_provider_accepts_a_bounded_number_of_sessions_per_requester_per_day() {
+        let p = pair();
+        let short = SessionTerms {
+            window_seconds: 60,
+            ..terms()
+        };
+        let propose_at = |t: i64| {
+            let proposal = Proposal::new(
+                p.requester.signing_key(),
+                &own_key(&p.provider),
+                &agreement::new_session_id(),
+                &short,
+                &[MODEL.into()],
+                t,
+            );
+            p.propose(&proposal, t)
+        };
+        // One-minute sessions, one after another: never more than one open.
+        let step = 60 + agreement::CLOCK_SKEW_SECONDS + 1;
+        for i in 0..MAX_SESSIONS_PER_REQUESTER_PER_DAY as i64 {
+            assert!(
+                propose_at(NOW + i * step).get("answer").is_some(),
+                "session {i}"
+            );
+        }
+        let t = NOW + MAX_SESSIONS_PER_REQUESTER_PER_DAY as i64 * step;
+        assert!(propose_at(t).get("error").is_some(), "the day's limit");
+        assert!(
+            propose_at(NOW + 86_400 + 10).get("answer").is_some(),
+            "a day later"
+        );
+    }
+
+    #[test]
+    fn a_receipt_that_cannot_order_never_takes_the_first_place() {
+        let p = pair();
+        let proposal = p.proposal(NOW);
+        let reply = p.propose(&proposal, NOW);
+        let Outcome::Accepted { receipt, .. } = p.conclude(&proposal, &reply, NOW) else {
+            panic!("accepted")
+        };
+        let mut no_time: Value = serde_json::from_str(&receipt).unwrap();
+        no_time["received_at"] = Value::Null;
+        no_time.as_object_mut().unwrap().remove("sig");
+        let no_time = Value::Object(
+            evidence_request::acceptance::sign(
+                no_time.as_object().unwrap().clone(),
+                p.requester.signing_key(),
+            )
+            .unwrap(),
+        )
+        .to_string();
+        assert!(p.send_receipt(&no_time, NOW).get("error").is_some());
+        assert_eq!(p.send_receipt(&receipt, NOW), json!({"ok": true}));
+        assert!(p.session(&p.pstore, MODEL, NOW).is_some());
     }
 
     #[test]
