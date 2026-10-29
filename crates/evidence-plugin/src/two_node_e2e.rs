@@ -725,6 +725,60 @@ fn the_switch_joins_over_the_mesh_and_off_leaves() {
     assert_eq!(std::fs::read_dir(&joins).unwrap().count(), 2);
 }
 
+/// The controller binding step (`crate::controller_binding_e2e_setup`): the
+/// provider's `join` stored the binding of its key to its operator's Nostr
+/// key and reported it `bound`, refused a binding of another node's key, and
+/// the commitment the requester fetched over the mesh names the binding by
+/// its digest alone, never the Nostr key.
+#[test]
+#[ignore = "needs the data directories of a real two-node run (scripts/e2e-two-node.sh)"]
+fn the_providers_binding_is_held_bound_and_named_by_its_digest() {
+    let run = Run::from_env();
+    let binding = join_output("binding.json");
+    let digest = crate::controller_binding::evaluate(&binding, &[])
+        .digest
+        .expect("the binding has a digest");
+    let nostr = crate::controller_binding_e2e_setup::nostr_key();
+    let nostr = hex::encode(nostr.verifying_key().to_bytes());
+
+    assert_eq!(
+        crate::controller_binding::read_held(&run.provider.data_dir),
+        Some(binding.clone()),
+        "the provider holds the binding it was given"
+    );
+    let joined = join_output("binding-join.json");
+    let finding = joined["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["check"] == crate::doctor::CONTROLLER_BINDING)
+        .unwrap();
+    assert_eq!(finding["state"], crate::doctor::STATE_BOUND, "{finding:#}");
+    assert_eq!(finding["records"], json!([digest]));
+
+    let refused = std::fs::read_to_string(
+        Path::new(&std::env::var("E2E_JOIN_DIR").unwrap()).join("binding-refused.json"),
+    )
+    .unwrap();
+    assert!(
+        refused.contains("does not bind this node's key"),
+        "{refused}"
+    );
+
+    let fetched = join_output("fetched-commitment.json");
+    assert_eq!(fetched["problems"], json!([]), "{fetched:#}");
+    assert_eq!(
+        fetched["commitment"]["controller_binding"],
+        json!({ "digest": digest })
+    );
+    for out in [&fetched, &joined] {
+        assert!(
+            !out.to_string().contains(&nostr),
+            "the Nostr key is never shown"
+        );
+    }
+}
+
 /// The referee step (`crate::referee_e2e_setup`): the requester put a twin
 /// pair to the provider over the mesh, and the provider, as referee, signed
 /// the verdict, sealed `adjudication_issued` and delivered the verdict back.
