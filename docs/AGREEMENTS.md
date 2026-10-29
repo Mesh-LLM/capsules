@@ -17,8 +17,9 @@ nothing is proposed and nothing changes.
 | --- | --- |
 | `CAPSULES_AGREEMENT_SPEND_CAP_MSAT` | The cumulative settled amount a session covers, in msat. Setting it turns agreements on. |
 | `CAPSULES_AGREEMENT_MAX_EXCHANGES` | Optional: how many exchanges a session covers. |
-| `CAPSULES_AGREEMENT_WINDOW_SECONDS` | Optional: how long a session lasts, from its proposal. Default 3600. |
-| `CAPSULES_AGREEMENT_TIMEOUT_MS` | Optional: how long the requester waits for the provider's answer. Default 8000. |
+| `CAPSULES_AGREEMENT_WINDOW_SECONDS` | Optional: how long a session lasts, from its proposal. Default 3600, at most 86400. |
+| `CAPSULES_AGREEMENT_TIMEOUT_MS` | Optional: how long the requester waits for each round trip with the provider, connecting included. Default 8000. |
+| `CAPSULES_AGREEMENT_RESPONDER_TIMEOUT_MS` | Optional: how long a provider waits at each step of an inbound agreement stream. Default 10000. |
 
 The spend cap is the requester's own statement of what it expects to spend,
 an agent-origin assertion. It is not a signed authorization by a person, and
@@ -28,13 +29,22 @@ still bounds what is actually paid.
 ## When a session is set up
 
 The plugin learns of an exchange after the host has sent the request. So the
-requester proposes a session on its first exchange with a provider, once
-agreements are on, and again after the session's window ends. That first
-exchange is outside the agreement; later exchanges in the window are under it.
+requester proposes a session on its first exchange with a provider for a
+model, once agreements are on, and again after the session's window ends.
+That first exchange is outside the agreement; later exchanges in the window
+with that model are under it. The set-up runs beside the exchange and never
+holds it up.
 
 A provider whose plugin predates agreements answers the proposal with
-something else at once, and the requester goes on without an agreement. A
-provider answers only a requester whose plugin key a peer announced.
+something else at once, and the requester goes on without an agreement.
+After a set-up that does not end in an agreement, the requester waits ten
+minutes before proposing to that provider again.
+
+A provider answers only a requester whose plugin key a peer announced, works
+on at most four agreement messages at once, and holds at most eight unexpired
+sessions per requester. It accepts a session window of at most a day, and
+allows five minutes of clock difference between the two nodes. A proposal sent
+again gets the same answer back.
 
 ## What is sent
 
@@ -43,12 +53,14 @@ Each message is one stream on the private mesh channel
 exact octets the other signed.
 
 1. The requester sends its signed `proposed` record with three documents:
-   the Evidence Contract, the model policy (the model the provider states it
-   serves) and the terms (`spend_cap`, `unit` `msat`, `payment_ref_type`
+   the Evidence Contract, the model policy (the model the requester expects
+   the provider to state it serves, by the provider's own canonical
+   reference) and the terms (`spend_cap`, `unit` `msat`, `payment_ref_type`
    `ln.payment_hash`, and `max_exchanges` when set). The record names each
    document by its digest.
-2. The provider checks the documents against their digests, then answers
-   with a signed `accepted` record.
+2. The provider checks the documents against their digests and their shapes,
+   and the records with the interop profile's own verifier, then answers with
+   a signed `accepted` record.
 3. The requester checks the answer and signs a receipt (§11.1.4) saying when
    it held the acceptance. The receipt is the evidence that the agreement came
    before the exchanges it covers. It sends the receipt to the provider, which
@@ -81,5 +93,9 @@ Under the ledger directory, `agreements/`:
 - `receipts/<digest>.json`: receipts;
 - `documents/<digest>.json`: the contract, model policy and terms.
 
-Each file is named by its record digest (SHA-256 over the RFC 8785 form of
-the parsed object), so a second copy of the same object is the same file.
+Each object is kept as the octets it travelled as. Each file is named by its
+digest (SHA-256 over the RFC 8785 form of the parsed object), so a second copy
+of the same object is the same file, and the first octets kept stay.
+
+Nothing under `agreements/` is removed yet. How long agreements are kept is an
+open item.

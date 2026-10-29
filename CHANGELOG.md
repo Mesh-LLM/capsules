@@ -5,8 +5,9 @@
 ### Added
 
 - **Service evidence agreements (M4, first part).** With `CAPSULES_AGREEMENT_SPEND_CAP_MSAT` set,
-  a requester proposes a session-scoped agreement to a provider on its first exchange with it,
-  on the new private mesh channel `x-capsules-agreement/1`. The agreement is the interop
+  a requester proposes a session-scoped agreement to a provider on its first exchange with it for
+  a model, beside the exchange and never holding it up, on the new private mesh channel
+  `x-capsules-agreement/1`. The agreement is the interop
   profile's acceptance record (§11.1). The provider checks the session's Evidence Contract
   (`x-capsules/paid-session@1`), model policy and terms against their digests and accepts. The
   requester signs the §11.1.4 receipt and sends it back. Both sides keep the records, the

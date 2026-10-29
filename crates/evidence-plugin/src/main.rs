@@ -468,12 +468,22 @@ async fn settlement_legs_on_exchange(
     .await;
     if let Ok((capsules, pushes)) = pushes {
         push_settlement_legs(context, &capsules, pushes, self_peer).await;
-        // A session with this provider, when the operator set session terms
-        // and none holds now: this exchange is outside it, later ones cite
-        // it (R11). One bounded round trip, only when none is held.
+        // A session with this provider for the model it states, when the
+        // operator set session terms and none holds now: this exchange is
+        // outside it, later ones cite it (R11). It runs in its own task, so
+        // the host's ordered channel handling never waits on the provider.
         if envelope.phase == lifecycle_channel::Phase::Terminal {
-            if let Some(peer) = push_counterparty(&envelope) {
-                agreement_bridge::ensure_session(context, &capsules, peer, &envelope.model).await;
+            let model = envelope
+                .serving_provenance
+                .as_ref()
+                .and_then(|p| p.model_canonical_ref.clone());
+            if let (Some(peer), Some(model)) = (push_counterparty(&envelope), model) {
+                agreement_bridge::ensure_session(
+                    context.owned(),
+                    capsules.clone(),
+                    peer.to_string(),
+                    model,
+                );
             }
         }
     }
