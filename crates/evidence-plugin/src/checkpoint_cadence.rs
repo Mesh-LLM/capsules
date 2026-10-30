@@ -537,7 +537,7 @@ fn until_boundary(boundary: i64, now: i64) -> Duration {
 /// fd74008 each named witness is reached through its own client, at its own
 /// URL, and this one is never called; it is given no address at all, so no
 /// default witness can ever be reached through it.
-fn anchor_for() -> AnchorClient {
+pub(crate) fn anchor_for() -> AnchorClient {
     AnchorClient::new(String::new())
 }
 

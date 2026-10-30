@@ -525,6 +525,28 @@ impl LedgerIndex {
         ))
     }
 
+    /// The deal capsules linked to `exchange_capsule_id`, in log order.
+    pub fn deal_capsules_of(&self, exchange_capsule_id: &str) -> Vec<&str> {
+        let mut found: Vec<(u64, &str)> = self
+            .deal_exchange
+            .iter()
+            .filter(|(_, exchange)| exchange.as_str() == exchange_capsule_id)
+            .filter_map(|(id, _)| Some((self.leaf_index_of(id)?, id.as_str())))
+            .collect();
+        found.sort_unstable();
+        found.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// The inclusion proof of `leaf_index` in the MMR of `size` nodes, in
+    /// the form a Bundle carries it.
+    pub fn inclusion_proof(
+        &self,
+        leaf_index: u64,
+        size: u64,
+    ) -> Result<cll::mmr::InclusionProof, cll::mmr::MmrError> {
+        cll::mmr::inclusion_proof(&self.nodes, leaf_index, size)
+    }
+
     pub fn leaf_index_of(&self, capsule_id: &str) -> Option<u64> {
         self.by_id.get(capsule_id).copied()
     }

@@ -168,7 +168,7 @@ evidence-request = { version = "=0.2.0", features = ["cll", "receipt", "acceptan
 # and evidence-request lines as above.
 evidencebook = { version = "0.0.10", features = ["deal"] }
 # Class 1 verification of a received half (capsule-emit main moved it here).
-agent-action-capsule = "0.4.1"
+agent-action-capsule = { version = "0.4.1", features = ["strict"] }
 # The witness's own record of this log (`witness_status`): one blocking GET,
 # no redirects, a capped body. Already in the tree through capsule-emit.
 ureq = { version = "2", features = ["json"] }

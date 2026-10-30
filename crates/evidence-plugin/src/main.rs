@@ -15,6 +15,7 @@ mod controller_binding;
 mod controller_binding_e2e_setup;
 mod data_dir;
 mod deal_flow;
+mod deal_receipt;
 mod deal_records;
 mod decision;
 mod doctor;
@@ -1715,6 +1716,11 @@ async fn main() -> anyhow::Result<()> {
         plugin,
         capsules_for_routing_choice.clone(),
         self_peer.clone(),
+    );
+    let plugin = deal_receipt::with_route(
+        plugin,
+        capsules_for_routing_choice.clone(),
+        checkpoints.clone(),
     );
     let plugin = with_evidence_operations(
         plugin,
