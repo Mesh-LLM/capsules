@@ -850,7 +850,11 @@ pub async fn push_capsule_to_peer(
 /// bundles but not one of those members refuses `bundle_malformed`: the
 /// half still goes, first without the controller binding (the newer
 /// member), then without the split's stage records, which the requester
-/// then reads as not received.
+/// then reads as not received. Stage records are as old as the receiver,
+/// so one that takes the binding refuses stages only when they are
+/// malformed; the half then goes without either, and its citing record
+/// reads as holding no binding rather than a wrong one. A receiver that
+/// predates bundles refuses `request_malformed` and gets the bare record.
 async fn push_bundle(
     context: &mut PluginContext<'_>,
     peer_id: &str,
@@ -868,17 +872,47 @@ async fn push_bundle(
             controller_binding,
         );
         let response = send_push(context, peer_id, self_peer_id, &bundle).await?;
-        if !refused_as_bundle_malformed(&response) {
-            return Ok(response);
-        }
-        if controller_binding.take().is_some() {
-            tracing::info!(%peer_id, "peer does not take a controller binding -- re-pushing the bundle without it");
-        } else {
-            tracing::info!(%peer_id, "peer does not take split stage records -- re-pushing the plain bundle");
-            split_stage_records = &[];
+        match retry_after(&response, controller_binding.is_some()) {
+            Retry::Final => return Ok(response),
+            Retry::Bare => {
+                tracing::info!(%peer_id, "peer's receiver predates bundles -- re-pushing the bare record");
+                return send_push(context, peer_id, self_peer_id, capsule_json).await;
+            }
+            Retry::WithoutBinding => {
+                tracing::info!(%peer_id, "peer does not take a controller binding -- re-pushing the bundle without it");
+                controller_binding = None;
+            }
+            Retry::WithoutSplits => {
+                tracing::info!(%peer_id, "peer does not take split stage records -- re-pushing the plain bundle");
+                split_stage_records = &[];
+            }
         }
     }
     push_plain_bundle(context, peer_id, self_peer_id, capsule_json, coverage).await
+}
+
+/// What [`push_bundle`] sends after a carrying bundle's reply.
+#[derive(Debug, PartialEq)]
+enum Retry {
+    /// The reply stands, accepted or refused.
+    Final,
+    /// The receiver predates bundles ([`refused_as_older_door`]).
+    Bare,
+    /// The receiver reads bundles but not a member: the newer one goes first.
+    WithoutBinding,
+    WithoutSplits,
+}
+
+fn retry_after(response: &serde_json::Value, carries_binding: bool) -> Retry {
+    if refused_as_older_door(response) {
+        Retry::Bare
+    } else if !refused_as_bundle_malformed(response) {
+        Retry::Final
+    } else if carries_binding {
+        Retry::WithoutBinding
+    } else {
+        Retry::WithoutSplits
+    }
 }
 
 fn refused_as_bundle_malformed(response: &serde_json::Value) -> bool {
@@ -1086,6 +1120,34 @@ pub(crate) mod tests {
         );
         assert_eq!(pushed_half(&body), &half);
         assert_eq!(pushed_half(&half), &half);
+    }
+
+    /// A carrying bundle's reply decides the next push: a receiver that
+    /// predates bundles gets the bare record, as a plain bundle's would
+    /// (Mesh-LLM/capsules-plugin#113 carries the binding on every push).
+    #[test]
+    fn a_carrying_bundle_falls_back_by_its_reply() {
+        let reply = |reason: &str| serde_json::json!({"reason": reason});
+        let received = serde_json::json!({"status": "received"});
+        for carries_binding in [true, false] {
+            assert_eq!(
+                retry_after(&reply("request_malformed"), carries_binding),
+                Retry::Bare
+            );
+            assert_eq!(retry_after(&received, carries_binding), Retry::Final);
+            assert_eq!(
+                retry_after(&reply("signature_unverified"), carries_binding),
+                Retry::Final
+            );
+        }
+        assert_eq!(
+            retry_after(&reply("bundle_malformed"), true),
+            Retry::WithoutBinding
+        );
+        assert_eq!(
+            retry_after(&reply("bundle_malformed"), false),
+            Retry::WithoutSplits
+        );
     }
 
     #[test]
