@@ -64,7 +64,7 @@ pub fn record_at_completion_is_off() -> bool {
     record_at_completion_is_off_from(crate::settings::var(ENV_RECORD_AT_COMPLETION))
 }
 
-fn record_at_completion_is_off_from(read: Result<String, std::env::VarError>) -> bool {
+pub(crate) fn record_at_completion_is_off_from(read: Result<String, std::env::VarError>) -> bool {
     match read {
         Ok(raw) => record_at_completion_is_off_for(Some(&raw)),
         Err(std::env::VarError::NotPresent) => record_at_completion_is_off_for(None),

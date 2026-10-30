@@ -62,6 +62,7 @@ mod settlement_adapter;
 mod settlement_channel;
 mod settlement_legs;
 mod share_policy;
+mod sharing_effective;
 mod split_stage;
 mod strict_json;
 #[cfg(test)]
@@ -1417,6 +1418,7 @@ async fn main() -> anyhow::Result<()> {
     // ledger or the checkpoint cadence opens anything in it.
     let _data_dir_lock = data_dir::lock(&data_dir)?;
     tracing::info!(data_dir = %data_dir.display(), "plugin data directory");
+    sharing_effective::keep_current(data_dir.clone());
     // The log id is node-unique by default (the node's signing key id), and a
     // new history the owner asked for last run starts HERE, before the
     // ledger or the checkpoint cadence opens (see `owner_maintenance`).
