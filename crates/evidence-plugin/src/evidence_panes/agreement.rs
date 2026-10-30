@@ -664,17 +664,29 @@ mod tests {
         invoices: &[Value],
         legs: &[Value],
     ) -> Vec<Value> {
+        let registry = json!({ PEER_NODE: PEER_KEY }).to_string();
+        attached_in(halves, sessions, invoices, legs, &registry, T0 + 7_200)
+    }
+
+    /// [`attached`] with this registry, evaluated at `now`.
+    fn attached_in(
+        halves: &[Value],
+        sessions: &[SessionView],
+        invoices: &[Value],
+        legs: &[Value],
+        registry: &str,
+        now: i64,
+    ) -> Vec<Value> {
         let mut index = SettlementIndex::default();
         for record in invoices {
             index.push(record.clone());
         }
-        let registry = json!({ PEER_NODE: PEER_KEY }).to_string();
         let ctx = Context {
             sessions,
-            registry: Some(&registry),
+            registry: Some(registry),
             legs,
             settlements: &index,
-            now: T0 + 7_200,
+            now,
         };
         let mut p = pane(&halves.iter().collect::<Vec<_>>());
         attach_rows(&mut p, halves, &ctx);
@@ -1064,6 +1076,84 @@ mod tests {
         assert_eq!(after[0]["result"], json!("not_met"));
     }
 
+    /// The present Unix time, away from the end of its minute, so halves
+    /// sealed next fall in the same minute.
+    fn present_minute() -> i64 {
+        let now = chrono::Utc::now().timestamp();
+        if now % 60 < 50 {
+            return now;
+        }
+        std::thread::sleep(std::time::Duration::from_secs((61 - now % 60) as u64));
+        chrono::Utc::now().timestamp()
+    }
+
+    /// An exchange as the host reports it, for `model`.
+    fn observed<'a>(
+        model: &'a str,
+        exchange_id: &'a str,
+        request_digest: &'a str,
+        dispatch_path: crate::lifecycle_channel::DispatchPath,
+        host_provenance: crate::capsule_emit::HostProvenance,
+    ) -> crate::capsule_emit::ObservedHostExchange<'a> {
+        crate::capsule_emit::ObservedHostExchange {
+            model,
+            exchange_id: Some(exchange_id),
+            request_digest: Some(request_digest),
+            response_digest: None,
+            tool_calls_digest: None,
+            reasoning_digest: None,
+            usage: None,
+            host_provenance,
+            dispatch_path,
+            nonce: None,
+            peer_capsule_id: None,
+            peer_capsule_id_provenance: None,
+            twin_bracket_id: None,
+            response_text_digest: None,
+        }
+    }
+
+    /// A session agreed through the bridge at `at`, as both nodes keep it:
+    /// proposed, accepted, and the requester's receipt delivered.
+    fn agree(
+        requester: &crate::capsule_emit::CapsuleState,
+        provider: &crate::capsule_emit::CapsuleState,
+        terms: &crate::agreement::SessionTerms,
+        model: &str,
+        at: i64,
+    ) -> crate::agreement_bridge::Session {
+        use crate::agreement::{Proposal, Store};
+        use crate::agreement_bridge::{conclude, respond, Outcome};
+        let (rstore, pstore) = (
+            Store::open(requester.ledger_dir()),
+            Store::open(provider.ledger_dir()),
+        );
+        let proposal = Proposal::new(
+            requester.signing_key(),
+            &hex::encode(provider.public_key()),
+            &agreement::new_session_id(),
+            terms,
+            &[model.to_string()],
+            at,
+        );
+        let reply = respond(provider, &pstore, &proposal.to_message(), &|_| true, at);
+        let Outcome::Accepted { session, receipt } = conclude(
+            requester,
+            &rstore,
+            &proposal,
+            &serde_json::to_vec(&reply).unwrap(),
+            at,
+        ) else {
+            panic!("accepted: {reply}")
+        };
+        let frame = serde_json::to_vec(&json!({ "receipt": receipt })).unwrap();
+        assert_eq!(
+            respond(provider, &pstore, &frame, &|_| true, at),
+            json!({"ok": true})
+        );
+        session
+    }
+
     /// One payment lifecycle event as `main.rs` handles it: the settlement
     /// record sealed, then the settlement legs told. The legs' pushes.
     fn lifecycle(
@@ -1074,8 +1164,22 @@ mod tests {
         hash: &str,
         wallet: &[(&str, u64)],
     ) -> Vec<crate::settlement_legs::Push> {
+        lifecycle_event(node, role, exchange_id, phase, Some(hash), 1_000, wallet)
+    }
+
+    /// [`lifecycle`] for any event: segment 0 when it names a payment.
+    fn lifecycle_event(
+        node: &crate::capsule_emit::CapsuleState,
+        role: &str,
+        exchange_id: &str,
+        phase: crate::settlement_channel::Phase,
+        hash: Option<&str>,
+        amount_msat: u64,
+        wallet: &[(&str, u64)],
+    ) -> Vec<crate::settlement_legs::Push> {
         use crate::settlement_channel::{host_shaped_event, parse_and_check};
-        let mut body = host_shaped_event(exchange_id, phase, Some(0), Some(hash), 1_000);
+        let segment = hash.map(|_| 0);
+        let mut body = host_shaped_event(exchange_id, phase, segment, hash, amount_msat);
         body["role"] = json!(role);
         if role == "provider" && phase == crate::settlement_channel::Phase::InputInvoiceIssued {
             body["source"] = json!("provider_asserted");
@@ -1102,9 +1206,8 @@ mod tests {
     /// [`sealed_under_session`], with the provider's agreement store
     /// removed before the pane is read when `keep` is false.
     fn sealed_under_session_keeping(before: i64, keep: bool) -> (String, Value) {
-        use crate::agreement::{Proposal, SessionTerms, Store};
-        use crate::agreement_bridge::{conclude, respond, Outcome};
-        use crate::capsule_emit::{CapsuleState, HostProvenance, ObservedHostExchange};
+        use crate::agreement::SessionTerms;
+        use crate::capsule_emit::{CapsuleState, HostProvenance};
         use crate::lifecycle_channel::DispatchPath;
 
         const MODEL: &str = "hf:example/agreement-pane@main";
@@ -1117,50 +1220,18 @@ mod tests {
             &requester_node,
             &hex::encode(requester.public_key()),
         );
-        // Seal in the same minute the test starts in: away from its end, so
-        // the clock does not cross into the next minute while sealing.
-        let mut now = chrono::Utc::now().timestamp();
-        if now % 60 >= 50 {
-            std::thread::sleep(std::time::Duration::from_secs((61 - now % 60) as u64));
-            now = chrono::Utc::now().timestamp();
-        }
-        let agreed = now - now % 60 - before;
-        let (rstore, pstore) = (
-            Store::open(requester.ledger_dir()),
-            Store::open(provider.ledger_dir()),
-        );
-        let proposal = Proposal::new(
-            requester.signing_key(),
-            &hex::encode(provider.public_key()),
-            &agreement::new_session_id(),
-            &SessionTerms {
-                spend_cap_msat: 3_000,
-                max_exchanges: Some(5),
-                window_seconds: 3_600,
-            },
-            &[MODEL.to_string()],
-            agreed,
-        );
-        let reply = respond(
-            &provider,
-            &pstore,
-            &proposal.to_message(),
-            &|_| true,
-            agreed,
-        );
-        let Outcome::Accepted { session, receipt } = conclude(
-            &requester,
-            &rstore,
-            &proposal,
-            &serde_json::to_vec(&reply).unwrap(),
-            agreed,
-        ) else {
-            panic!("accepted: {reply}")
+        let now = present_minute();
+        let terms = SessionTerms {
+            spend_cap_msat: 3_000,
+            max_exchanges: Some(5),
+            window_seconds: 3_600,
         };
-        let frame = serde_json::to_vec(&json!({ "receipt": receipt })).unwrap();
-        assert_eq!(
-            respond(&provider, &pstore, &frame, &|_| true, agreed),
-            json!({"ok": true})
+        let session = agree(
+            &requester,
+            &provider,
+            &terms,
+            MODEL,
+            now - now % 60 - before,
         );
 
         provider
@@ -1168,27 +1239,20 @@ mod tests {
             .decide_served_citation("p-ex", || {
                 crate::agreement_bridge::served_citation(&provider, &requester_node, MODEL, now)
             });
-        let observed = ObservedHostExchange {
-            model: MODEL,
-            exchange_id: Some("p-ex"),
-            request_digest: Some("a".repeat(64).leak()),
-            response_digest: None,
-            tool_calls_digest: None,
-            reasoning_digest: None,
-            usage: None,
-            host_provenance: HostProvenance {
-                requested_by_node_id: Some(requester_node.clone()),
-                model_canonical_ref: Some(MODEL.to_string()),
-                ..HostProvenance::default()
-            },
-            dispatch_path: DispatchPath::RawProxy,
-            nonce: None,
-            peer_capsule_id: None,
-            peer_capsule_id_provenance: None,
-            twin_bracket_id: None,
-            response_text_digest: None,
-        };
-        provider.emit_for_observed_host_exchange(&observed).unwrap();
+        let request = "a".repeat(64);
+        provider
+            .emit_for_observed_host_exchange(&observed(
+                MODEL,
+                "p-ex",
+                &request,
+                DispatchPath::RawProxy,
+                HostProvenance {
+                    requested_by_node_id: Some(requester_node.clone()),
+                    model_canonical_ref: Some(MODEL.to_string()),
+                    ..HostProvenance::default()
+                },
+            ))
+            .unwrap();
 
         // The payment, both nodes, in the order a live run sees it; the
         // payer's terms leg reaches the provider with the exchange event.
@@ -1229,11 +1293,12 @@ mod tests {
         );
         requester.settlement_legs().decide_citation("ex", || None);
         let provider_node = format!("{:064x}", 0xb0b_0000u64 + before as u64);
-        for push in
+        let pushes =
             requester
                 .settlement_legs()
-                .on_exchange(&requester, "ex", Some(&provider_node), None)
-        {
+                .on_exchange(&requester, "ex", Some(&provider_node), None);
+        assert!(!pushes.is_empty(), "the payer's terms leg is pushed");
+        for push in pushes {
             provider
                 .settlement_legs()
                 .on_received(&provider, &push.capsule);

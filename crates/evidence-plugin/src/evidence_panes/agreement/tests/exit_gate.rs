@@ -11,49 +11,13 @@
 //! paid inference, so a run between two real hosts would spend real money.
 
 use super::*;
-use crate::agreement::{Proposal, SessionTerms, Store};
-use crate::agreement_bridge::{conclude, delivered_citation, respond, served_citation, Outcome};
-use crate::capsule_emit::{CapsuleState, HostProvenance, ObservedHostExchange};
+use crate::agreement::SessionTerms;
+use crate::agreement_bridge::{delivered_citation, served_citation};
+use crate::capsule_emit::{CapsuleState, HostProvenance};
 use crate::lifecycle_channel::DispatchPath;
 use crate::settlement_channel::Phase;
 
 const MODEL: &str = "hf:example/exit-gate@main";
-
-fn observed<'a>(
-    exchange_id: &'a str,
-    request_digest: &'a str,
-    path: DispatchPath,
-    provenance: HostProvenance,
-) -> ObservedHostExchange<'a> {
-    ObservedHostExchange {
-        model: MODEL,
-        exchange_id: Some(exchange_id),
-        request_digest: Some(request_digest),
-        response_digest: None,
-        tool_calls_digest: None,
-        reasoning_digest: None,
-        usage: None,
-        host_provenance: provenance,
-        dispatch_path: path,
-        nonce: None,
-        peer_capsule_id: None,
-        peer_capsule_id_provenance: None,
-        twin_bracket_id: None,
-        response_text_digest: None,
-    }
-}
-
-/// The payer host's `final_accounted` for `exchange_id`.
-fn accounted(node: &CapsuleState, exchange_id: &str, bill_msat: u64) {
-    use crate::settlement_channel::{host_shaped_event, parse_and_check};
-    let mut body = host_shaped_event(exchange_id, Phase::FinalAccounted, None, None, bill_msat);
-    body["role"] = json!("payer");
-    body["event_ref"] = json!("");
-    body["event_ref"] = json!(crate::producer::jcs::json_digest(&body).unwrap());
-    let event = parse_and_check(&serde_json::to_vec(&body).unwrap()).unwrap();
-    node.emit_settlement_record(&event.observation()).unwrap();
-    node.settlement_legs().on_lifecycle(node, &event);
-}
 
 /// Each row's `agreement` on `node`'s own Exchanges pane, by the capsule id
 /// of its own half.
@@ -88,49 +52,13 @@ fn a_paid_session_under_one_agreement_shows_the_exchange_over_the_cap() {
 
     // The session, agreed in the minute before the exchanges, so the
     // requester's receipt orders it before every served half.
-    let mut now = chrono::Utc::now().timestamp();
-    if now % 60 >= 50 {
-        std::thread::sleep(std::time::Duration::from_secs((61 - now % 60) as u64));
-        now = chrono::Utc::now().timestamp();
-    }
-    let agreed = now - now % 60 - 60;
-    let (rstore, pstore) = (
-        Store::open(requester.ledger_dir()),
-        Store::open(provider.ledger_dir()),
-    );
-    let proposal = Proposal::new(
-        requester.signing_key(),
-        &hex::encode(provider.public_key()),
-        &agreement::new_session_id(),
-        &SessionTerms {
-            spend_cap_msat: 2_500,
-            max_exchanges: None,
-            window_seconds: 3_600,
-        },
-        &[MODEL.to_string()],
-        agreed,
-    );
-    let reply = respond(
-        &provider,
-        &pstore,
-        &proposal.to_message(),
-        &|_| true,
-        agreed,
-    );
-    let Outcome::Accepted { session, receipt } = conclude(
-        &requester,
-        &rstore,
-        &proposal,
-        &serde_json::to_vec(&reply).unwrap(),
-        agreed,
-    ) else {
-        panic!("accepted: {reply}")
+    let now = present_minute();
+    let terms = SessionTerms {
+        spend_cap_msat: 2_500,
+        max_exchanges: None,
+        window_seconds: 3_600,
     };
-    let frame = serde_json::to_vec(&json!({ "receipt": receipt })).unwrap();
-    assert_eq!(
-        respond(&provider, &pstore, &frame, &|_| true, agreed),
-        json!({"ok": true})
-    );
+    let session = agree(&requester, &provider, &terms, MODEL, now - now % 60 - 60);
 
     // Three paid exchanges of 1000 msat each against a 2500 msat cap.
     let mut halves = Vec::new();
@@ -171,7 +99,15 @@ fn a_paid_session_under_one_agreement_shows_the_exchange_over_the_cap() {
             &hash,
             &[("fee_msat", 0)],
         );
-        accounted(&requester, &ex, 1_000);
+        lifecycle_event(
+            &requester,
+            "payer",
+            &ex,
+            Phase::FinalAccounted,
+            None,
+            1_000,
+            &[],
+        );
 
         // Each side decides its citation at the exchange's terminal event,
         // as main.rs does, then seals its half.
@@ -182,6 +118,7 @@ fn a_paid_session_under_one_agreement_shows_the_exchange_over_the_cap() {
             });
         let served = provider
             .emit_for_observed_host_exchange(&observed(
+                MODEL,
                 &p_ex,
                 &request,
                 DispatchPath::RawProxy,
@@ -197,6 +134,7 @@ fn a_paid_session_under_one_agreement_shows_the_exchange_over_the_cap() {
         });
         let requested = requester
             .emit_for_observed_host_exchange(&observed(
+                MODEL,
                 &ex,
                 &request,
                 DispatchPath::RemoteMesh,
@@ -207,11 +145,12 @@ fn a_paid_session_under_one_agreement_shows_the_exchange_over_the_cap() {
                 },
             ))
             .unwrap();
-        for push in
+        let pushes =
             requester
                 .settlement_legs()
-                .on_exchange(&requester, &ex, Some(&provider_node), None)
-        {
+                .on_exchange(&requester, &ex, Some(&provider_node), None);
+        assert!(!pushes.is_empty(), "the payer's terms leg is pushed");
+        for push in pushes {
             provider
                 .settlement_legs()
                 .on_received(&provider, &push.capsule);

@@ -12,7 +12,7 @@
 
 use super::*;
 use crate::agreement::{answer, check_proposal, receipt, Proposal, SessionTerms};
-use crate::capsule_emit::{CapsuleState, HostProvenance, ObservedHostExchange};
+use crate::capsule_emit::{CapsuleState, HostProvenance};
 use crate::lifecycle_channel::DispatchPath;
 use ed25519_dalek::SigningKey;
 use evidence_request::acceptance::record_digest;
@@ -51,11 +51,7 @@ impl Fixture {
             &provider_node: hex::encode(provider.public_key()),
         })
         .to_string();
-        let mut now = chrono::Utc::now().timestamp();
-        if now % MIN >= 50 {
-            std::thread::sleep(std::time::Duration::from_secs((61 - now % MIN) as u64));
-            now = chrono::Utc::now().timestamp();
-        }
+        let now = present_minute();
         Fixture {
             _dirs: dirs,
             requester,
@@ -137,26 +133,18 @@ impl Fixture {
         self.provider
             .settlement_legs()
             .decide_served_citation(ex, || cites);
-        let observed = ObservedHostExchange {
-            model: MODEL,
-            exchange_id: Some(ex.to_string().leak()),
-            request_digest: Some(format!("{:064x}", ex.len() as u64 * 7919).leak()),
-            response_digest: None,
-            tool_calls_digest: None,
-            reasoning_digest: None,
-            usage: None,
-            host_provenance: HostProvenance {
+        let request = hex::encode(Sha256::digest(ex));
+        let observed = observed(
+            MODEL,
+            ex,
+            &request,
+            DispatchPath::RawProxy,
+            HostProvenance {
                 requested_by_node_id: Some(self.requester_node.clone()),
                 model_canonical_ref: Some(MODEL.to_string()),
                 ..HostProvenance::default()
             },
-            dispatch_path: DispatchPath::RawProxy,
-            nonce: None,
-            peer_capsule_id: None,
-            peer_capsule_id_provenance: None,
-            twin_bracket_id: None,
-            response_text_digest: None,
-        };
+        );
         self.provider
             .emit_for_observed_host_exchange(&observed)
             .unwrap()
@@ -172,25 +160,14 @@ impl Fixture {
         invoices: &[Value],
         legs: &[Value],
     ) -> Vec<Value> {
-        let mut index = SettlementIndex::default();
-        for record in invoices {
-            index.push(record.clone());
-        }
-        let ctx = Context {
+        attached_in(
+            halves,
             sessions,
-            registry: Some(&self.registry),
+            invoices,
             legs,
-            settlements: &index,
-            now: self.m + 110 * MIN,
-        };
-        let mut p = pane(&halves.iter().collect::<Vec<_>>());
-        attach_rows(&mut p, halves, &ctx);
-        p["rows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|r| r["agreement"].clone())
-            .collect()
+            &self.registry,
+            self.m + 110 * MIN,
+        )
     }
 
     /// One exchange's row, with one payment of 1000 msat observed.
@@ -213,9 +190,11 @@ fn half_exchange(half: &Value) -> String {
 /// The case's coverage, finding and requirement results, with T9-A and
 /// `R-served` held for every case.
 fn outcome(row: &Value) -> (&str, Option<&str>, Vec<&str>) {
-    if let Some(spend) = row.get("spend") {
+    // T9-A: a half citing a session states its spend against the cap, and
+    // the cap is the requester's own assertion.
+    if row["coverage"] != json!("not_cited") {
         assert_eq!(
-            spend["basis"],
+            row["spend"]["basis"],
             json!("agent_origin_assertion"),
             "T9-A: {row:#}"
         );
@@ -417,6 +396,7 @@ fn t9_c_the_third_exchange_is_over_the_count_and_the_cap() {
     let outcomes: Vec<_> = rows.iter().map(outcome).collect();
     for o in &outcomes {
         assert_eq!(o.1, Some("accepted_before_action"), "{rows:#?}");
+        assert_eq!(o.2, ["met", "met", "met"], "{rows:#?}");
     }
     assert_eq!(
         outcomes.iter().map(|o| o.0).collect::<Vec<_>>(),
