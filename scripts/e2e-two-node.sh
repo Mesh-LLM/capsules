@@ -249,6 +249,14 @@ wait_for 120 "the requester holds the provider's record of each exchange" holds_
 # checked on the requester under the provider's announced key.
 provider_checkpointed() { [ -s "$(plugin_data provider)/ledger/checkpoints.jsonl" ]; }
 wait_for 120 "the provider has cut a checkpoint" provider_checkpointed
+# The requester holds the provider's commitment first, so its ask records the
+# policy a refusal would be checked against.
+commitment_held() {
+  tool "$REQUESTER_CONSOLE" mesh_commitment_fetch "$(jq -cn --arg p "$provider_id" '{peer_id: $p}')" \
+    > "$out/provider-commitment.json" \
+    && jq -e '.problems == []' "$out/provider-commitment.json"
+}
+wait_for 60 "the requester holds the provider's commitment" commitment_held
 history_card() {
   tool "$REQUESTER_CONSOLE" mesh_evidence_request "$(jq -cn --arg p "$provider_id" '{peer_id: $p,
     request: {subject: {full_history: null}, coverage: {min_freshness: 1}, derivation: "history_card/1"}}')" \

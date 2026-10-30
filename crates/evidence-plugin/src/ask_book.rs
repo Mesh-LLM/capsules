@@ -190,7 +190,8 @@ pub struct Asked {
 
 /// Seal `request`, exactly as it will be transmitted to `responder`, as an
 /// `evidence_request` record (the statement `ask::request` seals:
-/// `request` and `responder_ref`). `now` is whole-second RFC 3339 UTC.
+/// `request` and `responder_ref`, plus the `commitment` held for the
+/// responder, if any). `now` is whole-second RFC 3339 UTC.
 ///
 /// Refused, with nothing sealed, as `ask::request` refuses: a request this
 /// node would not read as well formed, or one reusing a nonce an earlier
@@ -201,6 +202,7 @@ pub fn record_request(
     capsules: &CapsuleState,
     request: &Value,
     responder: &str,
+    commitment: Option<Value>,
     now: &str,
 ) -> Result<Asked, AskError> {
     let mut book = AskBook::open(capsules, now);
@@ -213,6 +215,11 @@ pub fn record_request(
     statement.insert("request".into(), request.clone());
     if !responder.is_empty() {
         statement.insert("responder_ref".into(), json!(responder));
+    }
+    // The commitment held for the responder (`crate::peer_commitments`),
+    // which a refusal is later checked against.
+    if let Some(commitment) = commitment {
+        statement.insert("commitment".into(), commitment);
     }
     let sealed = book.seal(&Entry {
         record_type: record_types::REQUEST.into(),
@@ -308,9 +315,11 @@ fn outcome(answer: &Value, verification: &Value) -> &'static str {
 
 /// Seal the reply that came back inside the window for the request
 /// recorded as `request_record_id` as an `evidence_response` record citing
-/// it: its outcome, the request's digest and what checking it found. Refused
-/// once an outcome is recorded for the request, so a reply never replaces
-/// an absence (or another reply).
+/// it: its outcome, the request's digest and what checking it found, which
+/// for a signed refusal includes its check against the commitment the
+/// request recorded (`peer_commitments::policy_check`). Returns the record
+/// and that verification. Refused once an outcome is recorded for the
+/// request, so a reply never replaces an absence (or another reply).
 pub fn record_response(
     capsules: &CapsuleState,
     request_record_id: &str,
@@ -318,23 +327,36 @@ pub fn record_response(
     answer: &Value,
     verification: &Value,
     now: &str,
-) -> Result<Sealed, AskError> {
+) -> Result<(Sealed, Value), AskError> {
     let mut book = AskBook::open(capsules, now);
-    if book
+    let Some(statement) = book
         .header(request_record_id)
-        .and_then(|h| h.get("record_type"))
-        != Some(&json!(record_types::REQUEST))
-    {
+        .filter(|h| h.get("record_type") == Some(&json!(record_types::REQUEST)))
+        .and_then(|h| h.get("statement"))
+        .cloned()
+    else {
         return Err(AskError::NotFound(format!(
             "{request_record_id} is not a request this book recorded"
         )));
-    }
+    };
     if book.outcome_recorded(request_record_id) {
         return Err(AskError::Invalid(format!(
             "an outcome is already recorded for request {request_digest}"
         )));
     }
-    Ok(book.seal(&Entry {
+    let mut verification = verification.clone();
+    if verification.get("state").and_then(Value::as_str) == Some("refusal") {
+        let reason = verification["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        verification["policy_check"] = crate::peer_commitments::policy_check(
+            statement.get("commitment"),
+            &statement["request"],
+            &reason,
+        );
+    }
+    let sealed = book.seal(&Entry {
         record_type: record_types::RESPONSE.into(),
         epistemic_type: EpistemicType::ObservedEvent,
         links: vec![Link {
@@ -342,11 +364,12 @@ pub fn record_response(
             target: request_record_id.to_string(),
         }],
         statement: json!({
-            "outcome": outcome(answer, verification),
+            "outcome": outcome(answer, &verification),
             "request_digest": request_digest,
             "verification": verification,
         }),
-    })?)
+    })?;
+    Ok((sealed, verification))
 }
 
 /// Seal `recorded_absence` for the request recorded as `request_record_id`,
