@@ -1873,11 +1873,12 @@ pub(crate) mod tests {
         .unwrap();
     }
 
-    /// A deal's steps and its report name no counterparty themselves. The
-    /// share gate takes it from the exchange record they are linked to
-    /// (`deal-links.jsonl`), so under `counterparties` they go to that
-    /// exchange's counterparty and to no one else, and a deal capsule with no
-    /// link goes to nobody (Mesh-LLM/capsules-plugin#96).
+    /// A deal's steps name no counterparty themselves. The share gate takes
+    /// it from the exchange record they are linked to (`deal-links.jsonl`),
+    /// so under `counterparties` they go to that exchange's counterparty and
+    /// to no one else, and a deal capsule with no link goes to nobody
+    /// (Mesh-LLM/capsules-plugin#96). The report is the owner's own and
+    /// never leaves, under any policy (#146).
     #[test]
     fn a_deal_capsule_goes_to_the_counterparty_of_the_exchange_it_is_of() {
         let hex = |c: char| c.to_string().repeat(64);
@@ -1908,7 +1909,13 @@ pub(crate) mod tests {
         evidence_log::with_index(dir.path(), &key_id, |index| {
             let who = |id: &str| vec![id.to_string()];
             let (step, report, unlinked) = ([1u64], [2u64], [3u64]);
-            for records in [&step[..], &report[..], &[1, 2][..]] {
+            // The report is the owner's alone: no policy serves it.
+            for policy in ["counterparties", "peers", "off"] {
+                assert!(!may_serve_all(index, &report, &who("node-a"), policy));
+                assert!(!may_serve_all(index, &[1, 2], &who("node-a"), policy));
+            }
+            {
+                let records = &step[..];
                 assert!(may_serve_all(
                     index,
                     records,

@@ -4,6 +4,13 @@
 
 ### Changed
 
+- **The payer's deal report is sealed for the owner (`keep`) and never leaves the node.** It was
+  sealed for the counterparty audience, so capsule-viewer rendered the owner's own receipt as the
+  other party's copy and refused it as `keep`. A copy for the counterparty is made only by a share
+  path, which is not built; until then the counterparty is served the deal's steps, not the report.
+  A counterparty's range or full-history request that covers the report is refused whole (a range
+  is answered in full or refused in full, as for an ask record); it can still ask for the steps one
+  record at a time. Mesh-LLM/capsules-plugin#146.
 - **`evidencebook` 0.0.10 (with `agent-action-capsule` 0.5.0).** The `deal` git-rev patch is gone. `capsule-emit` 0.0.9 still takes `agent-action-capsule` 0.4.1, so the
   tree holds both until a `capsule-emit` release moves to 0.5.0.
   0.5.0 reads a witness receipt with an empty `receipt_b64` as malformed, so the served summary's
@@ -29,7 +36,7 @@
   least one invoice issued, the node seals a `baseline` (what was asked: the request digest and
   model, committed under a nonce the node keeps; the serving peer by fingerprint only; paid over
   Lightning, not refundable; no price, since an invoice's msat has no unit in the profile), then an
-  `outcome` and a `close`, then an in-log `deal_report` for the counterparty. `completed` once
+  `outcome` and a `close`, then an in-log `deal_report` for the owner (audience `keep`). `completed` once
   every invoice is paid and the response received; `open` when no settlement came within 15
   minutes of the first invoice or the node restarted first (the record is not final, never
   "pending"). A free exchange gets no deal. The Capsules are built by `capsule_emit::produce`
@@ -52,12 +59,12 @@
   `vectors/evidence-key-acceptance/cases.json` gains four operator-binding cases, covering
   `same_controller_as_receiver` true, false and absent.
   Mesh-LLM/capsules-plugin#113.
-- **A deal capsule goes to the counterparty of the exchange it is of.** A step or a report of an
-  `x-deal-v0` deal names no counterparty itself, so under `share_history_segments=counterparties`
+- **A deal capsule goes to the counterparty of the exchange it is of.** A step of an
+  `x-deal-v0` deal (not its report, which stays on the node: Mesh-LLM/capsules-plugin#146) names no counterparty itself, so under `share_history_segments=counterparties`
   it would have gone to nobody. The node now writes `deal-links.jsonl` in the ledger directory,
   one `{"capsule_id", "exchange_capsule_id"}` line per deal capsule, before it seals the capsule,
   and the share gate takes the counterparty of the exchange record the capsule is linked to: the
-  counterparty can read the steps and the report, an unrelated node cannot, and a deal capsule
+  counterparty can read the steps, an unrelated node cannot, and a deal capsule
   with no link goes to nobody. Nothing seals a deal yet; this is the gate the Mesh receipt
   (Mesh-LLM/capsules-plugin#96) needs first. No release.
 - **The saved History page carries the Service History when the node shares it.** With

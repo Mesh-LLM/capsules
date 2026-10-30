@@ -13,12 +13,14 @@
 //!   (every invoice paid and the response received: `completed`), or when no
 //!   settlement came within [`OPEN_AFTER`] of the first invoice or the node
 //!   restarted first (`open`: the record is not final, never "pending").
-//! - **report**, an in-log `deal_report` for the counterparty, after the
-//!   close, citing the Mesh records each of its lines is about.
+//! - **report**, an in-log `deal_report` for the owner (audience `keep`), after
+//!   the close, citing the Mesh records each of its lines is about.
 //!
 //! **The share gate.** Every deal capsule is linked to the exchange record it
 //! is of in `deal-links.jsonl` ([`crate::evidence_log`]) *before* it is
-//! sealed, so it goes to that exchange's counterparty and to nobody else.
+//! sealed, so each step goes to that exchange's counterparty and to nobody
+//! else. The report never leaves the node (`never_leaves`): a counterparty's
+//! copy would be made by a share path, which is not built.
 //!
 //! **What survives a restart.** The deal's state is `deals.json`; the
 //! payload each Capsule commits is journaled in `deal-payloads.jsonl` before
@@ -561,7 +563,7 @@ impl Deals {
         let body = report_body(entry, exchange_capsule_id, settled, now);
         let payload = deal::report_payload(&deal::Report {
             deal_id: entry.deal_id.clone(),
-            audience: deal::AUDIENCE_COUNTERPARTY.into(),
+            audience: deal::AUDIENCE_KEEP.into(),
             nonce,
             body,
             checkpoint: None,
@@ -851,7 +853,7 @@ fn report_body(
         .map(|s| json!({"capsule_id": s.capsule_id}))
         .collect();
     let mut body = serde_json::Map::new();
-    body.insert("audience".into(), json!(deal::AUDIENCE_COUNTERPARTY));
+    body.insert("audience".into(), json!(deal::AUDIENCE_KEEP));
     body.insert(
         "scope".into(),
         json!("This node's own record of the exchange."),
@@ -960,7 +962,7 @@ mod tests {
         assert_eq!(outcome["body"]["outcome"], "completed");
         let report = payload(dir.path(), capsules[3]["capsule_id"].as_str().unwrap());
         assert_eq!(report["report"]["lifecycle"]["state"], "closed");
-        assert_eq!(report["audience"], "counterparty");
+        assert_eq!(report["audience"], "keep");
         // The raw peer id is in no record.
         let journal = std::fs::read_to_string(ledger(dir.path()).join(PAYLOADS_FILE)).unwrap();
         assert!(!journal.contains(PEER));
