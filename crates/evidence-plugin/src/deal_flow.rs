@@ -1310,6 +1310,7 @@ mod tests {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
+        eprintln!("check_profile.py: {text}");
         assert!(out.status.success() && !text.contains("FAIL"), "{text}");
     }
 }
