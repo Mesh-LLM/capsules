@@ -50,6 +50,34 @@ describe('agreementView', () => {
     expect(agreementView({ ...covered, finding: null }, true)?.finding?.key).toBe('not_evaluated')
   })
 
+  it('shows covered in the good tone only when the agreement is shown to come first', () => {
+    expect(agreementView(covered, true)?.tone).toBe('good')
+    for (const finding of ['accepted_execution_cites', 'accepted_not_cited', null] as const) {
+      const view = agreementView({ ...covered, finding }, true)
+      expect(view?.label).toBe('covered by the agreement')
+      expect(view?.tone).toBe('muted')
+    }
+  })
+
+  it('tells a requester still waiting for the provider record from a failed check', () => {
+    const waiting = agreementView({ ...covered, finding: null, finding_not_evaluated: 'served_half_not_held' }, true)
+    expect(waiting?.finding).toMatchObject({ key: 'not_evaluated', label: 'ordering not checked' })
+    expect(waiting?.finding?.tooltip).toContain('does not hold the provider')
+    const failed = agreementView({ ...covered, side: 'provider', finding: null, finding_not_evaluated: 'evaluation_failed' }, true)
+    expect(failed?.finding?.key).toBe('evaluation_failed')
+    expect(failed?.finding?.tooltip).not.toContain('does not hold the provider')
+  })
+
+  it('says an agreement this node does not keep is not evaluated, never "no agreement"', () => {
+    const view = agreementView({ side: 'provider', coverage: 'not_evaluated', acceptance_digest: 'b'.repeat(64) }, true)
+    expect(view).toMatchObject({
+      coverageKey: 'not_evaluated',
+      label: 'agreement cited; not evaluated on this node',
+      tone: 'muted',
+      finding: null
+    })
+  })
+
   it('gives an uncited exchange no finding and never a covered tone', () => {
     for (const coverage of ['set_up_after', 'no_agreement'] as const) {
       const view = agreementView({ side: 'provider', coverage }, true)

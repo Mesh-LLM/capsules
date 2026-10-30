@@ -337,6 +337,7 @@ export type AgreementCoverage = {
     | 'set_up_after'
     | 'not_cited'
     | 'no_agreement'
+    | 'not_evaluated'
     | string
   acceptance_digest?: string
   count?: { position: number; max_exchanges: number | null }
@@ -356,6 +357,9 @@ export type AgreementCoverage = {
     | 'accepted_after_action'
     | string
     | null
+  /** Why `finding` is null: the provider's served half is not held on this
+   *  node yet, or the evaluation failed. */
+  finding_not_evaluated?: 'served_half_not_held' | 'evaluation_failed' | string
   requirements?: { id: string; result: 'met' | 'not_met' | 'not_evaluable' | string }[]
 }
 

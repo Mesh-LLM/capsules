@@ -16,7 +16,8 @@ const COVERAGE_LABEL: Record<CoverageKey, string> = {
   cap_not_evaluable: 'cap not evaluable',
   set_up_after: 'not covered: agreement set up after this exchange',
   not_cited: 'agreement present; exchange does not cite it',
-  no_agreement: 'no agreement'
+  no_agreement: 'no agreement',
+  not_evaluated: 'agreement cited; not evaluated on this node'
 }
 
 const COVERAGE_TONE: Record<CoverageKey, Tone> = {
@@ -27,7 +28,8 @@ const COVERAGE_TONE: Record<CoverageKey, Tone> = {
   cap_not_evaluable: 'muted',
   set_up_after: 'muted',
   not_cited: 'warn',
-  no_agreement: 'muted'
+  no_agreement: 'muted',
+  not_evaluated: 'muted'
 }
 
 const FINDING_LABEL: Record<FindingKey, string> = {
@@ -36,7 +38,8 @@ const FINDING_LABEL: Record<FindingKey, string> = {
   accepted_not_cited: 'accepted; not cited by the provider',
   not_accepted: 'not accepted',
   accepted_after_action: 'accepted after the exchange',
-  not_evaluated: 'ordering not checked'
+  not_evaluated: 'ordering not checked',
+  evaluation_failed: 'ordering not checked'
 }
 
 export type AgreementView = {
@@ -74,10 +77,13 @@ export function agreementView(agreement: AgreementCoverage | undefined, paid: bo
   const known = Object.hasOwn(COVERAGE_LABEL, agreement.coverage)
   const coverageKey = known ? (agreement.coverage as CoverageKey) : 'unrecognised'
   const side = agreement.side === 'provider' ? 'as the provider' : 'as the requester'
-  const cited = agreement.coverage !== 'set_up_after' && agreement.coverage !== 'no_agreement'
+  const cited = !['set_up_after', 'no_agreement', 'not_evaluated'].includes(agreement.coverage)
   let finding: AgreementView['finding'] = null
   if (cited) {
-    const key = agreement.finding ?? 'not_evaluated'
+    // A null finding says why: the provider's record is not held yet, or the
+    // check itself failed.
+    const key =
+      agreement.finding ?? (agreement.finding_not_evaluated === 'evaluation_failed' ? 'evaluation_failed' : 'not_evaluated')
     finding = Object.hasOwn(FINDING_LABEL, key)
       ? {
           key: key as FindingKey,
@@ -99,7 +105,12 @@ export function agreementView(agreement: AgreementCoverage | undefined, paid: bo
     tooltip: known
       ? AGREEMENT_COVERAGE_TOOLTIPS[coverageKey as CoverageKey]
       : 'An agreement coverage this page does not recognise, shown as recorded.',
-    tone: known ? COVERAGE_TONE[coverageKey as CoverageKey] : 'muted',
+    // Covered reads as good only when the agreement is shown to come first.
+    tone: !known
+      ? 'muted'
+      : coverageKey === 'covered' && agreement.finding !== 'accepted_before_action'
+        ? 'muted'
+        : COVERAGE_TONE[coverageKey as CoverageKey],
     side,
     finding,
     count,
