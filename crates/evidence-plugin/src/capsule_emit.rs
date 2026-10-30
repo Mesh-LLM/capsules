@@ -1611,9 +1611,23 @@ impl CapsuleState {
     /// alone); a duplicate returns `Ok(None)` --
     /// the half IS still received/held (the receiver stored it), there is just
     /// nothing new to cite.
+    #[cfg(test)]
     pub fn emit_citing_record(
         &self,
         prov: &ReceivedHalfProvenance,
+    ) -> anyhow::Result<Option<EmittedCapsule>> {
+        self.emit_citing_record_checked(prov, |_| true)
+    }
+
+    /// [`Self::emit_citing_record`], with `prov.own_half_capsule_id` checked
+    /// again by `still_tied` under the ledger lock, which every own half is
+    /// appended under: an own half sealed since the caller looked can no
+    /// longer slip in between the look and the seal. When the check fails the
+    /// record is sealed without the member.
+    pub fn emit_citing_record_checked(
+        &self,
+        prov: &ReceivedHalfProvenance,
+        still_tied: impl FnOnce(&str) -> bool,
     ) -> anyhow::Result<Option<EmittedCapsule>> {
         let mut ledger = self
             .ledger
@@ -1622,6 +1636,17 @@ impl CapsuleState {
         if ledger.cites_counterparty_half(prov.foreign_capsule_id) {
             return Ok(None);
         }
+        let checked;
+        let prov = match prov.own_half_capsule_id {
+            Some(own) if !still_tied(own) => {
+                checked = ReceivedHalfProvenance {
+                    own_half_capsule_id: None,
+                    ..*prov
+                };
+                &checked
+            }
+            _ => prov,
+        };
         let capsule = crate::producer::capsule::seal_citing_record(
             prov,
             ledger.chain_head(),
