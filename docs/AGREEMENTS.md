@@ -58,6 +58,15 @@ gives none, and no session is proposed or cited for that exchange. The
 status is read only where a session can be proposed or cited, and not
 again for 30 seconds after a read fails.
 
+The provider's own exchange events state a digest of the weights it served
+(`weights_digest`, the SHA-256 of the GGUF file) even when they name no
+model. A local GGUF's model id is that digest (`local-gguf/sha256-` and the
+digest), so the provider first cites a session that names this id, and
+only then one for the model its status gives. A provider serving several
+local GGUFs therefore still cites the session for the one that served the
+exchange. The requester's events carry no digest, so a requester still
+proposes only to a provider serving one model.
+
 A provider whose plugin predates agreements answers the proposal with
 something else at once, and the requester goes on without an agreement.
 After a set-up that does not end in an agreement, the requester waits ten

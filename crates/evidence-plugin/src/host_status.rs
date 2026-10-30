@@ -59,6 +59,16 @@ pub fn peer_model(status: &Value, peer_id: &str) -> Option<String> {
     only_one(peer.get("serving_models"))
 }
 
+/// The host's id for a local GGUF whose bytes hash to `weights_digest`
+/// (mesh-llm `direct_gguf_model_id`, startup_models.rs: `local-gguf/sha256-`
+/// and the file's SHA-256), the name its status lists the model by. A
+/// provider's served exchange states this digest even when it names no
+/// model (mesh-llm 0.78); `None` unless it is a SHA-256 in hex.
+pub fn local_gguf_ref(weights_digest: &str) -> Option<String> {
+    (weights_digest.len() == 64 && weights_digest.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| format!("local-gguf/sha256-{}", weights_digest.to_ascii_lowercase()))
+}
+
 /// The host's status, read now; `None` when it cannot be read, or within
 /// [`BACK_OFF`] of a read that failed. Never reused: a model the provider
 /// changed is read as changed.
@@ -161,6 +171,27 @@ mod tests {
         let read = fetch_from(&base).await.expect("the status is read");
         assert_eq!(peer_model(&read, SHOCKLEY).as_deref(), Some(MODEL));
         assert_eq!(fetch_from("http://127.0.0.1:9").await, None);
+    }
+
+    /// As Shockley's served halves state it: the digest is the one in the
+    /// name its status lists. Anything but a SHA-256 in hex gives nothing.
+    #[test]
+    fn a_weights_digest_gives_the_local_gguf_name_it_is_listed_by() {
+        let digest = MODEL.trim_start_matches("local-gguf/sha256-");
+        assert_eq!(local_gguf_ref(digest).as_deref(), Some(MODEL));
+        assert_eq!(
+            local_gguf_ref(&digest.to_ascii_uppercase()).as_deref(),
+            Some(MODEL)
+        );
+        for not in [
+            "",
+            "sha256:loaded-weights",
+            &digest[..63],
+            &format!("{digest}0"),
+        ] {
+            assert_eq!(local_gguf_ref(not), None, "{not}");
+        }
+        assert_eq!(local_gguf_ref(&format!("{}g", &digest[..63])), None);
     }
 
     #[test]

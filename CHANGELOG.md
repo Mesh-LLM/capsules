@@ -54,6 +54,10 @@
   under the agreement too, when the provider serves one model and the set-up finishes within the
   hold. See `docs/AGREEMENTS.md`.
   action-state-group/evidencebook#48.
+- **A provider serving several local GGUFs cites the session for the one it served.** With no model
+  id in the exchange event, the provider matches the session by the event's `weights_digest`: a
+  local GGUF's id is `local-gguf/sha256-` and that digest. Then, as before, it falls back to the
+  one model its `/api/status` lists. action-state-group/evidencebook#48.
 - **Service evidence agreements on the Evidence page (M4, fourth part).** An Exchanges row shows
   the agreement's coverage label for this node's side, the ordering finding ("accepted before the
   exchange", or "agreement present; ordering not established" for an exchange in the receipt's

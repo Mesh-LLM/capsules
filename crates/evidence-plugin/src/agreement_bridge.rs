@@ -1001,12 +1001,15 @@ mod tests {
 
     impl Pair {
         fn proposal(&self, now: i64) -> Proposal {
+            self.proposal_for(MODEL, now)
+        }
+        fn proposal_for(&self, model: &str, now: i64) -> Proposal {
             Proposal::new(
                 self.requester.signing_key(),
                 &own_key(&self.provider),
                 &agreement::new_session_id(),
                 &terms(),
-                &[MODEL.into()],
+                &[model.into()],
                 now,
             )
         }
@@ -1047,7 +1050,10 @@ mod tests {
             )
         }
         fn agree(&self, now: i64) -> (Proposal, Session, String) {
-            let proposal = self.proposal(now);
+            self.agree_for(MODEL, now)
+        }
+        fn agree_for(&self, model: &str, now: i64) -> (Proposal, Session, String) {
+            let proposal = self.proposal_for(model, now);
             let reply = self.propose(&proposal, now);
             let Outcome::Accepted { session, receipt } = self.conclude(&proposal, &reply, now)
             else {
@@ -1335,6 +1341,32 @@ mod tests {
             Some(own_key(&p.requester))
         );
         assert_eq!(session_proposer(&p.provider, &"0".repeat(64)), None);
+    }
+
+    /// A provider serving two local GGUFs, with a session for each, cites
+    /// the one for the weights its served exchange states, though the event
+    /// names no model and the status names no single one (evidencebook#48).
+    #[test]
+    fn a_provider_serving_several_models_cites_by_the_weights_digest() {
+        let p = pair();
+        let (a, b) = ("aa".repeat(32), "bb".repeat(32));
+        let model = |d: &str| crate::host_status::local_gguf_ref(d).unwrap();
+        let (_, for_a, _) = p.agree_for(&model(&a), NOW);
+        let (_, for_b, _) = p.agree_for(&model(&b), NOW);
+        let requester_peer = "cc".repeat(32);
+        let registry = json!({ requester_peer.clone(): own_key(&p.requester) }).to_string();
+        let cites = |digest: &str| {
+            served_citation_in(
+                &p.provider,
+                &requester_peer,
+                &model(digest),
+                Some(&registry),
+                NOW + 10,
+            )
+        };
+        assert_eq!(cites(&b), Some(for_b.acceptance_digest));
+        assert_eq!(cites(&a), Some(for_a.acceptance_digest));
+        assert_eq!(cites(&"dd".repeat(32)), None, "weights no session names");
     }
 
     #[test]
