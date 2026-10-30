@@ -14,8 +14,14 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42257038df5c2e3a7a1d691f83244953ac3fd75baa60049fc09eb1032981bb8f"
 dependencies = [
+ "base64 0.22.1",
+ "checkpointed-local-log",
+ "coset",
  "ed25519-dalek",
  "hex",
+ "p256",
+ "scitt-cose-receipt",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
 ]
