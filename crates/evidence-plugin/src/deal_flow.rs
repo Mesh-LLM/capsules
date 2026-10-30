@@ -141,6 +141,13 @@ struct Inner {
     secret: Option<[u8; 32]>,
     /// By the host's exchange id.
     entries: BTreeMap<String, Entry>,
+    /// The state on disk is not the state in memory (a save failed), or the
+    /// state file could not be read and kept: nothing is sealed until a save
+    /// succeeds, since a Capsule sealed past it could not be recovered.
+    unsaved: bool,
+    /// The state file is there but could neither be read nor be moved aside:
+    /// it is left alone, and nothing is sealed or saved this run.
+    blocked: bool,
     /// Sealed exchanges not (yet) known to be paid, in memory only: an
     /// invoice may come after the exchange's record, and a free exchange
     /// never gets one. The oldest are dropped first.
@@ -272,12 +279,15 @@ impl Deals {
         inner
             .entries
             .retain(|_, e| e.step(deal::TYPE_BASELINE).is_some() || now - e.started < OPEN_AFTER);
+        if inner.unsaved {
+            self.save(&mut inner);
+        }
         let ids: Vec<String> = inner.entries.keys().cloned().collect();
         for id in ids {
             self.advance(&mut inner, sealer, &id, now, false);
         }
         if progress(&inner) != before {
-            self.save(&inner);
+            self.save(&mut inner);
         }
     }
 
@@ -292,11 +302,14 @@ impl Deals {
             .entries
             .retain(|_, e| e.step(deal::TYPE_BASELINE).is_some() || now - e.started < OPEN_AFTER);
         let ids: Vec<String> = inner.entries.keys().cloned().collect();
+        if inner.unsaved {
+            self.save(&mut inner);
+        }
         for id in ids {
             self.advance(&mut inner, sealer, &id, now, true);
         }
         if progress(&inner) != before {
-            self.save(&inner);
+            self.save(&mut inner);
         }
     }
 
@@ -337,15 +350,24 @@ impl Deals {
             }
         }
         let before = progress(&inner);
+        let snapshot = |inner: &Inner| {
+            inner
+                .entries
+                .get(exchange_id)
+                .and_then(|e| serde_json::to_string(e).ok())
+        };
+        let was = snapshot(&inner);
         if let Some(entry) = inner.entries.get_mut(exchange_id) {
             change(entry);
         }
         // The entry (with the exchange it is of) is on disk before its first
         // Capsule, so a crash after the append can still be recovered from.
-        self.save(&inner);
+        if inner.unsaved || snapshot(&inner) != was {
+            self.save(&mut inner);
+        }
         self.advance(&mut inner, sealer, exchange_id, now, false);
         if progress(&inner) != before {
-            self.save(&inner);
+            self.save(&mut inner);
         }
     }
 
@@ -362,6 +384,9 @@ impl Deals {
         let Some(secret) = inner.secret else {
             return;
         };
+        if inner.unsaved || inner.blocked {
+            return;
+        }
         let Some(entry) = inner.entries.get_mut(exchange_id) else {
             return;
         };
@@ -590,23 +615,37 @@ impl Deals {
         }
         inner.loaded = true;
         inner.secret = read_or_make_secret(&self.data_dir.join(SECRET_FILE));
-        if let Ok(text) = std::fs::read_to_string(self.dir.join(STATE_FILE)) {
-            match serde_json::from_str(&text) {
+        match std::fs::read(self.dir.join(STATE_FILE)) {
+            Ok(bytes) => match serde_json::from_slice(&bytes) {
                 Ok(entries) => inner.entries = entries,
                 Err(error) => {
                     // Kept for a person to read; a later save must not
-                    // overwrite it.
+                    // overwrite it. If it cannot be kept, nothing is sealed.
                     tracing::warn!(%error, "deal state unreadable; moved to deals.json.bad");
-                    let _ =
-                        std::fs::rename(self.dir.join(STATE_FILE), self.dir.join("deals.json.bad"));
+                    if std::fs::rename(self.dir.join(STATE_FILE), self.dir.join("deals.json.bad"))
+                        .is_err()
+                    {
+                        inner.blocked = true;
+                    }
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(%error, "deal state not readable; moved to deals.json.bad");
+                if std::fs::rename(self.dir.join(STATE_FILE), self.dir.join("deals.json.bad"))
+                    .is_err()
+                {
+                    inner.blocked = true;
                 }
             }
         }
-        let Ok(journal) = std::fs::read_to_string(self.dir.join(PAYLOADS_FILE)) else {
+        // By bytes: a line cut short inside a multi-byte character must not
+        // make the lines before it unreadable.
+        let Ok(journal) = std::fs::read(self.dir.join(PAYLOADS_FILE)) else {
             return;
         };
-        for line in journal.lines() {
-            let Ok(v) = serde_json::from_str::<Value>(line) else {
+        for line in journal.split(|b| *b == b'\n') {
+            let Ok(v) = serde_json::from_slice::<Value>(line) else {
                 continue;
             };
             let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
@@ -647,7 +686,10 @@ impl Deals {
         }
     }
 
-    fn save(&self, inner: &Inner) {
+    fn save(&self, inner: &mut Inner) {
+        if inner.blocked {
+            return;
+        }
         let path = self.dir.join(STATE_FILE);
         let tmp = self.dir.join("deals.json.tmp");
         let write = || -> std::io::Result<()> {
@@ -656,9 +698,11 @@ impl Deals {
             file.sync_all()?;
             std::fs::rename(&tmp, &path)
         };
-        if let Err(error) = write() {
-            tracing::warn!(%error, "deal state not saved");
+        let result = write();
+        if let Err(error) = &result {
+            tracing::warn!(%error, "deal state not saved; no deal is sealed until it is");
         }
+        inner.unsaved = result.is_err();
     }
 }
 
@@ -1056,6 +1100,73 @@ mod tests {
         paid_exchange(&state, 1_790_000_000);
         let aside = std::fs::read_to_string(ledger(dir.path()).join("deals.json.bad")).unwrap();
         assert_eq!(aside, "{ not json");
+    }
+
+    /// A save that fails stops the sealing (a Capsule past it could not be
+    /// recovered); the next tick that can save carries on.
+    #[test]
+    fn nothing_is_sealed_while_the_state_cannot_be_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = open(dir.path());
+        let tmp = ledger(dir.path()).join("deals.json.tmp");
+        std::fs::create_dir(&tmp).unwrap();
+        paid_exchange(&state, 1_790_000_000);
+        assert!(deal_capsules(dir.path()).is_empty());
+        std::fs::remove_dir(&tmp).unwrap();
+        state.deals().tick(&state, 1_790_000_005);
+        assert_eq!(deal_capsules(dir.path()).len(), 1);
+    }
+
+    /// A state file that cannot be read as text is kept aside, and one that
+    /// cannot even be moved is left alone with nothing sealed.
+    #[test]
+    fn a_state_file_that_cannot_be_kept_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = open(dir.path());
+        let path = ledger(dir.path()).join(STATE_FILE);
+        std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+        paid_exchange(&state, 1_790_000_000);
+        assert_eq!(
+            std::fs::read(ledger(dir.path()).join("deals.json.bad")).unwrap(),
+            [0xff, 0xfe, 0x00]
+        );
+        assert_eq!(deal_capsules(dir.path()).len(), 1);
+
+        let dir = tempfile::tempdir().unwrap();
+        let state = open(dir.path());
+        let ledger_dir = ledger(dir.path());
+        // The state is a directory holding a file, and the aside name is
+        // taken by a non-empty directory: neither read nor rename works.
+        std::fs::create_dir_all(ledger_dir.join(STATE_FILE).join("x")).unwrap();
+        std::fs::create_dir_all(ledger_dir.join("deals.json.bad").join("x")).unwrap();
+        paid_exchange(&state, 1_790_000_000);
+        assert!(deal_capsules(dir.path()).is_empty());
+        assert!(ledger_dir.join(STATE_FILE).join("x").exists());
+    }
+
+    /// A journal line cut inside a multi-byte character costs only that line.
+    #[test]
+    fn a_journal_cut_mid_character_still_recovers_the_lines_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let state = open(dir.path());
+            paid_exchange(&state, 1_790_000_000);
+        }
+        let journal = ledger(dir.path()).join(PAYLOADS_FILE);
+        let mut bytes = std::fs::read(&journal).unwrap();
+        bytes.extend_from_slice(b"{\"capsule_id\":\"x\",\"model\":\"caf\xc3");
+        std::fs::write(&journal, bytes).unwrap();
+        let path = ledger(dir.path()).join(STATE_FILE);
+        let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        saved[EXCHANGE]["steps"] = json!([]);
+        std::fs::write(&path, saved.to_string()).unwrap();
+        let state = open(dir.path());
+        state.deals().recover(&state, 1_790_000_100);
+        let baselines = deal_capsules(dir.path())
+            .iter()
+            .filter(|c| c["action_id"].as_str().is_some_and(|a| a.ends_with("/1")))
+            .count();
+        assert_eq!(baselines, 1);
     }
 
     #[test]
