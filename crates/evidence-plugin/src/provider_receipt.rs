@@ -86,6 +86,12 @@ pub fn note_payment(
     exchange_id: &str,
     payment_hash: &str,
 ) -> std::io::Result<()> {
+    // One writer at a time: the append ends a torn last line first, which two
+    // concurrent appends would mistake for each other's unfinished line.
+    static WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = WRITER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     crate::deal_flow::append_line(
         &ledger_dir.join(PROVIDER_LINKS_FILE),
         &json!({"exchange_id": exchange_id, "payment_hash": payment_hash}),
@@ -459,5 +465,30 @@ mod tests {
             bundle(state.ledger_dir(), &key(&state), HOST_EXCHANGE),
             Err(Failure::Refused(Refusal::NoExchange))
         ));
+    }
+
+    /// Notes written from several threads at once are each whole lines.
+    #[test]
+    fn concurrent_notes_are_each_a_whole_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let workers: Vec<_> = (0..8)
+            .map(|w| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for i in 0..25 {
+                        note_payment(&path, &format!("ex-{w}"), &format!("{w:02}{i:062}")).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let lines = std::fs::read_to_string(path.join(PROVIDER_LINKS_FILE)).unwrap();
+        assert_eq!(lines.lines().count(), 200);
+        assert!(lines
+            .lines()
+            .all(|l| serde_json::from_str::<Value>(l).is_ok()));
     }
 }
