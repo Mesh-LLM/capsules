@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Counterparties receive and check the operator binding (loop step 12).** A node holding a
+  controller binding of its key to its operator's Nostr key carries it whole in the bundles it
+  pushes to an exchange's counterparty, in the existing `controller_binding` member, and never in
+  a request or an answer. A receiver that does not take the member refuses `bundle_malformed`, and
+  the bundle goes again without it. The receiver checks the binding applies and binds the half's
+  key, and its citing record's `received_half` carries `controller_binding_digest` however the key
+  was accepted, plus `same_controller_as_receiver` when the receiver holds its own binding (true
+  when both name the same operator key). The operator's Nostr key is never sealed: a declaration
+  anchored on a `bip340` key no longer records `controller_anchor_key_id`. Nothing new is gated.
+  `vectors/evidence-key-acceptance/cases.json` gains three operator-binding cases.
+  Mesh-LLM/capsules-plugin#113.
 - **The saved History page carries the Service History when the node shares it.** With
   `share_standard_history` on and a checkpoint at a period boundary, the `history-page` route
   answers what a stranger would get: the Service History pinned to the latest such checkpoint, and

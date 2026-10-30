@@ -62,7 +62,10 @@
 //! `counterparty_half` citing record AND a second, `counterparty_inclusion`
 //! citing record -- the row reaches "in their log" in one step. A receiver
 //! that predates bundles refuses one `request_malformed` (no top-level
-//! `capsule_id`); the sender then re-pushes the bare capsule once.
+//! `capsule_id`); the sender then re-pushes the bare capsule once. A bundle
+//! also carries this node's own controller binding, whole, while it holds
+//! one that applies ([`own_binding`]); a receiver that does not take that
+//! member refuses `bundle_malformed`, and the bundle goes again without it.
 //!
 //! **Single `on_open_stream` slot.** The plugin SDK gives a plugin exactly
 //! ONE `on_open_stream` handler slot (`SimplePlugin::open_stream_handler:
@@ -118,6 +121,26 @@ pub fn split_bundle_body(
 ) -> serde_json::Value {
     let mut body = bundle_body(capsule_json, coverage);
     body[SPLIT_STAGE_RECORDS] = serde_json::Value::Array(stage_records.to_vec());
+    body
+}
+
+/// [`split_bundle_body`] (or [`bundle_body`] with no stage records) plus
+/// this node's own controller binding, whole, as
+/// [`crate::record_push_receive::CONTROLLER_BINDING`] when given.
+pub fn carrying_bundle_body(
+    capsule_json: &serde_json::Value,
+    coverage: &Coverage,
+    stage_records: &[serde_json::Value],
+    controller_binding: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let mut body = if stage_records.is_empty() {
+        bundle_body(capsule_json, coverage)
+    } else {
+        split_bundle_body(capsule_json, coverage, stage_records)
+    };
+    if let Some(binding) = controller_binding {
+        body[crate::controller_binding::MEMBER] = binding.clone();
+    }
     body
 }
 
@@ -570,6 +593,7 @@ async fn seal_citing_record(
         .and_then(|v| v.as_str())
         .map(str::to_string);
     let accepted_via = accepted_key.map(|a| a.via.clone());
+    let controller_binding = accepted_key.and_then(|a| a.binding.clone());
     let capsules = capsules.clone();
 
     let sealed = tokio::task::spawn_blocking(move || {
@@ -589,6 +613,13 @@ async fn seal_citing_record(
             foreign_agent_output_digest: foreign_output.as_deref(),
             sender_key_id: sender_key_id.as_deref(),
             accepted_via: accepted_via.as_ref(),
+            controller_binding: controller_binding.as_ref(),
+            same_controller_as_receiver: same_controller_as_receiver(
+                &capsules,
+                controller_binding.as_ref(),
+                sender_key_id.as_deref(),
+                &crate::producer::timestamp::utc_now_iso8601(),
+            ),
         };
         capsules
             .emit_citing_record(&prov)
@@ -609,6 +640,38 @@ async fn seal_citing_record(
         }
     }
     Ok(())
+}
+
+/// This node's own controller binding, whole, when it holds one that binds
+/// its key and applies now (`controller_binding::held_applying`): what a
+/// push bundle carries to the exchange's counterparty.
+pub fn own_binding(capsules: &CapsuleState) -> Option<serde_json::Value> {
+    let own_key = hex::encode(capsules.signing_key().verifying_key().to_bytes());
+    let now = crate::producer::timestamp::utc_now_iso8601();
+    crate::controller_binding::held_applying(
+        capsules.ledger_dir().parent()?,
+        &own_key,
+        evidence_request::time::parse_utc(&now)?,
+    )
+    .map(|(record, _)| record)
+}
+
+/// [`crate::controller_binding::same_controller`] for a carried binding of
+/// `sender_key`, against this node's own binding at `now`.
+pub(crate) fn same_controller_as_receiver(
+    capsules: &CapsuleState,
+    carried: Option<&crate::controller_binding::Applied>,
+    sender_key: Option<&str>,
+    now: &str,
+) -> Option<bool> {
+    let own_key = hex::encode(capsules.signing_key().verifying_key().to_bytes());
+    crate::controller_binding::same_controller(
+        carried?,
+        sender_key?,
+        capsules.ledger_dir().parent()?,
+        &own_key,
+        evidence_request::time::parse_utc(now)?,
+    )
 }
 
 /// Hold a record this node asked `peer_id` for (`mesh_evidence_request`)
@@ -734,13 +797,21 @@ async fn seal_inclusion_citing_record_for_push(
 /// `capsule_json` (this node's own just-sealed capsule, unmodified -- a
 /// receiver holds it as transmitted, never re-signed), self-
 /// declaring `self_peer_id` as the sender (see module doc's "wire shape").
-/// With `coverage` the body is the bundle (module doc, "push-a-bundle");
-/// a `request_malformed` refusal of a bundle is read as a receiver that
+/// With `coverage` the body is the bundle (module doc, "push-a-bundle"),
+/// carrying `split_stage_records` and `controller_binding` when given; a
+/// `request_malformed` refusal of a bundle is read as a receiver that
 /// predates bundles, and the bare capsule is pushed once more.
 /// Best-effort by design -- the caller (`main.rs`'s seal-on-observe path)
 /// logs success/failure and never lets a push failure disturb sealing or
 /// channel-message processing, same discipline as
 /// `seal_observed_host_exchange`'s own producer-error handling.
+///
+/// `controller_binding` is this node's own binding, whole
+/// (`controller_binding::held_applying`). It names the operator's Nostr key,
+/// so it goes only to `peer_id`, the exchange's counterparty, and only in a
+/// bundle: Steven's loop step 12 ruling has counterparties verify the full
+/// record while the public commitment names it by digest alone
+/// (Mesh-LLM/capsules-plugin#113).
 pub async fn push_capsule_to_peer(
     context: &mut PluginContext<'_>,
     peer_id: &str,
@@ -748,23 +819,20 @@ pub async fn push_capsule_to_peer(
     capsule_json: &serde_json::Value,
     coverage: Option<&Coverage>,
     split_stage_records: &[serde_json::Value],
+    controller_binding: Option<&serde_json::Value>,
 ) -> anyhow::Result<()> {
     let response = match coverage {
-        Some(coverage) if !split_stage_records.is_empty() => {
-            let bundle = split_bundle_body(capsule_json, coverage, split_stage_records);
-            let response = send_push(context, peer_id, self_peer_id, &bundle).await?;
-            if refused_as_bundle_malformed(&response) {
-                // A receiver that reads bundles but not split stage records
-                // refuses the unknown member. The main record still goes;
-                // the requester then reads those stages as not received.
-                tracing::info!(%peer_id, "peer does not take split stage records -- re-pushing the plain bundle");
-                push_plain_bundle(context, peer_id, self_peer_id, capsule_json, coverage).await?
-            } else {
-                response
-            }
-        }
         Some(coverage) => {
-            push_plain_bundle(context, peer_id, self_peer_id, capsule_json, coverage).await?
+            push_bundle(
+                context,
+                peer_id,
+                self_peer_id,
+                capsule_json,
+                coverage,
+                split_stage_records,
+                controller_binding,
+            )
+            .await?
         }
         None if !split_stage_records.is_empty() => {
             tracing::warn!(%peer_id, "no checkpoint coverage, so the split's stage records cannot be carried -- pushing the bare record");
@@ -776,6 +844,41 @@ pub async fn push_capsule_to_peer(
         anyhow::bail!("peer {peer_id} refused record-push: {response}");
     }
     Ok(())
+}
+
+/// The bundle with what it carries beside the half. A receiver that reads
+/// bundles but not one of those members refuses `bundle_malformed`: the
+/// half still goes, first without the controller binding (the newer
+/// member), then without the split's stage records, which the requester
+/// then reads as not received.
+async fn push_bundle(
+    context: &mut PluginContext<'_>,
+    peer_id: &str,
+    self_peer_id: &str,
+    capsule_json: &serde_json::Value,
+    coverage: &Coverage,
+    mut split_stage_records: &[serde_json::Value],
+    mut controller_binding: Option<&serde_json::Value>,
+) -> anyhow::Result<serde_json::Value> {
+    while controller_binding.is_some() || !split_stage_records.is_empty() {
+        let bundle = carrying_bundle_body(
+            capsule_json,
+            coverage,
+            split_stage_records,
+            controller_binding,
+        );
+        let response = send_push(context, peer_id, self_peer_id, &bundle).await?;
+        if !refused_as_bundle_malformed(&response) {
+            return Ok(response);
+        }
+        if controller_binding.take().is_some() {
+            tracing::info!(%peer_id, "peer does not take a controller binding -- re-pushing the bundle without it");
+        } else {
+            tracing::info!(%peer_id, "peer does not take split stage records -- re-pushing the plain bundle");
+            split_stage_records = &[];
+        }
+    }
+    push_plain_bundle(context, peer_id, self_peer_id, capsule_json, coverage).await
 }
 
 fn refused_as_bundle_malformed(response: &serde_json::Value) -> bool {
@@ -908,6 +1011,52 @@ pub(crate) mod tests {
             .unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         coverage
+    }
+
+    /// The node's own binding rides whole in the binding member, beside
+    /// split stage records or without them, and only when given.
+    #[test]
+    fn a_bundle_carries_the_held_binding_whole_only_when_given() {
+        let coverage = sample_coverage();
+        let half =
+            serde_json::json!({"capsule_id": "a".repeat(64), "signature": "s", "key_id": "k"});
+        let binding = serde_json::json!({"binding_version": "controller-binding/0"});
+        let member = crate::record_push_receive::CONTROLLER_BINDING;
+        assert_eq!(
+            carrying_bundle_body(&half, &coverage, &[], None),
+            bundle_body(&half, &coverage)
+        );
+        let carried = carrying_bundle_body(&half, &coverage, &[], Some(&binding));
+        assert_eq!(carried[member], binding);
+        assert_eq!(carried.as_object().unwrap().len(), 5);
+        let stages = [serde_json::json!({"stage": 1})];
+        let both = carrying_bundle_body(&half, &coverage, &stages, Some(&binding));
+        assert_eq!(both[member], binding);
+        assert_eq!(both[SPLIT_STAGE_RECORDS], serde_json::json!(stages));
+        assert_eq!(pushed_half(&both), &half);
+    }
+
+    /// What a push carries is the node's own binding while it applies,
+    /// never another node's.
+    #[test]
+    fn own_binding_is_the_held_binding_of_this_nodes_key_while_it_applies() {
+        let dir = tempfile::tempdir().unwrap();
+        let capsules = CapsuleState::open(dir.path(), "rust-node").unwrap();
+        assert_eq!(own_binding(&capsules), None);
+        let operator = k256::schnorr::SigningKey::from_bytes(&[7; 32]).unwrap();
+        let now = crate::producer::timestamp::utc_now_iso8601();
+        let at = evidence_request::time::parse_utc(&now).unwrap();
+        let until = chrono::Utc::now() + chrono::Duration::days(1);
+        let binding = crate::controller_binding::bind_to_nostr_for_test(
+            capsules.signing_key(),
+            &operator,
+            "0123456789abcdef0123456789abcdef",
+            "2026-01-01T00:00:00Z",
+            &until.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        );
+        let own = hex::encode(capsules.signing_key().verifying_key().to_bytes());
+        crate::controller_binding::store_held(dir.path(), &binding, &own, at).unwrap();
+        assert_eq!(own_binding(&capsules), Some(binding));
     }
 
     #[test]

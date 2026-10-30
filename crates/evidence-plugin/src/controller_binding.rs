@@ -21,7 +21,13 @@
 //!
 //! **Where it travels.** As the member [`MEMBER`] of a pushed bundle
 //! (`record_push_receive`) or of a signed evidence request
-//! (`requester_auth`), as the record object itself.
+//! (`requester_auth`), as the record object itself. This node sends its
+//! own binding ([`held_applying`]) only in the bundles it pushes to an
+//! exchange's counterparty (`record_push_bridge::push_capsule_to_peer`),
+//! never in a request or an answer: the record names the operator's Nostr
+//! key. A receiver seals only the binding's digest, and whether it names
+//! the same other key as its own binding ([`same_controller`]), never a
+//! `bip340` key (Mesh-LLM/capsules-plugin#113).
 //!
 //! **This node's own binding** (loop step 12, Mesh-LLM/capsules-plugin#54).
 //! A node holds at most one binding of its own key to its operator's, in
@@ -100,10 +106,12 @@ pub struct Evaluation {
     pub window: Option<Status>,
 }
 
-/// A binding that applies: its two keys and its digest.
+/// A binding that applies: its two keys, each one's type, and its digest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Applied {
     pub keys: [String; 2],
+    /// `key_types` (CB §3.3), `ed25519` for both when the record has none.
+    pub key_types: [String; 2],
     pub digest: String,
 }
 
@@ -115,6 +123,15 @@ impl Applied {
             [a, b] if b == key => Some(a),
             _ => None,
         }
+    }
+
+    /// Whether `key` is one of this binding's keys and of type `bip340`,
+    /// such as an operator's Nostr identity.
+    pub fn is_bip340(&self, key: &str) -> bool {
+        self.keys
+            .iter()
+            .zip(&self.key_types)
+            .any(|(k, t)| k == key && t == KEY_TYPE_BIP340)
     }
 }
 
@@ -167,8 +184,13 @@ pub fn applies(record: &Value, at: UtcTime) -> Option<Applied> {
         return None;
     }
     let keys = record["keys"].as_array()?;
+    let key_type = |i: usize| match record.get(KEY_TYPES) {
+        Some(types) => types[i].as_str().map(str::to_string),
+        None => Some(KEY_TYPE_ED25519.to_string()),
+    };
     Some(Applied {
         keys: [keys[0].as_str()?.to_string(), keys[1].as_str()?.to_string()],
+        key_types: [key_type(0)?, key_type(1)?],
         digest: evaluation.digest?,
     })
 }
@@ -181,6 +203,37 @@ pub const HELD_FILE: &str = "controller-binding.json";
 pub fn read_held(data_dir: &std::path::Path) -> Option<Value> {
     let bytes = std::fs::read(data_dir.join(HELD_FILE)).ok()?;
     Some(serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+/// This node's own binding ([`read_held`]), when it binds `own_key` and
+/// applies at `at` ([`binds_own`]): the record a push bundle carries whole
+/// to the exchange's counterparty, and what the commitment names by digest.
+pub fn held_applying(
+    data_dir: &std::path::Path,
+    own_key: &str,
+    at: UtcTime,
+) -> Option<(Value, Applied)> {
+    let record = read_held(data_dir)?;
+    let applied = binds_own(&record, own_key, at).ok()?;
+    Some((record, applied))
+}
+
+/// Whether `carried`, a binding a counterparty's push carried for its key
+/// `sender_key`, binds that key to the same other key as this node's own
+/// binding ([`held_applying`] in `data_dir`) binds `own_key` to: one
+/// controller on both sides of an exchange. `None` when this node holds no
+/// binding that applies at `at`, or `carried` does not bind `sender_key`.
+/// Only this outcome is sealed, never the other key.
+pub fn same_controller(
+    carried: &Applied,
+    sender_key: &str,
+    data_dir: &std::path::Path,
+    own_key: &str,
+    at: UtcTime,
+) -> Option<bool> {
+    let theirs = carried.other(sender_key)?;
+    let (_, held) = held_applying(data_dir, own_key, at)?;
+    Some(held.other(own_key)? == theirs)
 }
 
 /// `record`, when it binds `own_key` and applies at `at` (CB §6.2); why
@@ -899,6 +952,70 @@ mod tests {
         std::fs::write(dir.path().join(HELD_FILE), b"not json").unwrap();
         assert_eq!(read_held(dir.path()), Some(Value::Null));
         assert!(binds_own(&Value::Null, &own, now).is_err());
+    }
+
+    /// A push carries the held binding only while it applies, and a
+    /// carried binding is one controller with this node's exactly when both
+    /// name the same other key (Mesh-LLM/capsules-plugin#113).
+    #[test]
+    fn same_controller_compares_the_operator_keys_and_needs_both_bindings() {
+        let nostr = |seed: u8| k256::schnorr::SigningKey::from_bytes(&[seed; 32]).unwrap();
+        let nonce = "0123456789abcdef0123456789abcdef";
+        let dir = tempfile::tempdir().unwrap();
+        let (node, sender) = (key(1), key(2));
+        let own = hex::encode(node.verifying_key().to_bytes());
+        let sender_key = hex::encode(sender.verifying_key().to_bytes());
+        let now = at("2026-10-28T00:00:00Z");
+        let carried = |operator: u8| {
+            applies(
+                &bind_to_nostr_for_test(&sender, &nostr(operator), nonce, FROM, UNTIL),
+                now,
+            )
+            .unwrap()
+        };
+        let theirs = carried(7);
+        let operator = theirs.other(&sender_key).unwrap().to_string();
+        assert!(theirs.is_bip340(&operator));
+        assert!(!theirs.is_bip340(&sender_key));
+        assert_eq!(
+            applies(&bind_for_test(&node, &sender, FROM, UNTIL), now)
+                .unwrap()
+                .key_types,
+            ["ed25519", "ed25519"],
+            "no key_types reads as ed25519"
+        );
+
+        assert_eq!(held_applying(dir.path(), &own, now), None);
+        assert_eq!(
+            same_controller(&theirs, &sender_key, dir.path(), &own, now),
+            None
+        );
+
+        let mine = bind_to_nostr_for_test(&node, &nostr(7), nonce, FROM, UNTIL);
+        store_held(dir.path(), &mine, &own, now).unwrap();
+        assert_eq!(
+            held_applying(dir.path(), &own, now).map(|(r, _)| r),
+            Some(mine)
+        );
+        assert_eq!(held_applying(dir.path(), &own, at(UNTIL)), None, "expired");
+        assert_eq!(
+            held_applying(dir.path(), &sender_key, now),
+            None,
+            "another key"
+        );
+        assert_eq!(
+            same_controller(&theirs, &sender_key, dir.path(), &own, now),
+            Some(true)
+        );
+        assert_eq!(
+            same_controller(&carried(8), &sender_key, dir.path(), &own, now),
+            Some(false)
+        );
+        assert_eq!(
+            same_controller(&theirs, &own, dir.path(), &own, now),
+            None,
+            "a binding that does not bind the sender's key"
+        );
     }
 
     /// AAC's `valid-nostr-key` binds an Ed25519 key to an operator's Nostr

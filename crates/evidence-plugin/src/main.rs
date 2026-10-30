@@ -584,6 +584,7 @@ async fn push_settlement_legs(
             &push.capsule,
             None,
             &[],
+            None,
         )
         .await
         {
@@ -610,6 +611,7 @@ async fn push_settlement_legs(
 /// as before -- the half is never held back for want of a proof.
 async fn push_at_completion_if_configured(
     context: &mut mesh_llm_plugin::PluginContext<'_>,
+    capsules: &CapsuleState,
     envelope: &OpenAiExchangeEnvelope,
     capsule_json: Value,
     checkpoints: Option<&checkpoint_cadence::CheckpointHandle>,
@@ -654,6 +656,7 @@ async fn push_at_completion_if_configured(
         &capsule_json,
         coverage.as_ref(),
         split_stage_records,
+        record_push_bridge::own_binding(capsules).as_ref(),
     )
     .await
     {
@@ -778,6 +781,7 @@ fn spawn_split_tick(
 /// records they cite.
 async fn drain_split_pushes(
     context: &mut mesh_llm_plugin::PluginContext<'_>,
+    capsules: &CapsuleState,
     splits: &Splits,
     checkpoints: Option<&checkpoint_cadence::CheckpointHandle>,
     self_peer: &self_peer::SelfPeer,
@@ -785,6 +789,7 @@ async fn drain_split_pushes(
     for push in splits.take_pushes() {
         push_at_completion_if_configured(
             context,
+            capsules,
             &push.envelope,
             push.main,
             checkpoints,
@@ -820,9 +825,8 @@ async fn handle_stage_event(
     }
     let block = event.block;
     let coordinator = block.coordinator_node_id.clone();
-    let capsules = capsules.clone();
-    let sealed = match tokio::task::spawn_blocking(move || capsules.emit_stage_record(&block)).await
-    {
+    let sealer = capsules.clone();
+    let sealed = match tokio::task::spawn_blocking(move || sealer.emit_stage_record(&block)).await {
         Ok(Ok(emitted)) => emitted,
         Ok(Err(error)) => {
             tracing::warn!(%error, "stage record NOT sealed");
@@ -852,6 +856,7 @@ async fn handle_stage_event(
         &sealed.capsule,
         coverage.as_ref(),
         &[],
+        record_push_bridge::own_binding(capsules).as_ref(),
     )
     .await
     {
@@ -1565,7 +1570,7 @@ async fn main() -> anyhow::Result<()> {
             let self_peer = self_peer.clone();
             let splits = splits_for_handler.clone();
             Box::pin(async move {
-                drain_split_pushes(context, &splits, checkpoints.as_ref(), &self_peer).await;
+                drain_split_pushes(context, &capsules, &splits, checkpoints.as_ref(), &self_peer).await;
                 if message.channel == split_stage::SKIPPY_STAGE_CHANNEL {
                     handle_stage_event(context, &message.body, &capsules, &splits, checkpoints.as_ref(), &self_peer)
                         .await;
@@ -1589,6 +1594,7 @@ async fn main() -> anyhow::Result<()> {
                         // the honest-absence rules.
                         push_at_completion_if_configured(
                             context,
+                            &capsules,
                             &envelope,
                             capsule_json,
                             checkpoints.as_ref(),
