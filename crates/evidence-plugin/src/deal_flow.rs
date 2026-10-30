@@ -30,7 +30,7 @@
 //! Best-effort like the settlement legs: a deal that cannot be sealed is
 //! missing evidence, never a failed exchange.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -132,6 +132,39 @@ struct Inner {
     secret: Option<[u8; 32]>,
     /// By the host's exchange id.
     entries: BTreeMap<String, Entry>,
+    /// Sealed exchanges not (yet) known to be paid, in memory only: an
+    /// invoice may come after the exchange's record, and a free exchange
+    /// never gets one. The oldest are dropped first.
+    recent: VecDeque<(String, OwnedExchange)>,
+}
+
+/// How many sealed exchanges `recent` holds.
+const MAX_RECENT: usize = 256;
+
+#[derive(Clone)]
+struct OwnedExchange {
+    capsule_id: String,
+    peer: String,
+    request_digest: String,
+    model: String,
+}
+
+impl OwnedExchange {
+    fn of(sealed: &SealedExchange) -> Self {
+        Self {
+            capsule_id: sealed.capsule_id.to_string(),
+            peer: sealed.peer.to_string(),
+            request_digest: sealed.request_digest.to_string(),
+            model: sealed.model.to_string(),
+        }
+    }
+
+    fn put_in(&self, e: &mut Entry) {
+        e.exchange_capsule_id = Some(self.capsule_id.clone());
+        e.peer = Some(self.peer.clone());
+        e.request_digest = Some(self.request_digest.clone());
+        e.model = Some(self.model.clone());
+    }
 }
 
 /// This node's deals (held by `CapsuleState`).
@@ -183,12 +216,18 @@ impl Deals {
         sealed: &SealedExchange,
         now: i64,
     ) {
-        self.update(sealer, exchange_id, now, false, |e| {
-            e.exchange_capsule_id = Some(sealed.capsule_id.to_string());
-            e.peer = Some(sealed.peer.to_string());
-            e.request_digest = Some(sealed.request_digest.to_string());
-            e.model = Some(sealed.model.to_string());
-        });
+        let owned = OwnedExchange::of(sealed);
+        {
+            let mut inner = self.lock();
+            inner.recent.retain(|(id, _)| id != exchange_id);
+            inner
+                .recent
+                .push_back((exchange_id.to_string(), owned.clone()));
+            while inner.recent.len() > MAX_RECENT {
+                inner.recent.pop_front();
+            }
+        }
+        self.update(sealer, exchange_id, now, false, |e| owned.put_in(e));
     }
 
     /// This node sealed the payer's `payer_observed` leg `leg` (`amount_msat`
@@ -220,11 +259,14 @@ impl Deals {
     pub fn tick(&self, sealer: &dyn Sealer, now: i64) {
         let mut inner = self.lock();
         self.load(&mut inner, sealer);
+        let before = progress(&inner);
         let ids: Vec<String> = inner.entries.keys().cloned().collect();
         for id in ids {
             self.advance(&mut inner, sealer, &id, now, false);
         }
-        self.save(&inner);
+        if progress(&inner) != before {
+            self.save(&inner);
+        }
     }
 
     /// At start: a deal with a baseline and no close is closed `open` (its
@@ -233,6 +275,7 @@ impl Deals {
     pub fn recover(&self, sealer: &dyn Sealer, now: i64) {
         let mut inner = self.lock();
         self.load(&mut inner, sealer);
+        let before = progress(&inner);
         inner
             .entries
             .retain(|_, e| e.step(deal::TYPE_BASELINE).is_some() || now - e.started < OPEN_AFTER);
@@ -240,7 +283,9 @@ impl Deals {
         for id in ids {
             self.advance(&mut inner, sealer, &id, now, true);
         }
-        self.save(&inner);
+        if progress(&inner) != before {
+            self.save(&inner);
+        }
     }
 
     fn update(
@@ -257,9 +302,12 @@ impl Deals {
             if !creates {
                 return;
             }
-            let Some(entry) = new_entry(now) else {
+            let Some(mut entry) = new_entry(now) else {
                 return;
             };
+            if let Some((_, owned)) = inner.recent.iter().find(|(id, _)| id == exchange_id) {
+                owned.put_in(&mut entry);
+            }
             inner.entries.insert(exchange_id.to_string(), entry);
             while inner.entries.len() > MAX_DEALS {
                 let oldest = inner
@@ -296,6 +344,9 @@ impl Deals {
         let Some(entry) = inner.entries.get_mut(exchange_id) else {
             return;
         };
+        if entry.report.is_some() {
+            return;
+        }
         let deal_id = entry.deal_id.clone();
         let (Some(peer), Some(exchange), Some(digest), Some(model)) = (
             entry.peer.clone(),
@@ -563,6 +614,19 @@ impl Deals {
     }
 }
 
+/// How far the deals have got: entries, sealed steps and reports.
+fn progress(inner: &Inner) -> (usize, usize, usize) {
+    (
+        inner.entries.len(),
+        inner.entries.values().map(|e| e.steps.len()).sum(),
+        inner
+            .entries
+            .values()
+            .filter(|e| e.report.is_some())
+            .count(),
+    )
+}
+
 fn new_entry(now: i64) -> Option<Entry> {
     Some(Entry {
         deal_id: format!("deal-{}", &random_hex()?[..32]),
@@ -820,6 +884,21 @@ mod tests {
         // A tick again seals nothing more.
         state.deals().tick(&state, t + 10 * OPEN_AFTER);
         assert_eq!(deal_capsules(dir.path()).len(), 4);
+    }
+
+    #[test]
+    fn an_invoice_after_the_exchange_record_still_makes_the_deal() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = open(dir.path());
+        let t = 1_790_000_000;
+        state
+            .deals()
+            .on_exchange(&state, EXCHANGE, &sealed_exchange(), t);
+        assert!(deal_capsules(dir.path()).is_empty(), "no invoice yet");
+        state
+            .deals()
+            .on_invoice(&state, EXCHANGE, &hex64('a'), 1000, t + 5);
+        assert_eq!(deal_capsules(dir.path()).len(), 1);
     }
 
     #[test]
