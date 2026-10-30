@@ -498,7 +498,19 @@ impl Legs {
             }
             _ => None,
         };
-        seal_with(capsules, "payee_observed", leg, citation_blocks(acceptance));
+        if let Some(sealed) =
+            seal_with(capsules, "payee_observed", leg, citation_blocks(acceptance))
+        {
+            // The leg names no exchange; the node notes which it was for, so
+            // the provider's receipt can find it.
+            if let Err(error) = crate::provider_receipt::link_leg(
+                capsules.ledger_dir(),
+                &event.exchange_id,
+                &sealed.capsule_id,
+            ) {
+                tracing::warn!(%error, "provider leg not linked to its exchange");
+            }
+        }
     }
 
     /// Payer: the agreement `exchange_id` cites, decided by `decide` the
@@ -784,7 +796,7 @@ impl Legs {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::settlement_channel::{host_shaped_event, parse_and_check};
     use serde_json::Value;
@@ -794,7 +806,7 @@ mod tests {
     const OUTPUT: &str = "59c0c4d2859c994004ad65ce13831b9cdaf688828d6c9f08cdb06f1bda9f15dd";
     const RESPONSE: &str = "33e3aff1f39db84ca6bc2e4a8d19703c57566b215e2fa5282dcfefc983bf4ebf";
     const PROVIDER_PEER: &str = "284a8bb62c0491b1a27f57425ce585626f7dc9a1495de4519a869a8c11d9f478";
-    const WALLET: &[(&str, u64)] = &[("credited_msat", 995), ("fee_msat", 5)];
+    pub(crate) const WALLET: &[(&str, u64)] = &[("credited_msat", 995), ("fee_msat", 5)];
 
     /// A host-shaped event, with role and the wallet's numbers as given.
     fn event(
@@ -902,7 +914,11 @@ mod tests {
     /// invoices, then each wallet's settlement and the payer's accounted
     /// bill, then the payer's exchange event naming the provider (when the
     /// terms legs are pushed).
-    fn two_nodes(a: &Path, b: &Path, provider_wallet: &[(&str, u64)]) -> (Vec<Value>, Vec<Value>) {
+    pub(crate) fn two_nodes(
+        a: &Path,
+        b: &Path,
+        provider_wallet: &[(&str, u64)],
+    ) -> (Vec<Value>, Vec<Value>) {
         let pair = Pair::open(a, b);
         for (phase, seg, hash) in [
             (Phase::InputInvoiceIssued, 0, INPUT),
@@ -933,7 +949,7 @@ mod tests {
         (legs_of(a), legs_of(b))
     }
 
-    fn dirs() -> (tempfile::TempDir, tempfile::TempDir) {
+    pub(crate) fn dirs() -> (tempfile::TempDir, tempfile::TempDir) {
         (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap())
     }
 

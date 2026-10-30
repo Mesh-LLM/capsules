@@ -38,7 +38,7 @@ use crate::evidence_log::{self, LedgerIndex, LogView};
 
 /// Why no bundle is given. Each is the node's own state, not an error.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Refusal {
+pub(crate) enum Refusal {
     /// No deal of this node is linked to the exchange (a free exchange, an
     /// unknown id, or a deal this node did not seal).
     NoDeal,
@@ -209,6 +209,57 @@ impl ProofSource for LogSource<'_> {
     }
 }
 
+/// The records a producer-selected receipt bundle carries, and what it adds.
+pub(crate) struct Selection<'a> {
+    /// The bundle's root: one of `ids`.
+    pub root: &'a str,
+    /// Every record carried; no citation is followed.
+    pub ids: &'a [String],
+    /// Members disclosed, by capsule id.
+    pub disclosures: BTreeMap<String, Map<String, Value>>,
+    pub extensions: Map<String, Value>,
+}
+
+/// The bundle of `selection`, proven against the earliest checkpoint of this
+/// node's log that reaches every record: the same bundle every time, and no
+/// count of what was sealed after.
+pub(crate) fn selected_bundle(
+    index: &LedgerIndex,
+    node_key_id: &str,
+    selection: Selection<'_>,
+) -> Result<Value, Error> {
+    let unreadable = |e: std::io::Error| Error::Failed(format!("the ledger is not readable: {e}"));
+    let covering = index
+        .chain
+        .iter()
+        .find(|c| {
+            leaf_count(c.record.mmr_size).is_ok_and(|covered| {
+                selection
+                    .ids
+                    .iter()
+                    .all(|id| index.leaf_index_of(id).is_some_and(|i| i < covered))
+            })
+        })
+        .ok_or(Refusal::NotCheckpointed)?;
+    let source = LogSource {
+        index,
+        view: index.view().map_err(unreadable)?,
+        statement: covering.statement.clone(),
+        size: covering.record.mmr_size,
+    };
+    let mut options = BuildOptions::new(selection.root.to_string(), Interval::ProducerSelected);
+    // The records named are the whole selection: no citation is followed.
+    options.closure_depth = 0;
+    options.include = selection.ids.to_vec();
+    options.disclosures = selection.disclosures;
+    options.extensions = selection.extensions;
+    options.producer_key = hex::decode(node_key_id)
+        .ok()
+        .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
+    build_evidence_bundle(&source, &options)
+        .map_err(|e| Error::Failed(format!("the bundle was not built: {e}")))
+}
+
 /// The receipt bundle for `exchange_capsule_id`, over the log at `ledger_dir`.
 pub fn bundle(
     ledger_dir: &Path,
@@ -236,32 +287,9 @@ pub fn bundle(
                 "the deal changed while it was read; ask again".into(),
             ));
         }
-        // The earliest checkpoint that reaches every deal record: the same
-        // bundle every time, and no count of what was sealed after the deal.
-        let covering = index
-            .chain
-            .iter()
-            .find(|c| {
-                leaf_count(c.record.mmr_size).is_ok_and(|covered| {
-                    deal.ids
-                        .iter()
-                        .all(|id| index.leaf_index_of(id).is_some_and(|i| i < covered))
-                })
-            })
-            .ok_or(Refusal::NotCheckpointed)?;
-        let source = LogSource {
-            index,
-            view: index.view().map_err(unreadable)?,
-            statement: covering.statement.clone(),
-            size: covering.record.mmr_size,
-        };
-        let mut options = BuildOptions::new(deal.report.clone(), Interval::ProducerSelected);
-        // The records named are the whole selection: no citation is followed.
-        options.closure_depth = 0;
-        options.include = deal.ids.clone();
         // The payloads are disclosed; nothing else (the intent's opening is
         // not in them, and its nonce is kept only in the node's journal).
-        options.disclosures = deal
+        let disclosures = deal
             .payloads
             .iter()
             .map(|(id, payload)| {
@@ -270,15 +298,21 @@ pub fn bundle(
                 (id.clone(), members)
             })
             .collect();
-        options.producer_key = hex::decode(node_key_id)
-            .ok()
-            .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
-        options.extensions.insert(
+        let mut extensions = Map::new();
+        extensions.insert(
             deal::PROFILE.into(),
             json!({ deal::REPORT_POINTER: deal.report }),
         );
-        build_evidence_bundle(&source, &options)
-            .map_err(|e| Error::Failed(format!("the bundle was not built: {e}")))
+        selected_bundle(
+            index,
+            node_key_id,
+            Selection {
+                root: &deal.report,
+                ids: &deal.ids,
+                disclosures,
+                extensions,
+            },
+        )
     })
     .map_err(unreadable)?
 }
@@ -365,7 +399,7 @@ fn last_deal_capsule(ledger_dir: &Path, node_key_id: &str, exchange: &Value) -> 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::capsule_emit::CapsuleState;
     use crate::deal_flow::SealedExchange;
@@ -418,7 +452,7 @@ mod tests {
     }
 
     /// A checkpoint of the node's own key over everything sealed so far.
-    fn cut(state: &CapsuleState) {
+    pub(crate) fn cut(state: &CapsuleState) {
         let ledger = state.ledger_dir().to_path_buf();
         let (mut checkpoints, _) =
             CheckpointState::load(&ledger, "test-log", CheckpointCadenceConfig::default()).unwrap();
