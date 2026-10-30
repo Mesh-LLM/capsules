@@ -8,7 +8,9 @@
   sealed for the counterparty audience, so capsule-viewer rendered the owner's own receipt as the
   other party's copy and refused it as `keep`. A copy for the counterparty is made only by a share
   path, which is not built; until then the counterparty is served the deal's steps, not the report.
-  Mesh-LLM/capsules-plugin#146.
+  A counterparty's range or full-history request that covers the report is refused whole (a range
+  is answered in full or refused in full, as for an ask record); it can still ask for the steps one
+  record at a time. Mesh-LLM/capsules-plugin#146.
 - **`evidencebook` 0.0.10 (with `agent-action-capsule` 0.5.0).** The `deal` git-rev patch is gone. `capsule-emit` 0.0.9 still takes `agent-action-capsule` 0.4.1, so the
   tree holds both until a `capsule-emit` release moves to 0.5.0.
   0.5.0 reads a witness receipt with an empty `receipt_b64` as malformed, so the served summary's

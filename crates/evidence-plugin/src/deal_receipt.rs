@@ -14,7 +14,9 @@
 //! bundle INCOMPLETE by design: the log is not shown whole.
 //!
 //! The route is the owner's own local API, like `history-page`; the share gate
-//! does not apply, and the owner may forward the file.
+//! does not apply. The owner may forward the file, but it carries the owner's
+//! own report (audience `keep`), so it reads as the owner's copy, not the
+//! counterparty's; a counterparty copy would come from a share path (#146).
 
 use std::collections::BTreeMap;
 use std::path::Path;
