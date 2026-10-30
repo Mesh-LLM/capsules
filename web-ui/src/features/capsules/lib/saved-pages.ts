@@ -57,7 +57,7 @@ const RUNTIME = `
     setTimeout(function(){URL.revokeObjectURL(url)},0)});
   var kind=document.body.getAttribute('data-kind');
   function show(verdict){
-    var status=el('p',verdict.verified?'ok':'bad',verdict.verified?'Checked when this page opened: the history card matches its digest, and every checkpoint is signed by key '+verdict.keyId+' and extends the one before. To know this is the node\\u2019s, compare that key with the node\\u2019s published commitment.':verdict.kind==='refused'?'The node declined to answer.':'This page could not check its answer, so it shows none of it.');
+    var status=el('p',verdict.verified?'ok':'bad',verdict.verified?'Checked when this page opened: the '+(verdict.form==='service_history'?'history card inside the Service History':'history card')+' matches its digest, and every checkpoint is signed by key '+verdict.keyId+' and extends the one before. To know this is the node\\u2019s, compare that key with the node\\u2019s published commitment.':verdict.kind==='refused'?'The node declined to answer.':'This page could not check its answer, so it shows none of it.');
     out.appendChild(status);
     if(verdict.kind==='refused'&&verdict.reason)out.appendChild(el('p','muted','Its reason: '+verdict.reason));
     var h=el('h2',null,'What was checked');out.appendChild(h);
@@ -68,7 +68,12 @@ const RUNTIME = `
       out.appendChild(el('h2',null,'The log, checkpoint by checkpoint'));
       var t=el('table');var head=el('tr');['Checkpoint','Entries in the log','Cut at'].forEach(function(x){head.appendChild(el('th',null,x))});t.appendChild(head);
       verdict.checkpoints.forEach(function(c,i){var r=el('tr');[String(i+1),String(c.size),c.time].forEach(function(x){r.appendChild(el('td',null,x))});t.appendChild(r)});
-      out.appendChild(t)}}
+      out.appendChild(t)}
+    if(verdict.verified&&verdict.counts&&verdict.counts.length){
+      out.appendChild(el('h2',null,'Exchanges served, per closed week (the node\\u2019s own statement)'));
+      var ct=el('table');var ch=el('tr');['From','To','Count'].forEach(function(x){ch.appendChild(el('th',null,x))});ct.appendChild(ch);
+      verdict.counts.forEach(function(p){p.cells.forEach(function(c){var r=el('tr');[p.from,p.to,c.what+': '+c.value].forEach(function(x){r.appendChild(el('td',null,x))});ct.appendChild(r)})});
+      out.appendChild(ct)}}
   if(kind==='settlement-refusal'){
     var doc;try{doc=JSON.parse(text)}catch(e){doc=null}
     if(doc&&doc.source==='dashboard'&&doc.reason==='no_terms_pack'&&doc.words===${JSON.stringify(SETTLEMENT_REFUSAL_WORDS)}){
@@ -120,7 +125,11 @@ const stamp = (when: string): string => when.replace(/[^0-9TZ]/g, '').slice(0, 1
 
 /** The History page: what this node answers a stranger who asks for its
  *  history, as the node served it (`replyText`, unchanged). */
-export function historyPage(replyText: string, savedAt: string): SavedPage {
+export function historyPage(
+  replyText: string,
+  savedAt: string,
+  form: 'history_card' | 'service_history' = 'history_card'
+): SavedPage {
   const name = `mesh-history-${stamp(savedAt)}`
   return {
     fileName: `${name}.html`,
@@ -128,7 +137,9 @@ export function historyPage(replyText: string, savedAt: string): SavedPage {
       title: 'This node’s history',
       kind: 'history',
       intro:
-        'What this node answers anyone who asks for its history card: its log’s checkpoints, and nothing about any one exchange. ' +
+        (form === 'service_history'
+          ? 'What this node answers anyone who asks for its Service History: its log’s checkpoints, and how many exchanges it served in each closed week, per model it states. It shows nothing about any one exchange. '
+          : 'What this node answers anyone who asks for its history card: its log’s checkpoints, and nothing about any one exchange. ') +
         'Saved ' +
         savedAt +
         '.',

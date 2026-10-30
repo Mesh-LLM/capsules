@@ -4,6 +4,12 @@
 
 ### Added
 
+- **The saved History page carries the Service History when the node shares it.** With
+  `share_standard_history` on and a checkpoint at a period boundary, the `history-page` route
+  answers what a stranger would get: the Service History pinned to the latest such checkpoint, and
+  the saved page checks the history card inside (its digest, the checkpoint signatures, the chain
+  and the anchor) and shows the node's own per-week counts as it states them, saying the counts
+  were not checked. Otherwise the page holds the card, as before. Mesh-LLM/capsules-plugin#96.
 - **Service evidence agreements: records cite the session (M4, second part).** A requested half,
   a served half, the payer's `delivered` leg and the provider's `payee_observed` leg under a
   session carry `"acceptance": {"type": "cites", "target": <digest>}` in their `x-mesh-poc-v1`
