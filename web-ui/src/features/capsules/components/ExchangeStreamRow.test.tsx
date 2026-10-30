@@ -1501,6 +1501,7 @@ describe('ExchangeStreamRow — a row closed from the record "Ask them for their
         askOutcome={settleRowAsk(null, {
           kind: 'record',
           at: '2026-09-28T23:00:00Z',
+          witness: 'witnessed',
           evidence: { status: 'found', idMatch: true, signatureOk: true, peerRecord: theirs, fetch: vi.fn() }
         })}
         rail={NO_RAIL}
@@ -1532,7 +1533,7 @@ describe('ExchangeStreamRow — whether their reply to "Ask them for their recor
     expect(note).toHaveTextContent('No verified reply (their reply did not verify: a proof does not verify against the anchor).')
   })
 
-  it('says a record the plugin proved in their log is verified', () => {
+  it('says a record the plugin proved in their log, under a checkpoint a trusted witness holds, is verified', () => {
     const theirs = { ...LOCAL_RECORD_WITH_DIGESTS, capsule_id: 'theirs-1' } as Record<string, unknown>
     render(
       <ExchangeStreamRow
@@ -1540,6 +1541,7 @@ describe('ExchangeStreamRow — whether their reply to "Ask them for their recor
         askOutcome={settleRowAsk(null, {
           kind: 'record',
           at: '2026-09-28T23:00:00Z',
+          witness: 'witnessed',
           evidence: { status: 'found', idMatch: true, signatureOk: true, peerRecord: theirs, fetch: vi.fn() }
         })}
         rail={NO_RAIL}
@@ -1548,8 +1550,43 @@ describe('ExchangeStreamRow — whether their reply to "Ask them for their recor
     )
     const note = document.querySelector('[data-ask-reply-verified]') as HTMLElement
     expect(note).toHaveAttribute('data-ask-reply-verified', 'true')
+    expect(note).toHaveAttribute('data-ask-reply-witness', 'witnessed')
     expect(note).toHaveTextContent('Their reply is verified')
+    expect(note).toHaveTextContent('a witness this node trusts holds their checkpoint')
   })
+
+  it.each([
+    ['unwitnessed', 'no witness this node trusts has vouched for that log'],
+    ['no_witness', 'This node has no witness configured to check it against']
+  ] as const)(
+    'a record no trusted witness vouches for (%s) still reads Confirmed, but its reply line never says verified',
+    (witness, clause) => {
+      const theirs = { ...LOCAL_RECORD_WITH_DIGESTS, capsule_id: 'theirs-1' } as Record<string, unknown>
+      render(
+        <ExchangeStreamRow
+          {...toggleProps()}
+          askOutcome={settleRowAsk(null, {
+            kind: 'record',
+            at: '2026-09-28T23:00:00Z',
+            witness,
+            evidence: { status: 'found', idMatch: true, signatureOk: true, peerRecord: theirs, fetch: vi.fn() }
+          })}
+          rail={NO_RAIL}
+          row={makeRow('open_not_given')}
+        />
+      )
+      expect(screen.getByText('Confirmed')).toBeInTheDocument()
+      const note = document.querySelector('[data-ask-reply-verified]') as HTMLElement
+      expect(note).toHaveAttribute('data-ask-reply-verified', 'false')
+      expect(note).toHaveAttribute('data-ask-reply-witness', witness)
+      expect(note).toHaveTextContent('Their record checks against their own signatures only')
+      expect(note).toHaveTextContent(clause)
+      // The row's own Confirmed sentence keeps its ✓; nothing beside it says
+      // the reply was verified or checks out.
+      const detail = document.querySelector('[data-verdict-detail]')?.textContent ?? ''
+      expect(detail).not.toMatch(/checks out|verified/i)
+    }
+  )
 
   it('never says verified for a record whose signature does not hold', () => {
     const theirs = { ...LOCAL_RECORD_WITH_DIGESTS, capsule_id: 'theirs-1' } as Record<string, unknown>
@@ -1607,7 +1644,7 @@ describe('ExchangeStreamRow — the two asks on the row face', () => {
     rerender(
       <ExchangeStreamRow
         {...toggleProps()}
-        historyOutcome={{ kind: 'verified', at: '2026-10-22T10:00:00Z', checkpoints: 4 }}
+        historyOutcome={{ kind: 'verified', at: '2026-10-22T10:00:00Z', checkpoints: 4, witness: 'witnessed' }}
         rail={NO_RAIL}
         row={row}
       />
@@ -1624,9 +1661,32 @@ describe('ExchangeStreamRow — the two asks on the row face', () => {
       '✓ Their history checks out · 4 checkpoints'
     )
     expect(screen.getByRole('button', { name: 'About their history' })).toHaveAccessibleDescription(
-      'Their history is verified: 4 checkpoints of their log, each signed with the key this node has for them and each extending the one before.'
+      'Their history is verified: 4 checkpoints of their log, each signed with the key this node has for them and each extending the one before. A witness this node trusts holds their checkpoint.'
     )
+    expect(document.querySelector('[data-history-witness="witnessed"]')).not.toBeNull()
     expect(screen.getByRole('button', { name: 'Ask for their history' })).toBeEnabled()
+  })
+
+  it.each([
+    ['unwitnessed', 'Their history checks against their own signatures only · 4 checkpoints', 'No witness this node trusts has vouched'],
+    ['no_witness', 'Their history checks against their own signatures only · 4 checkpoints', 'This node has no witness configured'],
+    ['not_recorded', 'Their history checked against their own signatures · 4 checkpoints', 'Its witness standing was not recorded']
+  ] as const)('a history no trusted witness vouches for (%s) is never shown as verified', (witness, face, clause) => {
+    render(
+      <ExchangeStreamRow
+        {...toggleProps()}
+        historyOutcome={{ kind: 'verified', at: '2026-10-22T10:00:00Z', checkpoints: 4, witness }}
+        rail={NO_RAIL}
+        row={makeRow('open_not_held')}
+      />
+    )
+    const line = document.querySelector('[data-history-reply-verified]') as HTMLElement
+    expect(line).toHaveAttribute('data-history-reply-verified', 'false')
+    expect(line).toHaveAttribute('data-history-witness', witness)
+    expect(line.firstChild?.textContent).toBe(face)
+    const about = screen.getByRole('button', { name: 'About their history' })
+    expect(about).toHaveAccessibleDescription(expect.stringContaining(clause))
+    expect(`${line.textContent} ${about.getAttribute('aria-description') ?? ''}`).not.toMatch(/✓|checks out|verified/i)
   })
 
   it('on a saved sample both asks stay visible, disabled, saying why', () => {

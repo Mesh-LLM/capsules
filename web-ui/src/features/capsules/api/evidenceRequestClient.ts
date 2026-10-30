@@ -23,10 +23,13 @@ export const INTEROP_PROFILE = 'evidence-interop/0'
 /** What the tool's verification found (`evidence_answer::verify_response`):
  *  a refusal signed with the announced key for our request; an artifact that
  *  verifies (the served records, by leaf index); a reply that proves nothing;
- *  or no announced key to check it under. `unknown` for anything else. */
+ *  or no announced key to check it under. `unknown` for anything else.
+ *  An artifact's `witnessed` is how many of its witness receipts verified
+ *  under a witness key the operator configured; it is absent when no witness
+ *  key is configured, so there was nothing to check them against. */
 export type EvidenceVerification =
   | { state: 'refusal'; reason: string }
-  | { state: 'artifact'; records: number[]; checkpoints?: number }
+  | { state: 'artifact'; records: number[]; checkpoints?: number; witnessed?: number }
   | { state: 'not_evidence'; why: string }
   | { state: 'no_announced_key' }
   | { state: 'unknown' }
@@ -109,7 +112,8 @@ function parseVerification(value: unknown): EvidenceVerification {
         ? {
             state: 'artifact',
             records: v.records as number[],
-            ...(Number.isInteger(v.checkpoints) ? { checkpoints: v.checkpoints as number } : {})
+            ...(Number.isInteger(v.checkpoints) ? { checkpoints: v.checkpoints as number } : {}),
+            ...(Number.isInteger(v.witnessed) && (v.witnessed as number) >= 0 ? { witnessed: v.witnessed as number } : {})
           }
         : { state: 'unknown' }
     case 'not_evidence':

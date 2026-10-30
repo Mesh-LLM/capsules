@@ -34,6 +34,24 @@ import { recomputeIdMatch, type PeerRecomputeState } from '@/features/capsules/l
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import { SAMPLE_DATA_UNAVAILABLE } from '@/features/capsules/lib/tooltip-copy'
 
+/** Whether a witness this node trusts vouches for the log an answer's chain
+ *  comes from (evidencebook#209: a chain that only checks against its
+ *  holder's own signatures is never called verified):
+ *
+ *   - `witnessed`: at least one of their checkpoints carries a witness receipt
+ *     that verified under a witness key the operator configured;
+ *   - `unwitnessed`: witness keys are configured, and none vouched;
+ *   - `no_witness`: no witness key is configured, so nothing was checked;
+ *   - `not_recorded`: a remembered result from before this was kept
+ *     (`history-memory.ts`), so its standing is unknown. */
+export type WitnessStanding = 'witnessed' | 'unwitnessed' | 'no_witness' | 'not_recorded'
+
+/** The standing the plugin's verification reports (its `witnessed` count). */
+export function witnessStanding(witnessed: number | undefined): Exclude<WitnessStanding, 'not_recorded'> {
+  if (witnessed === undefined) return 'no_witness'
+  return witnessed > 0 ? 'witnessed' : 'unwitnessed'
+}
+
 /** What asking produced for one row. `at` is when this node asked or when the
  *  other side signed its reply. */
 export type AskOutcome =
@@ -44,8 +62,16 @@ export type AskOutcome =
   | { kind: 'refused'; at: string; reason: string }
   | { kind: 'no_record'; at: string }
   /** `saved`: whether the plugin kept this record on the node (its id is in
-   *  the tool's `held`). Absent where nothing said either way. */
-  | { kind: 'record'; at: string; evidence: PeerRecomputeState; saved?: boolean }
+   *  the tool's `held`). Absent where nothing said either way. `witness`:
+   *  whether a witness this node trusts vouches for their log; absent is read
+   *  as `no_witness`, never as witnessed. */
+  | {
+      kind: 'record'
+      at: string
+      evidence: PeerRecomputeState
+      saved?: boolean
+      witness?: Exclude<WitnessStanding, 'not_recorded'>
+    }
   /** Their verified reply carried more than one record that could be their
    *  half of this exchange, and nothing picks one: none is shown as theirs. */
   | { kind: 'ambiguous'; at: string; count: number }
@@ -345,6 +371,7 @@ export async function judgeAskReply(
         kind: 'record',
         at: askedAt,
         saved: receiptId !== null && reply.held.includes(receiptId),
+        witness: witnessStanding(verification.witnessed),
         evidence: {
           status: 'found',
           idMatch,
@@ -416,9 +443,15 @@ export function recordProblems(evidence: PeerRecomputeState): string {
 
 const SIGNED_FOR_THIS_REQUEST = 'Their reply is verified: signed with the key this node has for them, for this request'
 
+const IN_THEIR_LOG = 'it is in their log, under a checkpoint signed with the key this node has for them'
+
 /** The line a row shows once its ask is answered: whether the reply was
- *  verified, and if not, why. `null` while the ask is in flight. */
-export function askReplyNote(outcome: AskOutcome): { verified: boolean; text: string } | null {
+ *  verified, and if not, why. `null` while the ask is in flight. A record's
+ *  note also carries its `witness` standing: only a witnessed one is
+ *  `verified`, since without a witness their log could be a private copy. */
+export function askReplyNote(
+  outcome: AskOutcome
+): { verified: boolean; text: string; witness?: Exclude<WitnessStanding, 'not_recorded'> } | null {
   switch (outcome.kind) {
     case 'asking':
       return null
@@ -436,9 +469,26 @@ export function askReplyNote(outcome: AskOutcome): { verified: boolean; text: st
       // verified only if its id recomputes AND it is signed with their
       // announced key. Anything less is said, never rounded up.
       if (isVerifiedRecord(outcome.evidence)) {
-        return {
-          verified: true,
-          text: 'Their reply is verified: the record is in their log, under a checkpoint signed with the key this node has for them'
+        const witness = outcome.witness ?? 'no_witness'
+        switch (witness) {
+          case 'witnessed':
+            return {
+              verified: true,
+              witness,
+              text: 'Their reply is verified: the record is in their log, under a checkpoint signed with the key this node has for them, and a witness this node trusts holds their checkpoint'
+            }
+          case 'unwitnessed':
+            return {
+              verified: false,
+              witness,
+              text: `Their record checks against their own signatures only: ${IN_THEIR_LOG}, but no witness this node trusts has vouched for that log, so it could be a private copy`
+            }
+          case 'no_witness':
+            return {
+              verified: false,
+              witness,
+              text: `Their record checks against their own signatures only: ${IN_THEIR_LOG}. This node has no witness configured to check it against, so it could be a private copy`
+            }
         }
       }
       return {

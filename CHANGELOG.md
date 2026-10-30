@@ -4,6 +4,12 @@
 
 ### Changed
 
+- **The Evidence tab says when a peer's answer is not witnessed.** A history or record that checks
+  only against the peer's own signatures is no longer shown as verified (no ✓, no "checks out"):
+  it says no witness this node trusts has vouched for that log, or that this node has no witness
+  configured, so it could be a private copy. Only an answer with a verified witness receipt keeps
+  "verified". A remembered history keeps its witness standing; one remembered before this says its
+  standing was not recorded. A record row still closes as Confirmed. Mesh-LLM/capsules-plugin#154.
 - **The payer's deal report is sealed for the owner (`keep`) and never leaves the node.** It was
   sealed for the counterparty audience, so capsule-viewer rendered the owner's own receipt as the
   other party's copy and refused it as `keep`. A copy for the counterparty is made only by a share

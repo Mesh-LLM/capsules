@@ -21,30 +21,85 @@ function reply(answer: unknown, verification: EvidenceVerification, announcedKey
   return { kind: 'answer', answer, verification, requestDigest: SENT, announcedKeyId, held: [] }
 }
 
+/** A note that isn't witnessed never reads as verified (evidencebook#209). */
+function expectNeverVerified(note: ReturnType<typeof historyNote>) {
+  expect(note?.verified).toBe(false)
+  const all = `${note?.text} ${note?.checkedLine ?? ''} ${note?.detail ?? ''}`
+  expect(all).not.toContain('✓')
+  expect(all).not.toMatch(/checks out|verified/i)
+}
+
 describe('judgeHistoryReply', () => {
-  it('a verified history card is verified, with its checkpoint count', () => {
-    const outcome = judgeHistoryReply(reply({}, { state: 'artifact', records: [], checkpoints: 3 }), ASKED_AT)
-    expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: 3 })
+  it('a witnessed history card is verified, with its checkpoint count and the witness', () => {
+    const outcome = judgeHistoryReply(reply({}, { state: 'artifact', records: [], checkpoints: 3, witnessed: 2 }), ASKED_AT)
+    expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: 3, witness: 'witnessed' })
     expect(historyNote(outcome)).toEqual({
       verified: true,
+      witness: 'witnessed',
       text: '✓ Their history checks out · 3 checkpoints',
       checkedLine: `checked ${formatExchangeTimestamp(ASKED_AT)}`,
       detail:
-        'Their history is verified: 3 checkpoints of their log, each signed with the key this node has for them and each extending the one before.'
+        'Their history is verified: 3 checkpoints of their log, each signed with the key this node has for them and each extending the one before. A witness this node trusts holds their checkpoint.'
     })
-    const one = judgeHistoryReply(reply({}, { state: 'artifact', records: [], checkpoints: 1 }), ASKED_AT)
+    const one = judgeHistoryReply(reply({}, { state: 'artifact', records: [], checkpoints: 1, witnessed: 1 }), ASKED_AT)
     expect(historyNote(one)?.text).toBe('✓ Their history checks out · 1 checkpoint')
   })
 
-  it('a verified card whose checkpoint count the plugin didn’t give reads as unknown, never "0 checkpoints"', () => {
-    const outcome = judgeHistoryReply(reply({}, { state: 'artifact', records: [] }), ASKED_AT)
-    expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: null })
+  it('a history no configured witness vouches for checks against their own signatures only, never "verified"', () => {
+    const outcome = judgeHistoryReply(reply({}, { state: 'artifact', records: [], checkpoints: 3, witnessed: 0 }), ASKED_AT)
+    expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: 3, witness: 'unwitnessed' })
+    const note = historyNote(outcome)
+    expect(note).toEqual({
+      verified: false,
+      witness: 'unwitnessed',
+      text: 'Their history checks against their own signatures only · 3 checkpoints',
+      checkedLine: `checked ${formatExchangeTimestamp(ASKED_AT)}`,
+      detail:
+        '3 checkpoints of their log, each signed with the key this node has for them and each extending the one before. No witness this node trusts has vouched for that log, so it could be a private copy.'
+    })
+    expectNeverVerified(note)
+  })
+
+  it('a history checked with no witness configured says there was none to check it against', () => {
+    const outcome = judgeHistoryReply(reply({}, { state: 'artifact', records: [], checkpoints: 2 }), ASKED_AT)
+    expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: 2, witness: 'no_witness' })
+    const note = historyNote(outcome)
+    expect(note).toEqual({
+      verified: false,
+      witness: 'no_witness',
+      text: 'Their history checks against their own signatures only · 2 checkpoints',
+      checkedLine: `checked ${formatExchangeTimestamp(ASKED_AT)}`,
+      detail:
+        '2 checkpoints of their log, each signed with the key this node has for them and each extending the one before. This node has no witness configured to check it against, so it could be a private copy.'
+    })
+    expectNeverVerified(note)
+  })
+
+  it('a remembered history whose witness standing was not recorded says so, never "verified"', () => {
+    const note = historyNote({ kind: 'verified', at: ASKED_AT, checkpoints: 4, witness: 'not_recorded' })
+    expect(note).toEqual({
+      verified: false,
+      witness: 'not_recorded',
+      text: 'Their history checked against their own signatures · 4 checkpoints',
+      checkedLine: `checked ${formatExchangeTimestamp(ASKED_AT)}`,
+      detail:
+        'Their history checked against their own signatures when it was checked: 4 checkpoints of their log, each signed with the key this node has for them and each extending the one before. Its witness standing was not recorded.'
+    })
+    expectNeverVerified(note)
+  })
+
+  it('a checked card whose checkpoint count the plugin didn’t give reads as unknown, never "0 checkpoints"', () => {
+    const outcome = judgeHistoryReply(reply({}, { state: 'artifact', records: [], witnessed: 1 }), ASKED_AT)
+    expect(outcome).toEqual({ kind: 'verified', at: ASKED_AT, checkpoints: null, witness: 'witnessed' })
     const note = historyNote(outcome)
     expect(note?.text).toBe('✓ Their history checks out')
     expect(note?.detail).toBe(
-      'Their history is verified: the checkpoints of their log, each signed with the key this node has for them and each extending the one before.'
+      'Their history is verified: the checkpoints of their log, each signed with the key this node has for them and each extending the one before. A witness this node trusts holds their checkpoint.'
     )
     expect(`${note?.text} ${note?.detail}`).not.toMatch(/\b0 checkpoints/)
+    const unwitnessed = historyNote(judgeHistoryReply(reply({}, { state: 'artifact', records: [], witnessed: 0 }), ASKED_AT))
+    expect(unwitnessed?.text).toBe('Their history checks against their own signatures only')
+    expect(unwitnessed?.detail?.startsWith('The checkpoints of their log, each signed')).toBe(true)
   })
 
   it('a refusal signed with their announced key over our request is their signed refusal, in plain words', () => {

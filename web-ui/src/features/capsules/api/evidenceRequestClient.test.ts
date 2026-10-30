@@ -80,6 +80,27 @@ describe('askForRecord', () => {
     })
   })
 
+  it('keeps how many witness receipts verified, and leaves it absent when no witness key is configured', async () => {
+    const answer = { profile: 'evidence-interop/0', artifact: 'eyJyZWNvcmRzIjpbXX0' }
+    const verificationOf = async (verification: Record<string, unknown>) => {
+      stubRoutes({ answer, request_digest: DIGEST, verification, held: [] }, null)
+      const reply = await askForRecord(PEER, BY_NONCE)
+      return reply.kind === 'answer' ? reply.verification : null
+    }
+    expect(await verificationOf({ state: 'artifact', records: [1], checkpoints: 2, witnessed: 1, receipts: [] })).toEqual({
+      state: 'artifact',
+      records: [1],
+      checkpoints: 2,
+      witnessed: 1
+    })
+    expect(await verificationOf({ state: 'artifact', records: [1], witnessed: 0 })).toEqual({ state: 'artifact', records: [1], witnessed: 0 })
+    expect(await verificationOf({ state: 'artifact', records: [1] })).toEqual({ state: 'artifact', records: [1] })
+    // Anything but a whole, non-negative count is no witness result.
+    for (const witnessed of [-1, 1.5, '1', null]) {
+      expect(await verificationOf({ state: 'artifact', records: [1], witnessed })).toEqual({ state: 'artifact', records: [1] })
+    }
+  })
+
   it('reads a missing or malformed `held` as nothing saved', async () => {
     for (const held of [undefined, null, 'theirs-1', [1], ['ok', ''], { id: 'x' }]) {
       stubRoutes({ answer: {}, request_digest: DIGEST, verification: { state: 'artifact', records: [] }, held }, null)

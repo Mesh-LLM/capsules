@@ -582,6 +582,7 @@ export function ExchangeStreamRow({
                 <span
                   className="inline-flex"
                   data-ask-reply-verified={askNote ? (askNote.verified ? 'true' : 'false') : undefined}
+                  data-ask-reply-witness={askNote?.witness}
                   data-ask-retry={retryNote ? 'true' : undefined}
                   data-verdict-detail="true"
                 >
@@ -598,6 +599,7 @@ export function ExchangeStreamRow({
               <p
                 className={cn('text-xs', historyLine.verified ? 'text-foreground' : 'text-fg-dim')}
                 data-history-reply-verified={historyLine.verified ? 'true' : 'false'}
+                data-history-witness={historyLine.witness}
                 role="note"
               >
                 {historyLine.text}

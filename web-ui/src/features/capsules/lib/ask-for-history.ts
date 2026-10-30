@@ -12,15 +12,23 @@
 //   - anything else (no announced key, a reply that proves nothing, no reply)
 //     is a failed ask, and says why.
 import type { EvidenceAskReply } from '@/features/capsules/api/evidenceRequestClient'
-import { NO_KEY_DETAIL, askFailureSentence, refusalProblem } from '@/features/capsules/lib/ask-for-record'
+import {
+  NO_KEY_DETAIL,
+  askFailureSentence,
+  refusalProblem,
+  witnessStanding,
+  type WitnessStanding
+} from '@/features/capsules/lib/ask-for-record'
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 
 /** What asking for their history produced. `at` is when this node asked, or
  *  when they signed their refusal. */
 export type HistoryOutcome =
   | { kind: 'asking'; at: string }
-  /** `checkpoints` is `null` when the plugin's verification didn't say how many. */
-  | { kind: 'verified'; at: string; checkpoints: number | null }
+  /** The plugin checked their chain under their announced key. `checkpoints`
+   *  is `null` when its verification didn't say how many; `witness` is
+   *  whether a witness this node trusts vouches for that log. */
+  | { kind: 'verified'; at: string; checkpoints: number | null; witness: WitnessStanding }
   | { kind: 'refused'; at: string; reason: string }
   /** `plain`: the ask itself failed, and `detail` is a whole plain sentence
    *  saying so (`askFailureSentence`). */
@@ -52,7 +60,12 @@ export function judgeHistoryReply(reply: EvidenceAskReply, askedAt: string): His
     case 'artifact':
       // The plugin checked every listed checkpoint under their announced key
       // and each consistency proof; with none listed it would have failed.
-      return { kind: 'verified', at: askedAt, checkpoints: verification.checkpoints ?? null }
+      return {
+        kind: 'verified',
+        at: askedAt,
+        checkpoints: verification.checkpoints ?? null,
+        witness: witnessStanding(verification.witnessed)
+      }
   }
 }
 
@@ -74,11 +87,14 @@ export function historyRefusalWords(reason: string): string {
 }
 
 /** The line a row shows for its history ask, or `null` while it is in flight.
- *  A verified history says when it was checked (`checkedLine`), since a
- *  remembered one can be from an earlier visit (`history-memory.ts`). */
+ *  A checked history says when it was checked (`checkedLine`), since a
+ *  remembered one can be from an earlier visit (`history-memory.ts`), and its
+ *  `witness` standing: only a witnessed history is `verified` (✓, "checks
+ *  out"); one that checks only against their own signatures could be a
+ *  private copy, and says so. */
 export function historyNote(
   outcome: HistoryOutcome
-): { verified: boolean; text: string; checkedLine?: string; detail?: string } | null {
+): { verified: boolean; text: string; checkedLine?: string; detail?: string; witness?: WitnessStanding } | null {
   switch (outcome.kind) {
     case 'asking':
       return null
@@ -86,12 +102,45 @@ export function historyNote(
       // An unknown count is said as unknown, never as zero.
       const n = outcome.checkpoints
       const listed = n === null ? 'the checkpoints' : `${n} checkpoint${n === 1 ? '' : 's'}`
+      const count = n === null ? '' : ` · ${listed}`
+      const Listed = `${listed.charAt(0).toUpperCase()}${listed.slice(1)}`
+      const ofTheirLog = ' of their log, each signed with the key this node has for them and each extending the one before'
+      const checkedLine = `checked ${formatExchangeTimestamp(outcome.at)}`
+      const witness = outcome.witness
       // Short on the face; how it was checked behind the (i).
-      return {
-        verified: true,
-        text: n === null ? '✓ Their history checks out' : `✓ Their history checks out · ${listed}`,
-        checkedLine: `checked ${formatExchangeTimestamp(outcome.at)}`,
-        detail: `Their history is verified: ${listed} of their log, each signed with the key this node has for them and each extending the one before.`
+      switch (witness) {
+        case 'witnessed':
+          return {
+            verified: true,
+            witness,
+            text: `✓ Their history checks out${count}`,
+            checkedLine,
+            detail: `Their history is verified: ${listed}${ofTheirLog}. A witness this node trusts holds their checkpoint.`
+          }
+        case 'unwitnessed':
+          return {
+            verified: false,
+            witness,
+            text: `Their history checks against their own signatures only${count}`,
+            checkedLine,
+            detail: `${Listed}${ofTheirLog}. No witness this node trusts has vouched for that log, so it could be a private copy.`
+          }
+        case 'no_witness':
+          return {
+            verified: false,
+            witness,
+            text: `Their history checks against their own signatures only${count}`,
+            checkedLine,
+            detail: `${Listed}${ofTheirLog}. This node has no witness configured to check it against, so it could be a private copy.`
+          }
+        case 'not_recorded':
+          return {
+            verified: false,
+            witness,
+            text: `Their history checked against their own signatures${count}`,
+            checkedLine,
+            detail: `Their history checked against their own signatures when it was checked: ${listed}${ofTheirLog}. Its witness standing was not recorded.`
+          }
       }
     }
     case 'refused':

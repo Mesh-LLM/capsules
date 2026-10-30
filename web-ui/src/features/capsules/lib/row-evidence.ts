@@ -70,8 +70,9 @@ export type RowJudgement = {
   evidence: PeerRecomputeState | null
   source: EvidenceSource | null
   /** What an ask returned, when it is what the row shows, or when nothing
-   *  verified is shown: `verified` only for what the badge shows. */
-  askNote: { verified: boolean; text: string } | null
+   *  verified is shown: `verified` only for what the badge shows. A record's
+   *  note carries its `witness` standing (`askReplyNote`). */
+  askNote: ReturnType<typeof askReplyNote>
   /** The latest ask, when the row shows something else verified. */
   retryNote: string | null
   /** Confirmed from a record an ask brought that the plugin couldn't save

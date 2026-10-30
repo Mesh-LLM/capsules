@@ -73,7 +73,7 @@ vi.mock('@/features/capsules/api/evidenceRequestClient', () => ({
   askForHistory: vi.fn().mockResolvedValue({
     kind: 'answer',
     answer: {},
-    verification: { state: 'artifact', records: [], checkpoints: 2 },
+    verification: { state: 'artifact', records: [], checkpoints: 2, witnessed: 1 },
     requestDigest: 'f'.repeat(64),
     announcedKeyId: 'e'.repeat(64),
     held: []
@@ -2129,8 +2129,27 @@ describe('LedgerPageContent — the plain-verdict pass on Exchanges', () => {
     await openExchanges()
     expect(await screen.findByText(/^✓ Their history checks out · 2 checkpoints/)).toBeInTheDocument()
     expect(document.querySelector('[data-history-checked]')?.textContent).toMatch(/checked /)
+    // Its witness standing came back with it.
+    expect(document.querySelector('[data-history-witness="witnessed"]')).not.toBeNull()
     const { askForHistory } = await import('@/features/capsules/api/evidenceRequestClient')
     expect(askForHistory).toHaveBeenCalledTimes(1)
+  })
+
+  it('a history remembered before its witness standing was kept says the standing was not recorded, never ✓', async () => {
+    await oneAskableRow()
+    window.localStorage.setItem(
+      HISTORY_MEMORY_KEY,
+      JSON.stringify({ [PEER]: { kind: 'verified', at: '2026-10-22T10:00:00Z', checkpoints: 2 } })
+    )
+    await openExchanges()
+    expect(await screen.findByText(/^Their history checked against their own signatures · 2 checkpoints/)).toBeInTheDocument()
+    const line = document.querySelector('[data-history-reply-verified]') as HTMLElement
+    expect(line).toHaveAttribute('data-history-reply-verified', 'false')
+    expect(line).toHaveAttribute('data-history-witness', 'not_recorded')
+    expect(screen.getByRole('button', { name: 'About their history' })).toHaveAccessibleDescription(
+      expect.stringContaining('Its witness standing was not recorded.')
+    )
+    expect(screen.queryByText(/✓ Their history checks out/)).not.toBeInTheDocument()
   })
 
   it('a remembered history shows once, on that peer’s newest row, never on its older rows', async () => {
@@ -2170,7 +2189,7 @@ describe('LedgerPageContent — the plain-verdict pass on Exchanges', () => {
     } as never)
     window.localStorage.setItem(
       HISTORY_MEMORY_KEY,
-      JSON.stringify({ [PEER]: { kind: 'verified', at: '2026-10-22T10:00:00Z', checkpoints: 2 } })
+      JSON.stringify({ [PEER]: { kind: 'verified', at: '2026-10-22T10:00:00Z', checkpoints: 2, witness: 'witnessed' } })
     )
     await openExchanges()
     expect(await screen.findAllByText(/^✓ Their history checks out · 2 checkpoints/)).toHaveLength(1)
