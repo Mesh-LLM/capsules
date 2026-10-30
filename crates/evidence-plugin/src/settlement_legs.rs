@@ -937,6 +937,84 @@ mod tests {
         (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap())
     }
 
+    /// The payer's deal follows the legs the settlement trail seals: the
+    /// events a live run sees, with the exchange's own record arriving after
+    /// the invoices, end in a baseline, a `completed` outcome, a close and a
+    /// report that cites those very legs.
+    #[test]
+    fn the_payers_legs_drive_the_payers_deal() {
+        let (a, b) = dirs();
+        let pair = Pair::open(a.path(), b.path());
+        for (phase, seg, hash) in [
+            (Phase::InputInvoiceIssued, 0, INPUT),
+            (Phase::OutputInvoiceIssued, 1, OUTPUT),
+        ] {
+            pair.payer_event(phase, seg, hash, &[]);
+        }
+        for (phase, seg, hash) in [
+            (Phase::InputSettlementObserved, 0, INPUT),
+            (Phase::OutputSettlementObserved, 1, OUTPUT),
+        ] {
+            pair.payer_event(phase, seg, hash, &[("fee_msat", 0)]);
+        }
+        let sealed = crate::deal_flow::SealedExchange {
+            capsule_id: &"e".repeat(64),
+            peer: PROVIDER_PEER,
+            request_digest: &"d".repeat(64),
+            model: "model-x",
+        };
+        pair.payer
+            .deals()
+            .on_exchange(&pair.payer, "ex", &sealed, unix_now());
+        pair.payer_accounted();
+        pair.payer.settlement_legs().on_exchange(
+            &pair.payer,
+            "ex",
+            Some(PROVIDER_PEER),
+            Some(RESPONSE),
+        );
+        let capsules: Vec<Value> = std::fs::read_to_string(a.path().join("ledger/capsules.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let report_id = capsules
+            .iter()
+            .find(|c| c["action_id"] == "capsulectl-deal-report")
+            .expect("a report")["capsule_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let journal = std::fs::read_to_string(a.path().join("ledger/deal-payloads.jsonl")).unwrap();
+        let line: Value = journal
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .find(|l| l["capsule_id"] == report_id.as_str())
+            .unwrap();
+        assert_eq!(line["payload"]["report"]["lifecycle"]["state"], "closed");
+        let leg_ids: Vec<&str> = capsules
+            .iter()
+            .filter(|c| c.get("settlement").is_some())
+            .map(|c| c["capsule_id"].as_str().unwrap())
+            .collect();
+        let cited: Vec<&str> = line["payload"]["report"]["did"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|d| d["steps"].as_array().unwrap())
+            .filter_map(Value::as_str)
+            .collect();
+        for leg in &leg_ids {
+            assert!(cited.contains(leg), "the report cites {leg}");
+        }
+        let outcome = journal
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .find(|l| l["record_type"] == "outcome")
+            .unwrap();
+        assert_eq!(outcome["payload"]["body"]["outcome"], "completed");
+    }
+
     #[test]
     fn a_paid_exchange_yields_both_sides_legs() {
         let (a, b) = dirs();

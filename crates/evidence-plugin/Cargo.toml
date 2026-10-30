@@ -241,4 +241,4 @@ evidence-request = { git = "https://github.com/action-state-group/agent-action-c
 # capsule-emit main but in no crate past 0.0.8. Both are taken from these revs until releases
 # carry them; then these two patches go and the requirements above move to the releases.
 evidencebook = { git = "https://github.com/action-state-group/evidencebook", rev = "248d6fef78cb28df8e37a836734bb7b58bab97a5" }
-capsule-emit = { git = "https://github.com/action-state-group/capsule-emit", rev = "9defe98" }
+capsule-emit = { git = "https://github.com/action-state-group/capsule-emit", rev = "dbb9d33" }

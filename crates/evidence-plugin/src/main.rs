@@ -1495,6 +1495,24 @@ async fn main() -> anyhow::Result<()> {
     capsules
         .deals()
         .recover(&*capsules, chrono::Utc::now().timestamp());
+    // The 15-minute close of a deal whose settlement never came runs on a
+    // clock, not only on the next payment event.
+    {
+        let capsules = capsules.clone();
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                every.tick().await;
+                let capsules = capsules.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    capsules
+                        .deals()
+                        .tick(&*capsules, chrono::Utc::now().timestamp());
+                })
+                .await;
+            }
+        });
+    }
     let evidence_pub_key_pem = capsules.public_key_pem();
     let own_public_key = capsules.public_key();
     let own_signing_key = capsules.signing_key().clone();

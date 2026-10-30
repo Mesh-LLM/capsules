@@ -236,7 +236,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "capsule-emit"
 version = "0.0.8"
-source = "git+https://github.com/action-state-group/capsule-emit?rev=9defe98#9defe98af14bc16aef4017c2685e8cf32d91ee58"
+source = "git+https://github.com/action-state-group/capsule-emit?rev=dbb9d33#dbb9d337e2f81d38ba6bb258560a77ab67f45c83"
 dependencies = [
  "agent-action-capsule",
  "anyhow",
@@ -260,7 +260,7 @@ dependencies = [
 [[package]]
 name = "capsule-emit-artifact"
 version = "0.0.1"
-source = "git+https://github.com/action-state-group/capsule-emit?rev=9defe98#9defe98af14bc16aef4017c2685e8cf32d91ee58"
+source = "git+https://github.com/action-state-group/capsule-emit?rev=dbb9d33#dbb9d337e2f81d38ba6bb258560a77ab67f45c83"
 dependencies = [
  "agent-action-capsule",
  "base64 0.22.1",

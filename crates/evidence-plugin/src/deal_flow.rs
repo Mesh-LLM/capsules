@@ -47,7 +47,7 @@ use crate::deal_records::{self as records, After, Deal, Encoded};
 /// ([`crate::settlement_legs::MAX_AGE`]).
 pub const OPEN_AFTER: i64 = 15 * 60;
 /// How many deals the state keeps; the oldest are dropped first.
-const MAX_DEALS: usize = 1024;
+const MAX_DEALS: usize = if cfg!(test) { 8 } else { 1024 };
 
 const STATE_FILE: &str = "deals.json";
 const SECRET_FILE: &str = "deal-store-secret";
@@ -61,6 +61,15 @@ pub struct SealedExchange<'a> {
     pub peer: &'a str,
     pub request_digest: &'a str,
     pub model: &'a str,
+}
+
+/// Which step of which deal is being sealed, and of which exchange.
+struct StepOf<'a> {
+    deal_id: &'a str,
+    exchange_capsule_id: &'a str,
+    seq: i64,
+    /// The baseline's: the opening of its committed ask.
+    nonce: Option<&'a str>,
 }
 
 /// What seals a deal's Capsules: the node's ledger.
@@ -190,8 +199,8 @@ impl Deals {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The first invoice for `exchange_id` was issued and this node sealed its
-    /// terms leg `leg`, for `amount_msat`.
+    /// An invoice for `exchange_id` was issued (the first makes the deal) and this
+    /// node sealed its terms leg `leg`, for `amount_msat`.
     pub fn on_invoice(
         &self,
         sealer: &dyn Sealer,
@@ -260,6 +269,9 @@ impl Deals {
         let mut inner = self.lock();
         self.load(&mut inner, sealer);
         let before = progress(&inner);
+        inner
+            .entries
+            .retain(|_, e| e.step(deal::TYPE_BASELINE).is_some() || now - e.started < OPEN_AFTER);
         let ids: Vec<String> = inner.entries.keys().cloned().collect();
         for id in ids {
             self.advance(&mut inner, sealer, &id, now, false);
@@ -309,10 +321,13 @@ impl Deals {
                 owned.put_in(&mut entry);
             }
             inner.entries.insert(exchange_id.to_string(), entry);
+            // Finished deals go first, oldest first; a deal still to be
+            // closed is never dropped for room.
             while inner.entries.len() > MAX_DEALS {
                 let oldest = inner
                     .entries
                     .iter()
+                    .filter(|(_, e)| e.report.is_some())
                     .min_by_key(|(_, e)| e.started)
                     .map(|(k, _)| k.clone());
                 match oldest {
@@ -321,11 +336,17 @@ impl Deals {
                 };
             }
         }
+        let before = progress(&inner);
         if let Some(entry) = inner.entries.get_mut(exchange_id) {
             change(entry);
         }
-        self.advance(&mut inner, sealer, exchange_id, now, false);
+        // The entry (with the exchange it is of) is on disk before its first
+        // Capsule, so a crash after the append can still be recovered from.
         self.save(&inner);
+        self.advance(&mut inner, sealer, exchange_id, now, false);
+        if progress(&inner) != before {
+            self.save(&inner);
+        }
     }
 
     /// Seal what is due for `exchange_id`, in order, stopping at the first
@@ -348,6 +369,7 @@ impl Deals {
             return;
         }
         let deal_id = entry.deal_id.clone();
+        let nonce = entry.nonce.clone();
         let (Some(peer), Some(exchange), Some(digest), Some(model)) = (
             entry.peer.clone(),
             entry.exchange_capsule_id.clone(),
@@ -363,7 +385,17 @@ impl Deals {
             deal_id: deal_id.clone(),
         };
         let seal = |entry: &mut Entry, enc: Encoded, seq: i64, completed: bool| -> bool {
-            match self.seal_step(sealer, &deal_id, &exchange, seq, &enc, now) {
+            match self.seal_step(
+                sealer,
+                &StepOf {
+                    deal_id: &deal_id,
+                    exchange_capsule_id: &exchange,
+                    seq,
+                    nonce: (seq == 1).then_some(nonce.as_str()),
+                },
+                &enc,
+                now,
+            ) {
                 Some(capsule_id) => {
                     entry.steps.push(Sealed {
                         record_type: enc.record_type.to_string(),
@@ -446,12 +478,16 @@ impl Deals {
     fn seal_step(
         &self,
         sealer: &dyn Sealer,
-        deal_id: &str,
-        exchange_capsule_id: &str,
-        seq: i64,
+        of: &StepOf,
         enc: &Encoded,
         now: i64,
     ) -> Option<String> {
+        let StepOf {
+            deal_id,
+            exchange_capsule_id,
+            seq,
+            nonce,
+        } = *of;
         let record: Value = serde_json::from_slice(&enc.payload).ok()?;
         let result = sealer.seal(
             &|head| {
@@ -467,10 +503,16 @@ impl Deals {
             },
             &|capsule_id| {
                 self.link(capsule_id, exchange_capsule_id)?;
-                self.journal(&json!({
+                let mut line = json!({
                     "capsule_id": capsule_id, "deal_id": deal_id, "record_type": enc.record_type,
                     "seq": seq, "digest": enc.digest, "at": enc.at, "payload": record,
-                }))
+                });
+                // The opening of the baseline's committed ask: the nonce
+                // (the text is the exchange's request digest and model).
+                if let Some(nonce) = nonce {
+                    line["nonce"] = json!(nonce);
+                }
+                self.journal(&line)
             },
         );
         match result {
@@ -551,7 +593,13 @@ impl Deals {
         if let Ok(text) = std::fs::read_to_string(self.dir.join(STATE_FILE)) {
             match serde_json::from_str(&text) {
                 Ok(entries) => inner.entries = entries,
-                Err(error) => tracing::warn!(%error, "deal state unreadable; starting empty"),
+                Err(error) => {
+                    // Kept for a person to read; a later save must not
+                    // overwrite it.
+                    tracing::warn!(%error, "deal state unreadable; moved to deals.json.bad");
+                    let _ =
+                        std::fs::rename(self.dir.join(STATE_FILE), self.dir.join("deals.json.bad"));
+                }
             }
         }
         let Ok(journal) = std::fs::read_to_string(self.dir.join(PAYLOADS_FILE)) else {
@@ -649,17 +697,24 @@ fn random_hex() -> Option<String> {
 /// made on first use. The deal keys derive from it, so a leaked record
 /// reveals no raw identifier.
 fn read_or_make_secret(path: &Path) -> Option<[u8; 32]> {
-    if let Ok(text) = std::fs::read_to_string(path) {
-        if let Some(secret) = hex::decode(text.trim())
+    let read = || -> Option<[u8; 32]> {
+        let text = std::fs::read_to_string(path)
+            .map_err(
+                |error| tracing::warn!(%error, "deal store secret unreadable; no deal is sealed"),
+            )
+            .ok()?;
+        let secret = hex::decode(text.trim())
             .ok()
-            .and_then(|b| b.try_into().ok())
-        {
-            return Some(secret);
+            .and_then(|b| b.try_into().ok());
+        if secret.is_none() {
+            tracing::warn!("deal store secret is not 32 bytes of hex; no deal is sealed");
         }
-        tracing::warn!("deal store secret unreadable; the deal is not sealed");
-        return None;
+        secret
+    };
+    if path.exists() {
+        return read();
     }
-    let secret = hex::decode(random_hex()?).ok()?.try_into().ok()?;
+    let secret: [u8; 32] = hex::decode(random_hex()?).ok()?.try_into().ok()?;
     let write = || -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         let mut file = std::fs::OpenOptions::new()
@@ -672,20 +727,33 @@ fn read_or_make_secret(path: &Path) -> Option<[u8; 32]> {
     };
     match write() {
         Ok(()) => Some(secret),
-        // Lost a race to another writer: read theirs.
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read_or_make_secret(path),
+        // Another writer made it first: theirs is the secret, read once.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read(),
         Err(error) => {
-            tracing::warn!(%error, "deal store secret not written; the deal is not sealed");
+            tracing::warn!(%error, "deal store secret not written; no deal is sealed");
             None
         }
     }
 }
 
+/// Append `line`. A last line a crash cut short (no newline) is ended first,
+/// so the new line is not glued to it and lost with it.
 fn append_line(path: &Path, line: &Value) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .open(path)?;
+    let len = file.metadata()?.len();
+    if len > 0 {
+        let mut last = [0u8; 1];
+        file.seek(SeekFrom::Start(len - 1))?;
+        file.read_exact(&mut last)?;
+        if last[0] != b'\n' {
+            file.write_all(b"\n")?;
+        }
+    }
     writeln!(file, "{line}")?;
     file.sync_all()
 }
@@ -884,6 +952,138 @@ mod tests {
         // A tick again seals nothing more.
         state.deals().tick(&state, t + 10 * OPEN_AFTER);
         assert_eq!(deal_capsules(dir.path()).len(), 4);
+    }
+
+    /// What the closed-open report says depends on what this node saw.
+    #[test]
+    fn an_open_report_says_only_what_the_node_saw() {
+        let t = 1_790_000_000;
+        // (paid legs, delivered, expected wording)
+        let cases: [(usize, bool, &str); 3] = [
+            (0, false, "Payment not seen."),
+            (1, false, "Payment seen; delivery not recorded."),
+            (1, true, "Not every invoice was seen paid."),
+        ];
+        for (paid, delivered, text) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let state = open(dir.path());
+            let deals = state.deals();
+            // Two invoices, so one paid leg plus delivery is still not settled.
+            deals.on_invoice(&state, EXCHANGE, &hex64('a'), 1000, t);
+            deals.on_invoice(&state, EXCHANGE, &hex64('f'), 500, t);
+            deals.on_exchange(&state, EXCHANGE, &sealed_exchange(), t + 1);
+            if paid > 0 {
+                deals.on_paid(&state, EXCHANGE, &hex64('b'), 1000, t + 2);
+            }
+            if delivered {
+                deals.on_delivered(&state, EXCHANGE, &hex64('c'), t + 3);
+            }
+            deals.tick(&state, t + OPEN_AFTER);
+            let capsules = deal_capsules(dir.path());
+            assert_eq!(capsules.len(), 4, "{text}");
+            let report = payload(dir.path(), capsules[3]["capsule_id"].as_str().unwrap());
+            assert_eq!(report["report"]["lifecycle"]["state"], "open");
+            assert_eq!(report["report"]["lifecycle"]["text"], text);
+        }
+    }
+
+    /// Wraps the node's ledger and checks, when a Capsule is about to be
+    /// sealed, that the deal it is of is already on disk with the exchange it
+    /// is of: a crash after the append is then recoverable.
+    struct Spy<'a>(&'a CapsuleState, PathBuf);
+
+    impl Sealer for Spy<'_> {
+        fn seal(
+            &self,
+            build: &dyn Fn(Option<&str>) -> Result<BuiltPayload, records::Error>,
+            before: &dyn Fn(&str) -> std::io::Result<()>,
+        ) -> anyhow::Result<String> {
+            let saved: Value =
+                serde_json::from_slice(&std::fs::read(self.1.join(STATE_FILE)).unwrap()).unwrap();
+            assert_eq!(saved[EXCHANGE]["peer"], PEER);
+            assert_eq!(saved[EXCHANGE]["model"], "model-x");
+            self.0.seal(build, before)
+        }
+        fn holds(&self, capsule_id: &str) -> bool {
+            self.0.holds(capsule_id)
+        }
+    }
+
+    #[test]
+    fn a_deal_is_on_disk_before_its_first_capsule() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = open(dir.path());
+        let spy = Spy(&state, ledger(dir.path()));
+        let deals = state.deals();
+        deals.on_exchange(&spy, EXCHANGE, &sealed_exchange(), 1_790_000_000);
+        deals.on_invoice(&spy, EXCHANGE, &hex64('a'), 1000, 1_790_000_001);
+        assert_eq!(deal_capsules(dir.path()).len(), 1);
+    }
+
+    #[test]
+    fn a_line_cut_short_by_a_crash_does_not_swallow_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("j.jsonl");
+        append_line(&path, &json!({"a": 1})).unwrap();
+        std::fs::write(&path, format!("{}\n{{\"b\":", json!({"a": 1}))).unwrap();
+        append_line(&path, &json!({"c": 3})).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let good: Vec<Value> = text
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        assert_eq!(good, [json!({"a": 1}), json!({"c": 3})]);
+    }
+
+    #[test]
+    fn an_unreadable_store_secret_stops_the_deal_and_does_not_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SECRET_FILE);
+        std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+        assert!(read_or_make_secret(&path).is_none());
+        std::fs::write(&path, "abcd").unwrap();
+        assert!(read_or_make_secret(&path).is_none());
+        let made = dir.path().join("fresh");
+        let secret = read_or_make_secret(&made).unwrap();
+        assert_eq!(read_or_make_secret(&made), Some(secret));
+    }
+
+    #[test]
+    fn an_unreadable_deal_state_is_kept_aside_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = open(dir.path());
+        std::fs::write(ledger(dir.path()).join(STATE_FILE), "{ not json").unwrap();
+        paid_exchange(&state, 1_790_000_000);
+        let aside = std::fs::read_to_string(ledger(dir.path()).join("deals.json.bad")).unwrap();
+        assert_eq!(aside, "{ not json");
+    }
+
+    #[test]
+    fn the_baseline_journals_the_opening_nonce() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = open(dir.path());
+        paid_exchange(&state, 1_790_000_000);
+        let line = &lines(&ledger(dir.path()).join(PAYLOADS_FILE))[0];
+        assert_eq!(line["nonce"].as_str().map(str::len), Some(64));
+    }
+
+    #[test]
+    fn room_is_made_by_dropping_finished_deals_never_unfinished_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = open(dir.path());
+        let deals = state.deals();
+        let t = 1_790_000_000;
+        for i in 0..MAX_DEALS + 3 {
+            deals.on_invoice(&state, &format!("ex-{i}"), &hex64('a'), 1, t + i as i64);
+        }
+        let saved: Value =
+            serde_json::from_slice(&std::fs::read(ledger(dir.path()).join(STATE_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(
+            saved.as_object().unwrap().len(),
+            MAX_DEALS + 3,
+            "none finished, none dropped"
+        );
     }
 
     #[test]
