@@ -124,7 +124,8 @@ Each Exchanges row whose own half this node sealed gets `agreement`, computed
 by this node alone for its own side (`side`: `requester` or `provider`). The
 other side keeps its own figures on its own node, and the two can differ: the
 requester counts every exchange it asked for, so its count can be higher than
-the provider's. A node that keeps no complete session adds nothing.
+the provider's. A node that keeps no complete session adds nothing, except
+`not_evaluated` on a half that cites one.
 
 `coverage` is the first of these that applies:
 

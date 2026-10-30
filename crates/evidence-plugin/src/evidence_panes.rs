@@ -2711,8 +2711,10 @@ pub(crate) fn build_pane_json(
             };
             mark_claims_refused(&mut pane, &our_records, &read_claim_refusals(ledger_dir));
             crate::referee::request::attach_rows(&mut pane, ledger_dir);
+            // With no session kept, a half that cites one still says it is
+            // not evaluated here rather than reading as "no agreement".
             let sessions = crate::agreement_bridge::session_views(ledger_dir);
-            if !sessions.is_empty() {
+            if !sessions.is_empty() || pane_bc_records.iter().any(agreement::cites_a_session) {
                 let registry = crate::peer_keys::registry();
                 let legs: Vec<Value> = our_records
                     .iter()

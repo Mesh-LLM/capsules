@@ -76,7 +76,13 @@ pub(super) fn is_settlement_leg(record: &Value) -> bool {
     record.get("settlement").is_some_and(Value::is_object)
 }
 
-/// Attach `agreement` to every row of `pane` whose own half is in `records`.
+/// Whether `record` is a half citing a session.
+pub(super) fn cites_a_session(record: &Value) -> bool {
+    !is_settlement_leg(record) && cited(record).is_some()
+}
+
+/// Attach `agreement` to every row of `pane` whose own half is in `records`;
+/// with no session kept, only to a half that cites one.
 pub(super) fn attach_rows(pane: &mut Value, records: &[Value], ctx: &Context<'_>) {
     let Some(rows) = pane.get_mut("rows").and_then(Value::as_array_mut) else {
         return;
@@ -323,6 +329,8 @@ fn coverage(
             });
             session
         }
+        // A node that keeps no session says nothing about a half citing none.
+        None if ctx.sessions.is_empty() => return None,
         None => {
             if let Some(s) = with_peer.iter().copied().find(|s| in_window(s)) {
                 out["acceptance_digest"] = json!(s.acceptance_digest);
@@ -931,6 +939,20 @@ mod tests {
         assert!(rows[0].get("count").is_none() && rows[0].get("finding").is_none());
     }
 
+    /// A node keeping no session at all still says a half citing one is not
+    /// evaluated here, read through the pane, and adds nothing to a half
+    /// citing none.
+    #[test]
+    fn with_no_session_kept_a_cited_half_is_not_evaluated() {
+        let (digest, agreement) = sealed_under_session_keeping(300, false);
+        assert_eq!(
+            agreement,
+            json!({"side": "provider", "acceptance_digest": digest, "coverage": "not_evaluated"})
+        );
+        let halves = [served("h1", T0, "e1", None)];
+        assert_eq!(attached(&halves, &[], &[], &[]), [Value::Null]);
+    }
+
     /// The requirement results follow the finding and the served half: with
     /// no served half held, nothing is met or failed.
     #[test]
@@ -980,6 +1002,12 @@ mod tests {
     /// provider's own Exchanges row for it. The session's digest and the
     /// row's `agreement`.
     fn sealed_under_session(before: i64) -> (String, Value) {
+        sealed_under_session_keeping(before, true)
+    }
+
+    /// [`sealed_under_session`], with the provider's agreement store
+    /// removed before the pane is read when `keep` is false.
+    fn sealed_under_session_keeping(before: i64, keep: bool) -> (String, Value) {
         use crate::agreement::{Proposal, SessionTerms, Store};
         use crate::agreement_bridge::{conclude, respond, Outcome};
         use crate::capsule_emit::{CapsuleState, HostProvenance, ObservedHostExchange};
@@ -1117,6 +1145,15 @@ mod tests {
                 .on_received(&provider, &push.capsule);
         }
 
+        if !keep {
+            std::fs::remove_dir_all(provider.ledger_dir().join("agreements")).unwrap();
+            let pane =
+                super::super::build_pane_json("pane-c", provider.ledger_dir(), None).unwrap();
+            return (
+                session.acceptance_digest,
+                pane["rows"][0]["agreement"].clone(),
+            );
+        }
         let pane = super::super::build_pane_json("pane-c", provider.ledger_dir(), None).unwrap();
         let rows = pane["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 1, "{pane:#}");
