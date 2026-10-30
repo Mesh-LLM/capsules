@@ -362,10 +362,15 @@ pub fn with_route(
                     let ledger_dir = capsules.ledger_dir().to_path_buf();
                     let node_key_id = crate::commitment::key_id(capsules.signing_key());
                     let exchange = args.capsule_id;
-                    if let (Some(handle), Some(last)) = (
-                        checkpoints.as_ref(),
-                        last_deal_capsule(&ledger_dir, &node_key_id, &exchange),
-                    ) {
+                    let last = {
+                        let (dir, key, id) =
+                            (ledger_dir.clone(), node_key_id.clone(), exchange.clone());
+                        tokio::task::spawn_blocking(move || last_deal_capsule(&dir, &key, &id))
+                            .await
+                            .ok()
+                            .flatten()
+                    };
+                    if let (Some(handle), Some(last)) = (checkpoints.as_ref(), last) {
                         // A cut that fails leaves the answer to say there is no
                         // covering checkpoint.
                         let _ = handle.coverage_for(&last).await;

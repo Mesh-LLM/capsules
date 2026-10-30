@@ -118,14 +118,21 @@ fn legs_of(ledger_dir: &Path, exchange_id: &str) -> std::io::Result<Vec<String>>
     if hashes.is_empty() {
         return Ok(Vec::new());
     }
-    let ledger = match std::fs::read(ledger_dir.join(evidence_log::CAPSULES_FILE)) {
-        Ok(bytes) => bytes,
+    let ledger = match std::fs::File::open(ledger_dir.join(evidence_log::CAPSULES_FILE)) {
+        Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e),
     };
+    // Streamed, a line at a time: the ledger grows without bound.
+    let mut reader = std::io::BufReader::new(ledger);
     let mut legs = Vec::new();
-    for line in ledger.split(|b| *b == b'\n') {
-        let text = String::from_utf8_lossy(line);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if std::io::BufRead::read_until(&mut reader, b'\n', &mut line)? == 0 {
+            break;
+        }
+        let text = String::from_utf8_lossy(&line);
         if !hashes.iter().any(|h| text.contains(h.as_str())) {
             continue;
         }
@@ -242,10 +249,16 @@ pub fn with_route(
                     let ledger_dir = capsules.ledger_dir().to_path_buf();
                     let node_key_id = crate::commitment::key_id(capsules.signing_key());
                     let exchange = args.exchange_id;
-                    if let (Some(handle), Some(last)) = (
-                        checkpoints.as_ref(),
-                        last_record(&ledger_dir, &node_key_id, &exchange),
-                    ) {
+                    // The ledger is read off the async threads.
+                    let last = {
+                        let (dir, key, id) =
+                            (ledger_dir.clone(), node_key_id.clone(), exchange.clone());
+                        tokio::task::spawn_blocking(move || last_record(&dir, &key, &id))
+                            .await
+                            .ok()
+                            .flatten()
+                    };
+                    if let (Some(handle), Some(last)) = (checkpoints.as_ref(), last) {
                         let _ = handle.coverage_for(&last).await;
                     }
                     tokio::task::spawn_blocking(move || {

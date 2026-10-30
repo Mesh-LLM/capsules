@@ -1029,6 +1029,26 @@ pub(crate) mod tests {
         assert_eq!(outcome["payload"]["body"]["outcome"], "completed");
     }
 
+    /// The provider notes a payment for its exchange before it seals the leg;
+    /// when the note cannot be written no leg is sealed, so the ledger and the
+    /// provider's receipt never disagree about which payments were received.
+    #[test]
+    fn a_payment_that_cannot_be_noted_seals_no_leg() {
+        let (a, b) = dirs();
+        // A directory where the notes file goes: appending to it fails.
+        std::fs::create_dir_all(
+            b.path()
+                .join("ledger")
+                .join(crate::provider_receipt::PROVIDER_LINKS_FILE),
+        )
+        .unwrap();
+        let (_payer, provider) = two_nodes(a.path(), b.path(), WALLET);
+        assert!(
+            kinds(&provider).is_empty(),
+            "no payee_observed leg was sealed"
+        );
+    }
+
     #[test]
     fn a_paid_exchange_yields_both_sides_legs() {
         let (a, b) = dirs();
