@@ -15,6 +15,16 @@
 
 ### Added
 
+- **`deal-receipt-bundle`: the payer's deal as an Evidence Bundle.** A local route, given an exchange
+  record's capsule id, returns an `evidence-bundle/v2` of this node's `x-deal-v0` records for it
+  (baseline, outcome, close, report) with their payloads disclosed and
+  `extensions["x-deal-v0"].sealed_report` naming the report, each proven against one signed
+  checkpoint of the node's log. Nothing else of the ledger is carried, and the baseline's intent
+  stays closed (no nonce, no opening, no raw peer id), since the file can be forwarded past the
+  share gate. A deal with no report yet, an unknown or free exchange, or no covering checkpoint gets
+  a refusal. The selection is the node's, so `capsulectl verify` reads the bundle INCOMPLETE
+  (`selection_not_checkable`); capsule-viewer shows nothing for it until it renders such a bundle.
+  Takes `agent-action-capsule` feature `strict`. Mesh-LLM/capsules-plugin#96.
 - **A paid exchange is sealed as an `x-deal-v0` deal (payer side).** For an exchange with at
   least one invoice issued, the node seals a `baseline` (what was asked: the request digest and
   model, committed under a nonce the node keeps; the serving peer by fingerprint only; paid over
