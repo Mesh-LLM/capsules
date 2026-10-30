@@ -30,6 +30,12 @@
   the saved page checks the history card inside (its digest, the checkpoint signatures, the chain
   and the anchor) and shows the node's own per-week counts as it states them, saying the counts
   were not checked. Otherwise the page holds the card, as before. Mesh-LLM/capsules-plugin#96.
+- **Service evidence agreements on the Evidence page (M4, fourth part).** An Exchanges row shows
+  the agreement's coverage label for this node's side, the ordering finding ("accepted before the
+  exchange", or "agreement present; ordering not established" for an exchange in the receipt's
+  minute), the exchange count and the observed spend against the cap, marked "spend cap:
+  agent-origin assertion". A paid exchange under no agreement says "no agreement".
+  action-state-group/evidencebook#48.
 - **Service evidence agreements: coverage on the Exchanges rows (M4, third part).** Each row whose
   own half this node sealed carries `agreement`: its side's coverage label (covered, outside the
   window, over the count, over the cap, cap not evaluable, agreement present but not cited,

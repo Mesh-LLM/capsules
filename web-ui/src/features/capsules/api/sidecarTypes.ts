@@ -324,6 +324,41 @@ export type PayerBookState =
 /** A book of one exchange's payment records: the payer's (`settlement`) or,
  *  on an exchange this node served for pay, its own as the provider
  *  (`provider_settlement`). */
+/** Coverage of one exchange by a service evidence agreement, for this
+ *  node's side of it (`evidence_panes/agreement.rs`). */
+export type AgreementCoverage = {
+  side: 'requester' | 'provider'
+  coverage:
+    | 'covered'
+    | 'outside_window'
+    | 'over_count'
+    | 'over_cap'
+    | 'cap_not_evaluable'
+    | 'set_up_after'
+    | 'not_cited'
+    | 'no_agreement'
+    | string
+  acceptance_digest?: string
+  count?: { position: number; max_exchanges: number | null }
+  spend?: {
+    observed_msat: number
+    lower_bound: boolean
+    spend_cap_msat: number
+    basis: 'agent_origin_assertion' | string
+    observed_by: string
+  }
+  /** The interop profile's §11.1.8 finding; `null` when not evaluated. */
+  finding?:
+    | 'accepted_before_action'
+    | 'accepted_execution_cites'
+    | 'accepted_not_cited'
+    | 'not_accepted'
+    | 'accepted_after_action'
+    | string
+    | null
+  requirements?: { id: string; result: 'met' | 'not_met' | 'not_evaluable' | string }[]
+}
+
 export type PayerBook = {
   observed_by: 'payer' | 'provider'
   /** `this_node` on a payer book; `requester` on a provider book (the row's
@@ -559,6 +594,10 @@ export type PaneCRow = {
   /** On an exchange this node served for pay: its own book as the provider,
    *  joined by the exchange id the host named its lifecycle events with. */
   provider_settlement?: PayerBook | null
+  /** The service evidence agreement this exchange is under, as this node
+   *  alone works it out for its own side (docs/AGREEMENTS.md). Absent when
+   *  this node keeps no agreement. */
+  agreement?: AgreementCoverage
 }
 
 export type TwinRowFacts = {
