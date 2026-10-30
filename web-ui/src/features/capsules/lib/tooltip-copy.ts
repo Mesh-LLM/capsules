@@ -468,3 +468,41 @@ export function exchangeTextStillHeldNotice(count: number, days: number): string
 
 /** The notice's action while kept text is still held. */
 export const EXCHANGE_TEXT_DELETE_NOW = 'Delete now'
+
+/** A service evidence agreement's coverage of one exchange, as this node
+ *  works it out from its own records (docs/AGREEMENTS.md). */
+export const AGREEMENT_COVERAGE_TOOLTIPS = {
+  covered:
+    'This exchange cites the service evidence agreement and is inside its window, its exchange count and its spend cap, by this node’s own records.',
+  outside_window: 'This exchange cites the agreement, but its time is outside the agreement’s window.',
+  over_count:
+    'This exchange cites the agreement, but counting it, more exchanges cite the agreement than the agreement allows.',
+  over_cap:
+    'This exchange cites the agreement, but the spend this node observed up to it is over the spend cap. The exchange itself did not fail.',
+  cap_not_evaluable:
+    'A payment under the agreement has no observation on this node yet, so the spend shown is a lower bound and the cap can’t be checked.',
+  set_up_after: 'This exchange cites no agreement: the first agreement with this peer was set up after it.',
+  not_cited: 'An agreement with this peer covers this exchange’s time, but the exchange does not cite it.',
+  no_agreement: 'No service evidence agreement with this peer covers this exchange.',
+  not_evaluated: 'This exchange cites an agreement this node does not keep, so its coverage isn’t worked out here.'
+} as const
+
+/** The interop profile's finding on when the agreement was accepted. */
+export const AGREEMENT_FINDING_TOOLTIPS = {
+  accepted_before_action:
+    'The requester’s signed receipt shows the agreement was accepted before the provider’s record of this exchange.',
+  accepted_execution_cites:
+    'The provider’s record cites the accepted agreement, but the times held can’t show which came first: they are kept to the minute.',
+  accepted_not_cited: 'The agreement was accepted, but the provider’s record of this exchange does not cite it.',
+  not_accepted: 'No accepted agreement that this node could check covers this exchange.',
+  accepted_after_action: 'The agreement was accepted after the provider’s record of this exchange.',
+  not_evaluated: 'Not checked yet: this node does not hold the provider’s record of this exchange.',
+  evaluation_failed: 'Not checked: this node could not complete the check on the records it holds.'
+} as const
+
+export const AGREEMENT_SIDE_TOOLTIP =
+  'Worked out by this node alone, from its own records. The other side keeps its own figures, and the requester’s count can be higher than the provider’s.'
+
+export const AGREEMENT_SPEND_TOOLTIP =
+  'The spend cap is the requester’s own assertion, not something either wallet enforces. The spend is what this node’s own payment records observed.'
+

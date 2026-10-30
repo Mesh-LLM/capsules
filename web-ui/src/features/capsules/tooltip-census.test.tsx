@@ -90,7 +90,13 @@ const REQUIRED = {
     'settlement:provider_book',
     // An exchange this node served for pay: its own book as the provider.
     'settlement:served_for_pay',
-    'provider_settlement_state:settled'
+    'provider_settlement_state:settled',
+    // A service evidence agreement: one covered row, and a paid row under none.
+    'agreement_coverage:covered',
+    'agreement_coverage:no_agreement',
+    'agreement_finding:accepted_before_action',
+    'agreement:side',
+    'agreement:spend_cap'
   ],
   // The checks panel always shows at least these two (they are always
   // checked in the browser); every other chip it shows must carry one too.
@@ -184,6 +190,20 @@ const PANE_C: PaneCListJson = {
         terms_digests: ['f'.repeat(64)],
         entries: [],
         delivered_tokens: 42
+      },
+      agreement: {
+        side: 'provider',
+        coverage: 'covered',
+        acceptance_digest: 'a'.repeat(64),
+        count: { position: 1, max_exchanges: 5 },
+        spend: {
+          observed_msat: 995,
+          lower_bound: false,
+          spend_cap_msat: 3000,
+          basis: 'agent_origin_assertion',
+          observed_by: 'payee_observed'
+        },
+        finding: 'accepted_before_action'
       }
     }),
     row('exch-contradicted', { mine: fixtureMineCell(), theirs: fixtureTheirsCell('disagrees'), unilateral: false }),
