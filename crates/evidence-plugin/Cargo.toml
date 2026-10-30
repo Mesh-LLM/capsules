@@ -162,11 +162,11 @@ evidence-request = { version = "=0.2.0", features = ["cll", "receipt", "acceptan
 # keys its receipts are checked under are this plugin's
 # (`evidence_artifact::served_summary`). Every answer is built by its
 # `answer::build` over this plugin's index (`evidence_log`, a store of the
-# crate's); 0.0.9 carries a derivation of this node's own named by its
+# crate's); 0.0.10 carries a derivation of this node's own named by its
 # digest (exchange corroboration). Receipts are checked with
-# agent-action-capsule 0.4's witness verifier. Same checkpointed-local-log
+# agent-action-capsule 0.5's witness verifier. Same checkpointed-local-log
 # and evidence-request lines as above.
-evidencebook = { version = "0.0.9", features = ["deal"] }
+evidencebook = { version = "0.0.10", features = ["deal"] }
 # Class 1 verification of a received half (capsule-emit main moved it here).
 agent-action-capsule = "0.4.1"
 # The witness's own record of this log (`witness_status`): one blocking GET,
@@ -237,8 +237,3 @@ mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "a39211e
 # merge commit until a release carries them; the patch replaces the crate for evidencebook too, so the graph keeps
 # one evidence-request (`cargo tree -d` shows none twice).
 evidence-request = { git = "https://github.com/action-state-group/agent-action-capsule", rev = "d59c57b5cd63985b3be1e6de238f42531e93b3fd" }
-
-# x-deal-v0 (`deal` feature, evidencebook#93/#180) is on evidencebook main but in no published
-# evidencebook yet; taken from that rev until a release carries it; then this patch goes and the
-# requirement above moves to the release.
-evidencebook = { git = "https://github.com/action-state-group/evidencebook", rev = "248d6fef78cb28df8e37a836734bb7b58bab97a5" }

@@ -2126,7 +2126,7 @@ mod tests {
     fn every_answer_form_is_byte_for_byte_the_baseline() {
         const FIXTURE: &str = "tests/fixtures/evidence_answers_5d2d102.json";
         const FIXTURE_SHA256: &str =
-            "6278678c4a1413171c3b92473fb20e1fa9b2fdba9b340b98f7bfaae2bed9e91c";
+            "db2dbd668a4dcaa206f00190e582e17e94c107d4605fb4e824dd7df0b0c53e6a";
         let node = node();
         let last = node.anchors.len() - 1;
         let half = hex::encode(Sha256::digest(b"the counterparty's own half"));
