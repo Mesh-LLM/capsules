@@ -164,7 +164,9 @@ evidence-request = { version = "=0.2.0", features = ["cll", "receipt", "acceptan
 # digest (exchange corroboration). Receipts are checked with
 # agent-action-capsule 0.4's witness verifier. Same checkpointed-local-log
 # and evidence-request lines as above.
-evidencebook = "0.0.9"
+evidencebook = { version = "0.0.9", features = ["deal"] }
+# Class 1 verification of a received half (capsule-emit main moved it here).
+agent-action-capsule = "0.4.1"
 # The witness's own record of this log (`witness_status`): one blocking GET,
 # no redirects, a capped body. Already in the tree through capsule-emit.
 ureq = { version = "2", features = ["json"] }
@@ -233,3 +235,10 @@ mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "a39211e
 # it; the patch replaces the crate for evidencebook too, so the graph keeps
 # one evidence-request (`cargo tree -d` shows none twice).
 evidence-request = { git = "https://github.com/action-state-group/agent-action-capsule", rev = "a8f7ac7f9d4b76d96796885e5eac795211c28180" }
+
+# x-deal-v0 (`deal` feature, evidencebook#93/#180) is on evidencebook main but in no published
+# evidencebook yet; `produce::build`, the Go-identical Rust seal (capsule-emit#383), is on
+# capsule-emit main but in no crate past 0.0.8. Both are taken from these revs until releases
+# carry them; then these two patches go and the requirements above move to the releases.
+evidencebook = { git = "https://github.com/action-state-group/evidencebook", rev = "248d6fef78cb28df8e37a836734bb7b58bab97a5" }
+capsule-emit = { git = "https://github.com/action-state-group/capsule-emit", rev = "9defe98" }
