@@ -57,12 +57,12 @@
   `vectors/evidence-key-acceptance/cases.json` gains four operator-binding cases, covering
   `same_controller_as_receiver` true, false and absent.
   Mesh-LLM/capsules-plugin#113.
-- **A deal capsule goes to the counterparty of the exchange it is of.** A step or a report of an
-  `x-deal-v0` deal names no counterparty itself, so under `share_history_segments=counterparties`
+- **A deal capsule goes to the counterparty of the exchange it is of.** A step of an
+  `x-deal-v0` deal (not its report, which stays on the node: Mesh-LLM/capsules-plugin#146) names no counterparty itself, so under `share_history_segments=counterparties`
   it would have gone to nobody. The node now writes `deal-links.jsonl` in the ledger directory,
   one `{"capsule_id", "exchange_capsule_id"}` line per deal capsule, before it seals the capsule,
   and the share gate takes the counterparty of the exchange record the capsule is linked to: the
-  counterparty can read the steps and the report, an unrelated node cannot, and a deal capsule
+  counterparty can read the steps, an unrelated node cannot, and a deal capsule
   with no link goes to nobody. Nothing seals a deal yet; this is the gate the Mesh receipt
   (Mesh-LLM/capsules-plugin#96) needs first. No release.
 - **The saved History page carries the Service History when the node shares it.** With

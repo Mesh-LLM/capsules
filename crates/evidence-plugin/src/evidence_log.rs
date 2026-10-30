@@ -127,8 +127,8 @@ pub struct Leaf {
     /// (`evidence_panes::full_counterparty_node_id`).
     pub counterparty: Option<String>,
     /// A local routing choice, a record of this node's asks
-    /// (`crate::ask_book`) or an owner-maintenance record: it never leaves
-    /// this node, whoever asks.
+    /// (`crate::ask_book`), an owner-maintenance record or a deal's report:
+    /// it never leaves this node, whoever asks.
     pub never_leaves: bool,
     pub facts: LeafFacts,
 }
@@ -163,7 +163,7 @@ fn is_deal_capsule(record: &Value) -> bool {
 /// A deal's in-log report. It is the owner's own (audience `keep`): a copy
 /// for the counterparty is made only by a share path, so this one never
 /// leaves the node (Mesh-LLM/capsules-plugin#146).
-fn is_deal_report(record: &Value) -> bool {
+pub(crate) fn is_deal_report(record: &Value) -> bool {
     record.get("action_id").and_then(Value::as_str) == Some("capsulectl-deal-report")
 }
 

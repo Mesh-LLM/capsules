@@ -220,14 +220,15 @@ async fn bridge_inbound_ledger_fetch_stream(
 }
 
 /// Whether `record` goes to the asker under the node's `history_segments`
-/// switch. `off` serves nothing. A local block and an owner-maintenance
-/// record never leave this node. Under `peers` any other record goes to any
+/// switch. `off` serves nothing. A local block, an owner-maintenance
+/// record and a deal's report never leave this node. Under `peers` any other record goes to any
 /// proven node; otherwise a record goes only to the node it names as the other side
 /// of its exchange, so a record that names no other side is not served.
 /// `requester_id` is the node the request's signature proved ([`answer`]).
 fn may_serve(record: &Value, requester: &[String], history_segments: &str) -> bool {
     if history_segments == "off"
         || crate::evidence_panes::is_local_routing_choice(record)
+        || crate::evidence_log::is_deal_report(record)
         || record
             .pointer("/model_attestation/compute_attestation")
             .and_then(|c| c.get(crate::producer::capsule::OWNER_MAINTENANCE_BLOCK))
@@ -642,6 +643,22 @@ mod tests {
             );
             assert!(is_refused(&ask(&state, &id, None, tier)));
         }
+    }
+
+    /// A deal's report is the owner's own: no switch serves it to anyone,
+    /// where a step would go to the node on the other side under `peers`.
+    #[test]
+    fn a_deal_report_is_served_under_no_switch() {
+        let report = json!({"capsule_id": "a".repeat(64), "action_id": "capsulectl-deal-report"});
+        let step = json!({"capsule_id": "b".repeat(64), "deal_id": "deal-0123456789abcdef"});
+        let asker = vec!["node-a".to_string()];
+        for switch in ["off", "peers", "counterparties"] {
+            assert!(!may_serve(&report, &asker, switch), "{switch}");
+        }
+        assert!(
+            may_serve(&step, &asker, "peers"),
+            "a step is a record like any other"
+        );
     }
 
     #[test]
