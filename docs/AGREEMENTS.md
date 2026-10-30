@@ -5,8 +5,8 @@ requester proposes what the provider is to produce evidence for, the
 provider accepts, and later exchanges in the session cite that acceptance.
 The agreement is the interop profile's acceptance record
 (`evidence-interop/0` §11.1), session-scoped. This page describes what this
-plugin sends, keeps and cites. Showing which exchanges an agreement covers
-comes in a later release.
+plugin sends, keeps and cites, and how the Evidence page shows which
+exchanges an agreement covers.
 
 ## Turning it on
 
@@ -130,9 +130,10 @@ the provider's. A node that keeps no complete session adds nothing.
 
 | Label | Meaning |
 |---|---|
+| `not_evaluated` | The half cites a session this node does not keep, so nothing is said about it here. |
 | `set_up_after` | Not covered: the half cites nothing, and the first session with this counterparty started after it. |
 | `outside_window` | Not covered: the half cites a session whose window does not hold the half's time. |
-| `over_count` | Not covered: more citing exchanges than the terms' `max_exchanges` came before it. |
+| `over_count` | Not covered: counting this exchange, more exchanges cite the session than the terms' `max_exchanges` allow. |
 | `over_cap` | Not covered: the observed spend, through this exchange, exceeds the spend cap. |
 | `cap_not_evaluable` | A payment of this or an earlier exchange under the session has no observation held, and the known sum does not exceed the cap. |
 | `not_cited` | A session with this counterparty holds the half's time, but the half cites none. |
@@ -155,7 +156,9 @@ None of these is a failed exchange.
   provider's served half, read as the provider's execution record: its issuer
   is the key its producer envelope verifies under, its action time is its own
   `timestamp`, and its citation is its `acceptance` member. The requester has
-  it only once it holds the provider's half. Every committed time is to the
+  it only once it holds the provider's half; until then `finding` is null and
+  `finding_not_evaluated` is `served_half_not_held`. `evaluation_failed`
+  there means the evaluation itself erred. Every committed time is to the
   minute, so an exchange in the same minute as the receipt reads "accepted,
   the execution cites it" (`accepted_execution_cites`) rather than "accepted
   before".

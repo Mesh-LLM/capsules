@@ -12,6 +12,8 @@
 //! - `set_up_after`: the half cites nothing and the first session with this
 //!   counterparty started after it ("not covered: agreement set up after this
 //!   exchange").
+//! - `not_evaluated`: the half cites a session this node does not keep, so
+//!   nothing is said about it here (never "no agreement").
 //! - `outside_window`, `over_count`, `over_cap`: the half cites a session it
 //!   is not covered by. Over cap is "not covered", never a failed exchange.
 //! - `cap_not_evaluable`: a payment of this or an earlier exchange under the
@@ -37,7 +39,10 @@
 //! `finding` is the interop profile's §11.1.8 finding over the provider's
 //! served half, read as the acceptor's execution record (R3), with the
 //! session's proposal, accepted record and receipt. `requirements` maps it
-//! and the served half to the contract's requirement results (R8).
+//! and the served half to the contract's requirement results (R8). With no
+//! served half held (a requester before the provider's half arrives) no
+//! finding is stated: `finding` is null and `finding_not_evaluated` says
+//! `served_half_not_held`; `evaluation_failed` means the evaluation erred.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -241,18 +246,28 @@ fn observations(legs: &[Value]) -> HashMap<(&'static str, String), u64> {
             .filter(|_| {
                 s.pointer("/payment_ref/type").and_then(Value::as_str) == Some("ln.payment_hash")
             });
-        let msat = s
-            .get(field)
-            .filter(|v| v.get("unit").and_then(Value::as_str) == Some("msat"))
-            .and_then(|v| v.get("value"))
-            .and_then(Value::as_str)
-            .and_then(|v| v.parse::<u64>().ok());
+        let msat = s.get(field).and_then(amount_msat);
         if let (Some(hash), Some(msat)) = (hash, msat) {
             out.insert((kind, hash.to_string()), msat);
         }
     }
     out
 }
+
+/// An -00 amount (`{value, assetCode, assetScale}`) in msat: BTC at scale 11
+/// (1 BTC = 10^11 msat), as `settlement_legs` seals it. Any other asset or
+/// scale is no observation, so the cap reads as a lower bound.
+fn amount_msat(amount: &Value) -> Option<u64> {
+    if amount.get("assetCode")?.as_str()? != "BTC" || amount.get("assetScale")?.as_u64()? != 11 {
+        return None;
+    }
+    amount.get("value")?.as_str()?.parse().ok()
+}
+
+/// Why `finding` is null: the provider's served half is not held on this
+/// node (the requester before it arrives), or the evaluation failed.
+const SERVED_HALF_NOT_HELD: &str = "served_half_not_held";
+const EVALUATION_FAILED: &str = "evaluation_failed";
 
 fn coverage(
     half: &Value,
@@ -282,28 +297,30 @@ fn coverage(
     let mut out = json!({ "side": side.as_str() });
     let session = match cited(half) {
         Some(digest) => {
+            out["acceptance_digest"] = json!(digest);
             // A half cites only a session its own side kept; one this node
-            // does not keep is not evaluated here.
+            // does not keep is not evaluated here, and says so rather than
+            // reading as "no agreement".
             let session = ctx
                 .sessions
                 .iter()
-                .find(|s| s.acceptance_digest == digest && side.keys(s).0 == own_key)?;
-            let position = tally.by_half.get(id).copied();
-            out["acceptance_digest"] = json!(digest);
-            out["coverage"] = json!(cited_label(session, in_window(session), position));
-            if let Some(p) = position {
-                out["count"] = json!({
-                    "position": p.ordinal,
-                    "max_exchanges": session.terms.max_exchanges,
-                });
-                out["spend"] = json!({
-                    "observed_msat": p.known_msat,
-                    "lower_bound": p.lower_bound,
-                    "spend_cap_msat": session.terms.spend_cap_msat,
-                    "basis": "agent_origin_assertion",
-                    "observed_by": side.leg(),
-                });
-            }
+                .find(|s| s.acceptance_digest == digest && side.keys(s).0 == own_key);
+            let (Some(session), Some(p)) = (session, tally.by_half.get(id).copied()) else {
+                out["coverage"] = json!("not_evaluated");
+                return Some(out);
+            };
+            out["coverage"] = json!(cited_label(session, in_window(session), p));
+            out["count"] = json!({
+                "position": p.ordinal,
+                "max_exchanges": session.terms.max_exchanges,
+            });
+            out["spend"] = json!({
+                "observed_msat": p.known_msat,
+                "lower_bound": p.lower_bound,
+                "spend_cap_msat": session.terms.spend_cap_msat,
+                "basis": "agent_origin_assertion",
+                "observed_by": side.leg(),
+            });
             session
         }
         None => {
@@ -327,18 +344,28 @@ fn coverage(
         Side::Provider => Some(half),
         Side::Requester => theirs.filter(|h| Side::of(h) == Some(Side::Provider)),
     };
-    let (finding, evidence) = finding(session, served, ctx);
+    // With no served half held, every finding the profile could reach reads
+    // as the provider not citing the session; none is stated until it
+    // arrives.
+    let (finding, evidence) = match served {
+        Some(h) => finding(session, h, ctx),
+        None => (None, Vec::new()),
+    };
     out["finding"] = json!(finding.map(Finding::as_str));
+    if finding.is_none() {
+        out["finding_not_evaluated"] = json!(if served.is_some() {
+            EVALUATION_FAILED
+        } else {
+            SERVED_HALF_NOT_HELD
+        });
+    }
     out["requirements"] = requirements(session, served, finding, &evidence);
     Some(out)
 }
 
 /// The label for a half citing `session`, by the precedence in the module
 /// doc.
-fn cited_label(session: &SessionView, in_window: bool, position: Option<Position>) -> &'static str {
-    let Some(p) = position else {
-        return "cap_not_evaluable";
-    };
+fn cited_label(session: &SessionView, in_window: bool, p: Position) -> &'static str {
     if !in_window {
         "outside_window"
     } else if session
@@ -356,19 +383,21 @@ fn cited_label(session: &SessionView, in_window: bool, position: Option<Position
     }
 }
 
-/// The §11.1.8 finding for `session` over the served half, when held, and
-/// the digests each claim lists as evidence.
+/// The §11.1.8 finding for `session` over the served half, and the digests
+/// each claim lists as evidence.
 fn finding(
     session: &SessionView,
-    served: Option<&Value>,
+    served: &Value,
     ctx: &Context<'_>,
 ) -> (Option<Finding>, Vec<String>) {
     let Some(accepted) = acceptance::parse(&session.accepted) else {
         return (None, Vec::new());
     };
     let transaction = accepted.get("transaction").cloned().unwrap_or(Value::Null);
-    let served_octets = served.and_then(|h| serde_json::to_vec(h).ok());
-    let execution: Vec<&[u8]> = served_octets.as_deref().into_iter().collect();
+    let Ok(served_octets) = serde_json::to_vec(served) else {
+        return (None, Vec::new());
+    };
+    let execution: Vec<&[u8]> = vec![&served_octets];
     let trust = TrustPolicy {
         parties: party_map(ctx.registry, &session.proposer, &session.acceptor),
         ..TrustPolicy::default()
@@ -543,17 +572,52 @@ mod tests {
         })
     }
 
+    /// A requested half sealed by this node at `at`, for its exchange `ex`,
+    /// served by `PEER_NODE`, citing `digest` when given.
+    fn requested(id: &str, at: i64, ex: &str, digest: Option<&str>) -> Value {
+        let mut half = served(id, at, ex, digest);
+        let poc = &mut half["model_attestation"]["compute_attestation"]["x-mesh-poc-v1"];
+        poc["role"] = json!("requested");
+        poc["serving_provenance"] = json!({"exchange_id": ex, "served_by_node_id": PEER_NODE});
+        half
+    }
+
+    /// The same session from the requester's side: this node proposed it.
+    fn proposed_session(digest: &str, start: i64, max: Option<u64>, cap: u64) -> SessionView {
+        let mut s = session(digest, start, max, cap);
+        std::mem::swap(&mut s.proposer, &mut s.acceptor);
+        s
+    }
+
     fn invoice(ex: &str, hash: &str) -> Value {
+        invoice_by("provider", ex, hash)
+    }
+
+    fn invoice_by(observed_by: &str, ex: &str, hash: &str) -> Value {
         json!({"model_attestation": {"compute_attestation": {"x-mesh-settlement-v1": {
-            "observed_by": "provider", "exchange_id": ex,
+            "observed_by": observed_by, "exchange_id": ex,
             "phase": "input_invoice_issued", "segment": 0, "payment_hash": hash,
         }}}})
+    }
+
+    /// An -00 amount in msat as `settlement_legs` seals it.
+    fn msat(n: u64) -> Value {
+        capsule_emit_lib::settlement::amount(n.into(), "BTC", 11)
+    }
+
+    fn payer_leg(hash: &str, amount: u64, fee: u64) -> Value {
+        json!({"settlement": {
+            "leg": "payer_observed",
+            "amount": msat(amount),
+            "routing_fee": msat(fee),
+            "payment_ref": {"type": "ln.payment_hash", "value": hash},
+        }})
     }
 
     fn payee_leg(hash: &str, received: u64, cites: Option<&str>) -> Value {
         let mut leg = json!({"settlement": {
             "leg": "payee_observed",
-            "received": {"value": received.to_string(), "unit": "msat"},
+            "received": msat(received),
             "payment_ref": {"type": "ln.payment_hash", "value": hash},
         }});
         if let Some(d) = cites {
@@ -570,6 +634,16 @@ mod tests {
             .map(|h| json!({"mine": {"capsule_id": h["capsule_id"]}}))
             .collect();
         json!({ "rows": rows })
+    }
+
+    /// `pane`'s rows with `theirs` naming the counterparty's half.
+    fn with_theirs(mut pane: Value, theirs: &[Option<&Value>]) -> Value {
+        for (row, t) in pane["rows"].as_array_mut().unwrap().iter_mut().zip(theirs) {
+            if let Some(t) = t {
+                row["theirs"] = json!({"capsule_id": t["capsule_id"]});
+            }
+        }
+        pane
     }
 
     /// `agreement` on each row, after attaching with these inputs.
@@ -762,6 +836,101 @@ mod tests {
         assert_eq!(p["rows"][0]["agreement"]["count"]["position"], json!(1));
     }
 
+    /// An -00 amount is read as msat only as `settlement_legs` seals it: BTC
+    /// at scale 11. Any other asset or scale is no observation.
+    #[test]
+    fn an_amount_is_msat_only_as_btc_at_scale_eleven() {
+        assert_eq!(amount_msat(&msat(995)), Some(995));
+        for other in [
+            capsule_emit_lib::settlement::amount(995, "BTC", 8),
+            capsule_emit_lib::settlement::amount(995, "USD", 11),
+            json!({"value": "995", "unit": "msat"}),
+        ] {
+            assert_eq!(amount_msat(&other), None, "{other}");
+        }
+    }
+
+    /// The requester's side: its own key is the proposer's, its counterparty
+    /// the provider its half was served by, its spend the payer's
+    /// `payer_observed.amount` (routing fee excluded) through its own
+    /// invoices. With no served half held no finding is stated, never "not
+    /// cited by the provider"; once the provider's half is held, the finding
+    /// is evaluated over it.
+    #[test]
+    fn the_requester_side_counts_its_own_payments_and_waits_for_the_served_half() {
+        let s = proposed_session("d1", T0, Some(2), 1_000);
+        let halves = [
+            requested("r1", T0 + 60, "e1", Some("d1")),
+            requested("r2", T0 + 120, "e2", Some("d1")),
+            requested("r3", T0 + 180, "e3", None),
+        ];
+        let invoices = [
+            invoice_by("payer", "e1", "p1"),
+            invoice_by("payer", "e2", "p2"),
+        ];
+        let legs = [payer_leg("p1", 400, 7), payer_leg("p2", 500, 9)];
+        let rows = attached(&halves, std::slice::from_ref(&s), &invoices, &legs);
+        assert_eq!(coverage_of(&rows), ["covered", "covered", "not_cited"]);
+        assert_eq!(rows[0]["side"], json!("requester"));
+        assert_eq!(
+            rows[1]["spend"]["observed_msat"],
+            json!(900),
+            "fees excluded"
+        );
+        assert_eq!(rows[1]["spend"]["observed_by"], json!("payer_observed"));
+        assert_eq!(rows[1]["spend"]["lower_bound"], json!(false));
+        for row in &rows {
+            assert_eq!(row["finding"], Value::Null, "{row:#}");
+            assert_eq!(row["finding_not_evaluated"], json!(SERVED_HALF_NOT_HELD));
+        }
+
+        // The provider's served half arrives for the first exchange.
+        let theirs = served("h1", T0 + 60, "e1-provider", Some("d1"));
+        let mut records = halves.to_vec();
+        records.push(theirs.clone());
+        let mut index = SettlementIndex::default();
+        for record in &invoices {
+            index.push(record.clone());
+        }
+        let registry = json!({ PEER_NODE: PEER_KEY }).to_string();
+        let ctx = Context {
+            sessions: std::slice::from_ref(&s),
+            registry: Some(&registry),
+            legs: &legs,
+            settlements: &index,
+            now: T0 + 7_200,
+        };
+        let mut p = with_theirs(pane(&halves.iter().collect::<Vec<_>>()), &[Some(&theirs)]);
+        attach_rows(&mut p, &records, &ctx);
+        let first = &p["rows"][0]["agreement"];
+        assert_eq!(
+            first["requirements"][1]["evidence"],
+            json!("h1"),
+            "{first:#}"
+        );
+        assert_ne!(
+            first["finding_not_evaluated"],
+            json!(SERVED_HALF_NOT_HELD),
+            "{first:#}"
+        );
+        assert_eq!(
+            p["rows"][1]["agreement"]["finding_not_evaluated"],
+            json!(SERVED_HALF_NOT_HELD)
+        );
+    }
+
+    /// A half citing a session this node does not keep is not evaluated
+    /// here: it says so, and never reads as "no agreement".
+    #[test]
+    fn a_cited_session_not_kept_here_is_not_evaluated() {
+        let s = session("d1", T0, None, 1_000);
+        let halves = [served("h1", T0 + 60, "e1", Some("elsewhere"))];
+        let rows = attached(&halves, &[s], &[], &[]);
+        assert_eq!(rows[0]["coverage"], json!("not_evaluated"));
+        assert_eq!(rows[0]["acceptance_digest"], json!("elsewhere"));
+        assert!(rows[0].get("count").is_none() && rows[0].get("finding").is_none());
+    }
+
     /// The requirement results follow the finding and the served half: with
     /// no served half held, nothing is met or failed.
     #[test]
@@ -779,10 +948,37 @@ mod tests {
         assert_eq!(after[0]["result"], json!("not_met"));
     }
 
+    /// One payment lifecycle event as `main.rs` handles it: the settlement
+    /// record sealed, then the settlement legs told. The legs' pushes.
+    fn lifecycle(
+        node: &crate::capsule_emit::CapsuleState,
+        role: &str,
+        exchange_id: &str,
+        phase: crate::settlement_channel::Phase,
+        hash: &str,
+        wallet: &[(&str, u64)],
+    ) -> Vec<crate::settlement_legs::Push> {
+        use crate::settlement_channel::{host_shaped_event, parse_and_check};
+        let mut body = host_shaped_event(exchange_id, phase, Some(0), Some(hash), 1_000);
+        body["role"] = json!(role);
+        if role == "provider" && phase == crate::settlement_channel::Phase::InputInvoiceIssued {
+            body["source"] = json!("provider_asserted");
+        }
+        for (k, v) in wallet {
+            body[*k] = json!(v);
+        }
+        body["event_ref"] = json!("");
+        body["event_ref"] = json!(crate::producer::jcs::json_digest(&body).unwrap());
+        let event = parse_and_check(&serde_json::to_vec(&body).unwrap()).unwrap();
+        node.emit_settlement_record(&event.observation()).unwrap();
+        node.settlement_legs().on_lifecycle(node, &event)
+    }
+
     /// As the plugin seals them: a session agreed `before` seconds before
-    /// this minute's start, a served half that cites it, and the provider's
-    /// own Exchanges row for it. The session's digest and the row's
-    /// `agreement`.
+    /// this minute's start, a served half that cites it, one paid input
+    /// segment of 1000 msat the provider's wallet credits as 995, and the
+    /// provider's own Exchanges row for it. The session's digest and the
+    /// row's `agreement`.
     fn sealed_under_session(before: i64) -> (String, Value) {
         use crate::agreement::{Proposal, SessionTerms, Store};
         use crate::agreement_bridge::{conclude, respond, Outcome};
@@ -872,9 +1068,69 @@ mod tests {
         };
         provider.emit_for_observed_host_exchange(&observed).unwrap();
 
+        // The payment, both nodes, in the order a live run sees it; the
+        // payer's terms leg reaches the provider with the exchange event.
+        use crate::settlement_channel::Phase;
+        const HASH: &str = "8437d5a5e0c5aa3304c0e0d17288cd504593ca7e560e3691a30739f1725ee7c5";
+        let wallet = [("credited_msat", 995), ("fee_msat", 5)];
+        lifecycle(
+            &provider,
+            "provider",
+            "p-ex",
+            Phase::InputInvoiceIssued,
+            HASH,
+            &[],
+        );
+        lifecycle(
+            &requester,
+            "payer",
+            "ex",
+            Phase::InputInvoiceIssued,
+            HASH,
+            &[],
+        );
+        lifecycle(
+            &provider,
+            "provider",
+            "p-ex",
+            Phase::InputSettlementObserved,
+            HASH,
+            &wallet,
+        );
+        lifecycle(
+            &requester,
+            "payer",
+            "ex",
+            Phase::InputSettlementObserved,
+            HASH,
+            &[("fee_msat", 0)],
+        );
+        requester.settlement_legs().decide_citation("ex", || None);
+        let provider_node = format!("{:064x}", 0xb0b_0000u64 + before as u64);
+        for push in
+            requester
+                .settlement_legs()
+                .on_exchange(&requester, "ex", Some(&provider_node), None)
+        {
+            provider
+                .settlement_legs()
+                .on_received(&provider, &push.capsule);
+        }
+
         let pane = super::super::build_pane_json("pane-c", provider.ledger_dir(), None).unwrap();
         let rows = pane["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 1, "{pane:#}");
+        assert_eq!(
+            rows[0]["agreement"]["spend"],
+            json!({
+                "observed_msat": 995,
+                "lower_bound": false,
+                "spend_cap_msat": 3_000,
+                "basis": "agent_origin_assertion",
+                "observed_by": "payee_observed",
+            }),
+            "the payee leg as sealed is read: {pane:#}"
+        );
         (session.acceptance_digest, rows[0]["agreement"].clone())
     }
 
