@@ -114,7 +114,7 @@ fn a_paid_session_under_one_agreement_shows_the_exchange_over_the_cap() {
         provider
             .settlement_legs()
             .decide_served_citation(&p_ex, || {
-                served_citation(&provider, &requester_node, MODEL, now)
+                served_citation(&provider, &requester_node, &[MODEL.into()], now)
             });
         let served = provider
             .emit_for_observed_host_exchange(&observed(

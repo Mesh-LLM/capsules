@@ -1489,7 +1489,7 @@ mod tests {
                 crate::agreement_bridge::served_citation(
                     &pair.provider,
                     &payer_peer,
-                    SERVED_MODEL,
+                    &[SERVED_MODEL.into()],
                     now,
                 )
             });
@@ -1545,7 +1545,7 @@ mod tests {
                 crate::agreement_bridge::served_citation(
                     &pair.provider,
                     &payer_peer,
-                    SERVED_MODEL,
+                    &[SERVED_MODEL.into()],
                     now,
                 )
             });

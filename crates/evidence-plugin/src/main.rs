@@ -465,6 +465,32 @@ async fn agreement_model(
     }
 }
 
+/// The models a served exchange may cite a session for, tried in order: the
+/// one its event names; otherwise the host's id for the weights it states it
+/// served (a local GGUF, even on a node serving several models), then the
+/// [`agreement_model`] lookup.
+async fn served_models(
+    stated: Option<String>,
+    weights_digest: Option<&str>,
+    terminal: bool,
+    wanted: impl std::future::Future<Output = bool>,
+    lookup: impl std::future::Future<Output = Option<String>>,
+) -> Vec<String> {
+    if let Some(model) = stated {
+        return vec![model];
+    }
+    let mut models: Vec<String> = weights_digest
+        .and_then(host_status::local_gguf_ref)
+        .into_iter()
+        .collect();
+    if let Some(named) = agreement_model(None, terminal, wanted, lookup).await {
+        if !models.contains(&named) {
+            models.push(named);
+        }
+    }
+    models
+}
+
 /// [`agreement_bridge::holds_session_with`], off the async runtime.
 async fn keeps_session_with(capsules: &Arc<CapsuleState>, peer_id: String) -> bool {
     let capsules = capsules.clone();
@@ -503,7 +529,18 @@ async fn settlement_legs_on_exchange(
                 None => false,
             }
         };
-        let model = agreement_model(model, terminal, wanted, host_status::own_model_now()).await;
+        let digest = envelope
+            .serving_provenance
+            .as_ref()
+            .and_then(|p| p.weights_digest.as_deref());
+        let models = served_models(
+            model,
+            digest,
+            terminal,
+            wanted,
+            host_status::own_model_now(),
+        )
+        .await;
         // Provider: the agreement this served exchange cites, decided at its
         // terminal event, before the served half is sealed below; the payee
         // leg uses the same decision (R12).
@@ -511,27 +548,23 @@ async fn settlement_legs_on_exchange(
             .serving_provenance
             .as_ref()
             .and_then(|p| p.requested_by_node_id.clone());
-        if let (
-            Some(exchange_id),
-            Some(model),
-            Some(requester),
-            lifecycle_channel::Phase::Terminal,
-        ) = (
+        if let (Some(exchange_id), Some(requester), lifecycle_channel::Phase::Terminal) = (
             envelope.exchange_id.as_deref(),
-            model.as_deref(),
             requester.as_deref(),
             &envelope.phase,
         ) {
-            capsules
-                .settlement_legs()
-                .decide_served_citation(exchange_id, || {
-                    agreement_bridge::served_citation(
-                        capsules,
-                        requester,
-                        model,
-                        chrono::Utc::now().timestamp(),
-                    )
-                });
+            if !models.is_empty() {
+                capsules
+                    .settlement_legs()
+                    .decide_served_citation(exchange_id, || {
+                        agreement_bridge::served_citation(
+                            capsules,
+                            requester,
+                            &models,
+                            chrono::Utc::now().timestamp(),
+                        )
+                    });
+            }
         }
         return;
     }
@@ -2547,5 +2580,29 @@ mod agreement_model_tests {
             None,
             "a provider serving several models: no model"
         );
+    }
+
+    /// A served exchange whose event names no model is known by the local
+    /// GGUF its weights digest names, first, and by the status's one model
+    /// after it, each once; a provider serving several models has only the
+    /// first. A model the event names is used alone, with no status read.
+    #[tokio::test]
+    async fn a_served_exchange_is_known_by_its_weights_digest_then_its_status() {
+        let digest = "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db";
+        let by_digest = format!("local-gguf/sha256-{digest}");
+        let stated = served_models(Some("m".into()), Some(digest), true, never(), never());
+        assert_eq!(stated.await, ["m"]);
+        let several = served_models(None, Some(digest), true, async { true }, async { None });
+        assert_eq!(several.await, std::slice::from_ref(&by_digest));
+        let same = async { Some(by_digest.clone()) };
+        let one = served_models(None, Some(digest), true, async { true }, same);
+        assert_eq!(one.await, std::slice::from_ref(&by_digest), "named once");
+        let other = async { Some("hf:org/model@main".to_string()) };
+        let both = served_models(None, Some(digest), true, async { true }, other);
+        assert_eq!(both.await, [by_digest.clone(), "hf:org/model@main".into()]);
+        let no_digest = served_models(None, None, true, async { true }, async { None });
+        assert!(no_digest.await.is_empty());
+        let unread = served_models(None, Some(digest), true, async { false }, never());
+        assert_eq!(unread.await, [by_digest]);
     }
 }

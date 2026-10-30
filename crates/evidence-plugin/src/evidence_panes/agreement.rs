@@ -488,7 +488,8 @@ fn verified_issuer(half: &Value) -> Option<String> {
 /// The contract's requirement results (R8). `R-prior` follows the finding;
 /// `R-served` needs the served half held and verifying; `R-model-stated`
 /// needs the model that half states to be one the session's policy names,
-/// as stated, never verified. Each result names what it relies on.
+/// as stated, never verified: by its id, or with none, by the local GGUF its
+/// weights digest names. Each result names what it relies on.
 fn requirements(
     session: &SessionView,
     served: Option<&Value>,
@@ -506,12 +507,24 @@ fn requirements(
         Some(false) => "not_met",
         None => "not_evaluable",
     };
-    let model = served.filter(|_| served_ok == Some(true)).and_then(|h| {
-        poc_block(h)?
-            .pointer("/serving_provenance/model/canonical_ref")?
-            .as_str()
-    });
-    let model_result = match (served_ok, model) {
+    let stated = served
+        .filter(|_| served_ok == Some(true))
+        .and_then(|h| poc_block(h)?.pointer("/serving_provenance/model"));
+    let stated = |k: &str| stated.and_then(|m| m.get(k)?.as_str());
+    let (model, digest) = (stated("canonical_ref"), stated("weights_digest"));
+    // The half states its model by id, or, when a host names none (mesh-llm
+    // 0.78), by the digest of the weights it served: a local GGUF's id is
+    // that digest (`host_status::local_gguf_ref`). The id, when stated,
+    // decides alone; the result says which form it rests on.
+    let (named, stated_as) = match (model, digest) {
+        (Some(m), _) => (Some(m.to_string()), Some("canonical_ref")),
+        (None, Some(d)) => (
+            crate::host_status::local_gguf_ref(d),
+            Some("weights_digest"),
+        ),
+        (None, None) => (None, None),
+    };
+    let model_result = match (served_ok, &named) {
         (Some(true), Some(m)) if session.models.iter().any(|x| x == m) => "met",
         (Some(true), _) => "not_met",
         _ => "not_evaluable",
@@ -529,6 +542,8 @@ fn requirements(
             "id": "R-model-stated",
             "result": model_result,
             "stated_model": model,
+            "stated_weights_digest": if model.is_none() { digest } else { None },
+            "stated_as": stated_as,
             "basis": "stated",
             "evidence": served_id,
         },
@@ -1206,11 +1221,25 @@ mod tests {
     /// [`sealed_under_session`], with the provider's agreement store
     /// removed before the pane is read when `keep` is false.
     fn sealed_under_session_keeping(before: i64, keep: bool) -> (String, Value) {
+        const MODEL: &str = "hf:example/agreement-pane@main";
+        sealed_stating(before, keep, MODEL, Some(MODEL), None)
+    }
+
+    /// [`sealed_under_session_keeping`] for a session naming `model`, with
+    /// the served half stating `stated_ref` and `stated_digest` as the
+    /// host's model id and weights digest.
+    fn sealed_stating(
+        before: i64,
+        keep: bool,
+        model: &str,
+        stated_ref: Option<&str>,
+        stated_digest: Option<&str>,
+    ) -> (String, Value) {
         use crate::agreement::SessionTerms;
         use crate::capsule_emit::{CapsuleState, HostProvenance};
         use crate::lifecycle_channel::DispatchPath;
 
-        const MODEL: &str = "hf:example/agreement-pane@main";
+        let model_name = stated_ref.unwrap_or(model);
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let requester = CapsuleState::open(a.path(), "requester").unwrap();
         let provider = CapsuleState::open(b.path(), "provider").unwrap();
@@ -1230,25 +1259,31 @@ mod tests {
             &requester,
             &provider,
             &terms,
-            MODEL,
+            model,
             now - now % 60 - before,
         );
 
         provider
             .settlement_legs()
             .decide_served_citation("p-ex", || {
-                crate::agreement_bridge::served_citation(&provider, &requester_node, MODEL, now)
+                crate::agreement_bridge::served_citation(
+                    &provider,
+                    &requester_node,
+                    &[model.into()],
+                    now,
+                )
             });
         let request = "a".repeat(64);
         provider
             .emit_for_observed_host_exchange(&observed(
-                MODEL,
+                model_name,
                 "p-ex",
                 &request,
                 DispatchPath::RawProxy,
                 HostProvenance {
                     requested_by_node_id: Some(requester_node.clone()),
-                    model_canonical_ref: Some(MODEL.to_string()),
+                    model_canonical_ref: stated_ref.map(String::from),
+                    weights_digest: stated_digest.map(String::from),
                     ..HostProvenance::default()
                 },
             ))
@@ -1337,6 +1372,33 @@ mod tests {
             .iter()
             .map(|r| r["result"].as_str().unwrap())
             .collect()
+    }
+
+    /// A half that states no model id but the digest of the weights it
+    /// served (mesh-llm 0.78) states the local GGUF that digest names: met
+    /// when the session names it, said to rest on the digest; not met when
+    /// it names another. A stated id decides alone (evidencebook#48).
+    #[test]
+    fn a_half_stating_only_a_weights_digest_states_its_local_gguf() {
+        let (d, other) = ("74a4da8c".repeat(8), "0b".repeat(32));
+        let gguf = |d: &str| crate::host_status::local_gguf_ref(d).unwrap();
+        let model_stated = |a: &Value| a["requirements"][2].clone();
+
+        let (_, a) = sealed_stating(660, true, &gguf(&d), None, Some(&d));
+        assert_eq!(results(&a), ["met", "met", "met"], "{a:#}");
+        let r = model_stated(&a);
+        assert_eq!(r["stated_as"], json!("weights_digest"), "{r:#}");
+        assert_eq!(r["stated_weights_digest"], json!(d));
+        assert_eq!(r["stated_model"], Value::Null);
+
+        let (_, a) = sealed_stating(720, true, &gguf(&other), None, Some(&d));
+        assert_eq!(model_stated(&a)["result"], json!("not_met"), "{a:#}");
+
+        let (_, a) = sealed_stating(780, true, &gguf(&d), Some("hf:org/x@main"), Some(&d));
+        let r = model_stated(&a);
+        assert_eq!(r["result"], json!("not_met"), "the id decides: {r:#}");
+        assert_eq!(r["stated_as"], json!("canonical_ref"));
+        assert_eq!(r["stated_weights_digest"], Value::Null);
     }
 
     /// A session agreed ten minutes before a served half that cites it
