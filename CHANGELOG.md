@@ -184,6 +184,10 @@
 
 ### Changed
 
+- **`capsule-emit` 0.0.9.** It adds `produce`, the Go-identical Capsule build the deal records are
+  sealed with, and drops `structure`: the Class 1 check of a received half (record push, the
+  referee, an agreement half) now runs through `agent_action_capsule::verify::verify`.
+
 - **Evidence answers, the served summary and the received log come from the `evidencebook` crate
   (0.0.9).** The plugin's own copies are deleted. evidencebook builds and signs every artifact
   answer over the plugin's ledger index, and never opens the MMR node store the checkpointer

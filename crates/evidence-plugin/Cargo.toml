@@ -140,7 +140,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # 0.0.4 carries `settlement` (draft-mih-agent-settlement-records-00 legs);
 # 0.0.6 gives each witness its own client, dialled at the URL given (no
 # built-in service, no redirect followed); 0.0.8 sits on cll 0.3.1 directly,
-# with no evidencebook. Its canonicalizer turns on serde_json's
+# with no evidencebook; 0.0.9 adds `produce` (the Go-identical Capsule
+# build, which the deal records are sealed with) and leaves Class 1 checks to
+# agent-action-capsule (`structure` is gone). Its canonicalizer turns on serde_json's
 # `arbitrary_precision` for the whole binary (see `strict_json`).
 capsule-emit-lib = { package = "capsule-emit", version = "0.0.9" }
 cll = { package = "checkpointed-local-log", version = "0.3.1" }
