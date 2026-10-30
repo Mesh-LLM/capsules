@@ -309,10 +309,23 @@ pub struct MeshPocV1 {
     /// built it for this record. `None` records the empty slot with
     /// [`crate::producer::tee_attest::names::NO_TEE`].
     pub tee_attestation: Option<Value>,
+    /// The record digest of the service evidence agreement this exchange is
+    /// under (`crate::agreement`), carried as an EL `cites` link in the
+    /// member `acceptance` (design R5). `None` omits the member: an
+    /// exchange outside any agreement looks as it always did.
+    pub acceptance_digest: Option<String>,
 }
 
 impl MeshPocV1 {
     fn to_value(&self) -> Value {
+        let mut block = self.block_without_acceptance();
+        if let Some(digest) = &self.acceptance_digest {
+            block["acceptance"] = acceptance_link(digest);
+        }
+        block
+    }
+
+    fn block_without_acceptance(&self) -> Value {
         json!({
             "client_nonce": self.client_nonce,
             "client_nonce_source": self.client_nonce_source,
@@ -356,6 +369,24 @@ impl MeshPocV1 {
             },
         })
     }
+}
+
+/// The `x-mesh-poc-v1` member that cites a service evidence agreement: an
+/// EL §5 `cites` link to the accepted record's digest, the form the interop
+/// profile names for `execution_cites_acceptance` (§11.1.7).
+pub fn acceptance_link(acceptance_digest: &str) -> Value {
+    json!({"type": "cites", "target": acceptance_digest})
+}
+
+/// The block a settlement leg carries when it cites a service evidence
+/// agreement: `{"x-mesh-poc-v1": {"acceptance": <cites link>}}` (R5).
+pub fn leg_acceptance_blocks(acceptance_digest: &str) -> Map<String, Value> {
+    let mut blocks = Map::new();
+    blocks.insert(
+        "x-mesh-poc-v1".into(),
+        json!({"acceptance": acceptance_link(acceptance_digest)}),
+    );
+    blocks
 }
 
 /// `epistemic_type` (the fabric's shared
@@ -991,9 +1022,16 @@ pub(crate) fn seal_local_record(
 /// under this node's mesh header: a local `fyi` record whose top-level
 /// `settlement` member is `member`, chained onto this node's own head. The
 /// member is checked by capsule-emit's `settlement` module first.
+///
+/// `blocks` go in the leg's `model_attestation.compute_attestation`, as a
+/// half's `x-mesh-poc-v1` block does (a service evidence agreement's
+/// citation, `agreement`). This is capsule-emit 0.0.8's `seal_leg` (the
+/// member's structure check, then `seal_local_record_with_members`) with the
+/// blocks it leaves empty; with none, a leg is the one `seal_leg` seals.
 pub fn seal_settlement_leg(
     action_id: String,
     member: Value,
+    blocks: Map<String, Value>,
     references: Option<Value>,
     chain: Option<ChainLink>,
     signing_key: &ed25519_dalek::SigningKey,
@@ -1004,14 +1042,24 @@ pub fn seal_settlement_leg(
         provider: LOCAL_RECORD_PROVIDER,
         model_id: SETTLEMENT_LEG_MODEL_ID,
     };
-    capsule_emit_lib::settlement::seal_leg(
+    let codes = capsule_emit_lib::settlement::structure_failures(&member);
+    if !codes.is_empty() {
+        return Err(capsule_emit_lib::settlement::SettlementError { codes }.into());
+    }
+    let mut top = Map::new();
+    top.insert(
+        capsule_emit_lib::settlement::SETTLEMENT_MEMBER.into(),
+        member,
+    );
+    Ok(capsule_emit_lib::capsule::seal_local_record_with_members(
         &header,
         action_id,
-        member,
+        blocks,
+        top,
         references,
         chain,
         signing_key,
-    )
+    )?)
 }
 
 /// A settlement leg is about a payment, not a model run.
@@ -1802,6 +1850,7 @@ mod tests {
                 latency_ms: "1.0".to_string(),
                 binary_attestation: None,
                 tee_attestation: None,
+                acceptance_digest: None,
             },
             effect_status: "confirmed".to_string(),
             effect_type: "inference_completion".to_string(),
@@ -2089,6 +2138,82 @@ mod tests {
         let mut input = base_input(None);
         input.mesh_poc.model_name_digest = "e".repeat(64);
         assert_ne!(seal(&input).unwrap()["capsule_id"], baseline_id.as_str());
+    }
+
+    /// A half under a service evidence agreement cites it as an EL `cites`
+    /// link in `x-mesh-poc-v1.acceptance`, committed into `capsule_id`; a
+    /// half under none has no such member at all.
+    #[test]
+    fn a_half_cites_its_agreement_and_only_when_it_has_one() {
+        let block =
+            |c: &Value| c["model_attestation"]["compute_attestation"]["x-mesh-poc-v1"].clone();
+        let without = seal(&base_input(None)).unwrap();
+        assert!(block(&without).get("acceptance").is_none());
+        let mut input = base_input(None);
+        input.mesh_poc.acceptance_digest = Some("ab".repeat(32));
+        let with = seal(&input).unwrap();
+        assert_eq!(
+            block(&with)["acceptance"],
+            json!({"type": "cites", "target": "ab".repeat(32)})
+        );
+        assert_ne!(with["capsule_id"], without["capsule_id"]);
+    }
+
+    /// A leg under a service evidence agreement carries the same link in its
+    /// `x-mesh-poc-v1` block, beside the store nonce, and still passes the
+    /// settlement member's own checks; a leg with no blocks is sealed exactly
+    /// as capsule-emit seals it.
+    #[test]
+    fn a_settlement_leg_cites_its_agreement_in_its_block() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+        let member = capsule_emit_lib::settlement::build_leg(
+            "terms",
+            "payer",
+            [
+                (
+                    "amount".to_string(),
+                    capsule_emit_lib::settlement::amount(1000, "BTC", 11),
+                ),
+                (
+                    "payment_ref".to_string(),
+                    json!({"type": "ln.payment_hash", "value": "cd".repeat(32)}),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .unwrap();
+        let cited = seal_settlement_leg(
+            "t".into(),
+            member.clone(),
+            leg_acceptance_blocks(&"ab".repeat(32)),
+            None,
+            None,
+            &key,
+        )
+        .unwrap();
+        let attestation = &cited["model_attestation"]["compute_attestation"];
+        assert_eq!(
+            attestation["x-mesh-poc-v1"]["acceptance"],
+            json!({"type": "cites", "target": "ab".repeat(32)})
+        );
+        assert_eq!(cited["settlement"], member);
+        let bare =
+            seal_settlement_leg("t".into(), member.clone(), Map::new(), None, None, &key).unwrap();
+        assert!(bare["model_attestation"]["compute_attestation"]
+            .get("x-mesh-poc-v1")
+            .is_none());
+        let mut broken = member;
+        broken["leg"] = json!("nonsense");
+        assert!(seal_settlement_leg(
+            "t".into(),
+            broken,
+            leg_acceptance_blocks(&"ab".repeat(32)),
+            None,
+            None,
+            &key
+        )
+        .is_err());
     }
 
     // =======================================================================

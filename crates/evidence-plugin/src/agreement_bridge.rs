@@ -367,13 +367,75 @@ pub fn active_session(
     model: &str,
     now: i64,
 ) -> Option<Session> {
-    let start = |r: &Value| {
-        r.get("session")?
-            .get("not_before")?
-            .as_str()
-            .and_then(evidence_request::time::parse_rfc3339)
-            .map(|t| t.seconds)
-    };
+    sessions(store, proposer, acceptor, Some(model), now)
+        .into_iter()
+        .next()
+}
+
+/// Every unexpired session between `proposer` and `acceptor` that holds
+/// `now`, has its receipt and documents kept and, with `model`, names it in
+/// its policy; the latest-starting first.
+fn sessions(
+    store: &Store,
+    proposer: &str,
+    acceptor: &str,
+    model: Option<&str>,
+    now: i64,
+) -> Vec<Session> {
+    let mut found: Vec<&Complete> = Vec::new();
+    let complete = complete_sessions(store);
+    for c in complete.iter() {
+        if text(&c.record, "proposer") == Some(proposer)
+            && text(&c.record, "acceptor") == Some(acceptor)
+            && c.start - agreement::CLOCK_SKEW_SECONDS <= now
+            && now <= c.end
+            && model.is_none_or(|m| c.models.iter().any(|x| x == m))
+        {
+            found.push(c);
+        }
+    }
+    found.sort_by_key(|c| std::cmp::Reverse(c.start));
+    found
+        .into_iter()
+        .map(|c| Session {
+            acceptance_digest: c.digest.clone(),
+            record: c.record.clone(),
+        })
+        .collect()
+}
+
+/// An accepted session whose set-up finished: its receipt, terms and model
+/// policy are kept.
+struct Complete {
+    record: Value,
+    digest: String,
+    start: i64,
+    end: i64,
+    models: Vec<String>,
+}
+
+/// Every complete session `store` keeps, read from disk once per change: a
+/// half or leg seal asks on every exchange, and the store only grows.
+fn complete_sessions(store: &Store) -> Arc<Vec<Complete>> {
+    type Cache = std::collections::HashMap<std::path::PathBuf, (u64, Arc<Vec<Complete>>)>;
+    static CACHE: std::sync::OnceLock<Mutex<Cache>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(Cache::new()));
+    let generation = agreement::generation();
+    if let Some((seen, sessions)) = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(store.root())
+    {
+        if *seen == generation {
+            return sessions.clone();
+        }
+    }
+    let receipted: std::collections::BTreeSet<String> = store
+        .all(Kind::Receipt)
+        .into_iter()
+        .filter_map(|o| parse(&o))
+        .filter_map(|rc| text(&rc, "acceptance_digest").map(String::from))
+        .collect();
     let document = |r: &Value, k: &str| {
         r.get("session")?
             .get(k)?
@@ -381,31 +443,94 @@ pub fn active_session(
             .and_then(|d| store.get(Kind::Document, d))
             .and_then(|o| parse(&o))
     };
-    store
+    let sessions: Vec<Complete> = store
         .all(Kind::Record)
         .into_iter()
         .filter_map(|o| parse(&o))
-        .filter(|r| {
-            text(r, "state") == Some("accepted")
-                && text(r, "proposer") == Some(proposer)
-                && text(r, "acceptor") == Some(acceptor)
-                && start(r).is_some_and(|nb| nb - agreement::CLOCK_SKEW_SECONDS <= now)
-                && window_end(r).is_some_and(|na| now <= na)
-                && document(r, "terms").is_some()
-                && document(r, "policy")
-                    .and_then(|p| agreement::read_policy(&p))
-                    .is_some_and(|models| models.iter().any(|m| m == model))
-        })
+        .filter(|r| text(r, "state") == Some("accepted"))
         .filter_map(|record| {
             let digest = evidence_request::acceptance::record_digest(&record).ok()?;
-            receipt_for(store, &digest)?;
-            Some((start(&record), digest, record))
+            if !receipted.contains(&digest) {
+                return None;
+            }
+            document(&record, "terms")?;
+            let models = agreement::read_policy(&document(&record, "policy")?)?;
+            Some(Complete {
+                start: window_start(&record)?,
+                end: window_end(&record)?,
+                digest,
+                models,
+                record,
+            })
         })
-        .max_by(|a, b| a.0.cmp(&b.0))
-        .map(|(_, acceptance_digest, record)| Session {
-            acceptance_digest,
-            record,
-        })
+        .collect();
+    let sessions = Arc::new(sessions);
+    cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(store.root().to_path_buf(), (generation, sessions.clone()));
+    sessions
+}
+
+/// The acceptance the payer's `delivered` leg cites (R12): its session with
+/// the provider at `peer`, for `model`, holding `now`.
+pub fn delivered_citation(
+    capsules: &CapsuleState,
+    peer: &str,
+    model: &str,
+    now: i64,
+) -> Option<String> {
+    let registry = crate::peer_keys::registry();
+    let provider = crate::peer_keys::announced_key_in(registry.as_deref(), peer)?;
+    let store = Store::open(capsules.ledger_dir());
+    active_session(&store, &own_key(capsules), &provider, model, now).map(|s| s.acceptance_digest)
+}
+
+/// The acceptance a provider's exchange cites (R5, R6, R12): its session
+/// with the requester at `requester_peer` (the host's `requested_by_node_id`)
+/// for `model`, holding `now`, when it holds exactly one such session. The
+/// provider decides this once, at the
+/// exchange's terminal event; its served half and its payee leg both use the
+/// decision, so a session that appears later never reaches them.
+pub fn served_citation(
+    capsules: &CapsuleState,
+    requester_peer: &str,
+    model: &str,
+    now: i64,
+) -> Option<String> {
+    let registry = crate::peer_keys::registry();
+    served_citation_in(capsules, requester_peer, model, registry.as_deref(), now)
+}
+
+fn served_citation_in(
+    capsules: &CapsuleState,
+    requester_peer: &str,
+    model: &str,
+    registry: Option<&str>,
+    now: i64,
+) -> Option<String> {
+    let requester_peer = requester_peer.trim();
+    if requester_peer.is_empty() || requester_peer == "unknown" {
+        return None;
+    }
+    let requester = crate::peer_keys::announced_key_in(registry, requester_peer)?;
+    let store = Store::open(capsules.ledger_dir());
+    // One session for the model, or none cited: with several, the provider
+    // does not guess which one the requester meant (R12).
+    match sessions(&store, &requester, &own_key(capsules), Some(model), now).as_slice() {
+        [only] => Some(only.acceptance_digest.clone()),
+        _ => None,
+    }
+}
+
+/// The proposer of the complete session `acceptance_digest`, if this node
+/// keeps it.
+pub fn session_proposer(capsules: &CapsuleState, acceptance_digest: &str) -> Option<String> {
+    let store = Store::open(capsules.ledger_dir());
+    complete_sessions(&store)
+        .iter()
+        .find(|c| c.digest == acceptance_digest)
+        .and_then(|c| text(&c.record, "proposer").map(String::from))
 }
 
 /// What the requester concluded from the provider's reply to a proposal.
@@ -962,6 +1087,7 @@ mod tests {
         // proposes again rather than relying on a session it cannot order.
         let receipts = p.rstore.root_for_tests().join("receipts");
         std::fs::remove_dir_all(&receipts).unwrap();
+        agreement::bump_generation_for_tests();
         assert_eq!(p.session(&p.rstore, MODEL, NOW + 10), None);
         assert!(p.session(&p.pstore, MODEL, NOW + 10).is_some());
         let _ = session;
@@ -989,6 +1115,50 @@ mod tests {
             t0 + Duration::from_secs(1)
         ));
         assert!(begin_attempt(&mut attempts, "peer", t0 + RETRY_AFTER));
+    }
+
+    #[test]
+    fn each_side_finds_the_session_its_counterparty_and_model_name() {
+        let p = pair();
+        let (_, session, _) = p.agree(NOW);
+        let requester_peer = "aa".repeat(32);
+        let registry = json!({ requester_peer.clone(): own_key(&p.requester) }).to_string();
+        let served = |peer: &str, model: &str, now| {
+            served_citation_in(&p.provider, peer, model, Some(&registry), now)
+        };
+        let want = Some(session.acceptance_digest.clone());
+        assert_eq!(served(&requester_peer, MODEL, NOW + 10), want);
+        // Another model, outside the window, an unknown or unannounced
+        // requester: no citation.
+        assert_eq!(
+            served(&requester_peer, "hf:other/model@main", NOW + 10),
+            None
+        );
+        assert_eq!(served(&requester_peer, MODEL, NOW + 3_601), None);
+        assert_eq!(served("unknown", MODEL, NOW + 10), None);
+        assert_eq!(served(&"cc".repeat(32), MODEL, NOW + 10), None);
+        assert_eq!(
+            session_proposer(&p.provider, &session.acceptance_digest),
+            Some(own_key(&p.requester))
+        );
+        assert_eq!(session_proposer(&p.provider, &"0".repeat(64)), None);
+    }
+
+    #[test]
+    fn complete_sessions_are_read_again_only_after_a_change() {
+        let p = pair();
+        let (_, first, _) = p.agree(NOW);
+        let once = complete_sessions(&p.rstore);
+        assert!(
+            Arc::ptr_eq(&once, &complete_sessions(&p.rstore)),
+            "unchanged: cached"
+        );
+        let (_, second, _) = p.agree(NOW + 100);
+        let again = complete_sessions(&p.rstore);
+        assert!(!Arc::ptr_eq(&once, &again));
+        let digests: Vec<&str> = again.iter().map(|c| c.digest.as_str()).collect();
+        assert!(digests.contains(&first.acceptance_digest.as_str()));
+        assert!(digests.contains(&second.acceptance_digest.as_str()));
     }
 
     #[test]

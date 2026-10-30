@@ -164,6 +164,26 @@ struct Inner {
     received_terms: Bounded<String>,
     /// Provider: payee observations waiting for their terms leg.
     waiting_payee: Bounded<PaymentLifecycleEvent>,
+    /// Payer: the agreement this exchange cites, decided once when the
+    /// exchange's terminal event is seen and before any session is set up
+    /// from it, so the exchange never cites a session it triggered (R11,
+    /// R12). `None` inside is a decision too: it cites nothing.
+    citation: Bounded<Option<String>>,
+    /// Provider: the agreement its exchange cites, by its host's exchange
+    /// id, decided at the exchange's terminal event (`decide_served_citation`):
+    /// the served half and the payee leg both use it (R12).
+    served_citation: Bounded<Option<String>>,
+    /// Provider: the key that signed the terms leg it cites, by payment
+    /// hash: whose agreement the payee leg cites (R12).
+    received_from: Bounded<String>,
+}
+
+/// A payer's delivered leg that is due: the terms leg and the agreement it
+/// cites, and the delivered content's digest.
+struct Delivered {
+    terms_ref: String,
+    digest: String,
+    acceptance: Option<String>,
 }
 
 /// This node's settlement-records state (held by [`CapsuleState`]).
@@ -189,10 +209,26 @@ fn built(leg: &str, role: &str, pairs: Vec<(&str, Value)>) -> anyhow::Result<Val
     build_leg(leg, role, members).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
+/// The blocks a leg carries: an agreement citation when it has one (R5).
+fn citation_blocks(acceptance: Option<String>) -> Map<String, Value> {
+    acceptance
+        .map(|d| crate::producer::capsule::leg_acceptance_blocks(&d))
+        .unwrap_or_default()
+}
+
 fn seal(
     capsules: &CapsuleState,
     action: &str,
     member: anyhow::Result<Value>,
+) -> Option<EmittedCapsule> {
+    seal_with(capsules, action, member, Map::new())
+}
+
+fn seal_with(
+    capsules: &CapsuleState,
+    action: &str,
+    member: anyhow::Result<Value>,
+    blocks: Map<String, Value>,
 ) -> Option<EmittedCapsule> {
     let member = match member {
         Ok(member) => member,
@@ -201,7 +237,7 @@ fn seal(
             return None;
         }
     };
-    match capsules.emit_settlement_leg(format!("mesh/settlement/{action}"), member, None) {
+    match capsules.emit_settlement_leg(format!("mesh/settlement/{action}"), member, blocks, None) {
         Ok(Some(sealed)) => {
             tracing::debug!(capsule_id = %sealed.capsule_id, %action, "sealed settlement leg");
             Some(sealed)
@@ -237,6 +273,9 @@ impl Legs {
             ("response digests", inner.response.expire(cutoff)),
             ("own invoices", inner.invoices.expire(cutoff)),
             ("received terms legs", inner.received_terms.expire(cutoff)),
+            ("exchange citations", inner.citation.expire(cutoff)),
+            ("served citations", inner.served_citation.expire(cutoff)),
+            ("terms leg signers", inner.received_from.expire(cutoff)),
             (
                 "waiting payee observations",
                 inner.waiting_payee.expire(cutoff),
@@ -365,8 +404,8 @@ impl Legs {
             };
             (push, Self::delivered_due(&mut inner, &exchange_id))
         };
-        if let Some((terms_ref, digest)) = delivered {
-            self.seal_payer_delivered(capsules, &terms_ref, &digest);
+        if let Some(due) = delivered {
+            self.seal_payer_delivered(capsules, due);
         }
         push.into_iter().collect()
     }
@@ -415,7 +454,78 @@ impl Legs {
                 ("observed_at", json!(now())),
             ],
         );
-        seal(capsules, "payee_observed", leg);
+        // The provider's decision for the exchange, made when it was served,
+        // and only for the session of the payer whose key signed the terms
+        // leg. A payment settled before the exchange was served (a deposit)
+        // has no decision yet and cites nothing.
+        let (payer_key, decided) = {
+            let inner = self.inner();
+            (
+                inner.received_from.get(hash).cloned(),
+                inner
+                    .served_citation
+                    .get(&event.exchange_id)
+                    .cloned()
+                    .flatten(),
+            )
+        };
+        let acceptance = match (payer_key, decided) {
+            (Some(key), Some(digest))
+                if crate::agreement_bridge::session_proposer(capsules, &digest).as_deref()
+                    == Some(key.as_str()) =>
+            {
+                Some(digest)
+            }
+            _ => None,
+        };
+        seal_with(capsules, "payee_observed", leg, citation_blocks(acceptance));
+    }
+
+    /// Payer: the agreement `exchange_id` cites, decided by `decide` the
+    /// first time it is asked and kept, so a session set up after this
+    /// point (from this very exchange) is never cited by it.
+    pub fn decide_citation(
+        &self,
+        exchange_id: &str,
+        decide: impl FnOnce() -> Option<String>,
+    ) -> Option<String> {
+        if let Some(decided) = self.inner().citation.get(exchange_id) {
+            return decided.clone();
+        }
+        let decided = decide();
+        self.inner()
+            .citation
+            .insert(exchange_id.to_string(), decided.clone());
+        decided
+    }
+
+    /// Payer: the citation decided for `exchange_id`, if one was.
+    pub fn citation_of(&self, exchange_id: &str) -> Option<Option<String>> {
+        self.inner().citation.get(exchange_id).cloned()
+    }
+
+    /// Provider: the agreement its exchange `exchange_id` cites, decided by
+    /// `decide` at the exchange's terminal event the first time it is asked
+    /// and kept, so a session set up later never reaches the served half or
+    /// a payee leg sealed after it.
+    pub fn decide_served_citation(
+        &self,
+        exchange_id: &str,
+        decide: impl FnOnce() -> Option<String>,
+    ) -> Option<String> {
+        if let Some(decided) = self.inner().served_citation.get(exchange_id) {
+            return decided.clone();
+        }
+        let decided = decide();
+        self.inner()
+            .served_citation
+            .insert(exchange_id.to_string(), decided.clone());
+        decided
+    }
+
+    /// Provider: the citation decided for its exchange `exchange_id`.
+    pub fn served_citation_of(&self, exchange_id: &str) -> Option<Option<String>> {
+        self.inner().served_citation.get(exchange_id).cloned()
     }
 
     /// Payer: the exchange event for `exchange_id` named its serving `peer`
@@ -442,8 +552,8 @@ impl Legs {
             }
             (pushes, Self::delivered_due(&mut inner, exchange_id))
         };
-        if let Some((terms_ref, digest)) = delivered {
-            self.seal_payer_delivered(capsules, &terms_ref, &digest);
+        if let Some(due) = delivered {
+            self.seal_payer_delivered(capsules, due);
         }
         pushes
     }
@@ -506,8 +616,8 @@ impl Legs {
             inner.accounted.insert(exchange_id.to_string(), bill_msat);
             Self::delivered_due(&mut inner, exchange_id)
         };
-        if let Some((terms_ref, digest)) = delivered {
-            self.seal_payer_delivered(capsules, &terms_ref, &digest);
+        if let Some(due) = delivered {
+            self.seal_payer_delivered(capsules, due);
         }
     }
 
@@ -519,9 +629,10 @@ impl Legs {
     /// only when the accounted bill is within its amount. The exchange's
     /// entries are then cleared, so a later event for the same id starts
     /// afresh.
-    fn delivered_due(inner: &mut Inner, exchange_id: &str) -> Option<(String, String)> {
+    fn delivered_due(inner: &mut Inner, exchange_id: &str) -> Option<Delivered> {
         let bill_msat = *inner.accounted.get(exchange_id)?;
         let digest = inner.response.get(exchange_id)?.clone();
+        let acceptance = inner.citation.get(exchange_id).cloned().flatten();
         let terms = inner
             .cited_hash
             .get(exchange_id)
@@ -540,16 +651,27 @@ impl Legs {
         inner.accounted.remove(exchange_id);
         inner.cited_hash.remove(exchange_id);
         inner.response.remove(exchange_id);
+        // The decision stays (it expires with the other entries): the
+        // requested half, sealed after this, still reads it.
         if !inner.unpushed.contains(exchange_id) {
             inner.peer.remove(exchange_id);
         }
         if terms.is_none() {
             tracing::debug!(%exchange_id, "no terms leg for this exchange; no delivered leg");
         }
-        Some((terms?, digest))
+        Some(Delivered {
+            terms_ref: terms?,
+            digest,
+            acceptance,
+        })
     }
 
-    fn seal_payer_delivered(&self, capsules: &CapsuleState, terms_ref: &str, digest: &str) {
+    fn seal_payer_delivered(&self, capsules: &CapsuleState, due: Delivered) {
+        let Delivered {
+            terms_ref,
+            digest,
+            acceptance,
+        } = due;
         let leg = built(
             "delivered",
             "payer",
@@ -562,7 +684,7 @@ impl Legs {
                 ),
             ],
         );
-        seal(capsules, "delivered", leg);
+        seal_with(capsules, "delivered", leg, citation_blocks(acceptance));
     }
 
     /// Provider: a peer's pushed record was received and verified. It is held
@@ -602,6 +724,11 @@ impl Legs {
             inner
                 .received_terms
                 .insert(hash.to_string(), capsule_id.to_string());
+            if let Some(key) = capsule.get("key_id").and_then(Value::as_str) {
+                inner
+                    .received_from
+                    .insert(hash.to_string(), key.to_string());
+            }
             inner.waiting_payee.remove(hash)
         };
         if let Some(event) = waiting {
@@ -611,7 +738,7 @@ impl Legs {
 
     /// How many entries each kind holds, in field order.
     #[cfg(test)]
-    fn held(&self) -> [usize; 9] {
+    fn held(&self) -> [usize; 12] {
         let inner = self.inner();
         [
             inner.own_terms.len(),
@@ -623,6 +750,9 @@ impl Legs {
             inner.invoices.len(),
             inner.received_terms.len(),
             inner.waiting_payee.len(),
+            inner.citation.len(),
+            inner.served_citation.len(),
+            inner.received_from.len(),
         ]
     }
 }
@@ -873,6 +1003,7 @@ mod tests {
             crate::producer::capsule::seal_settlement_leg(
                 format!("t/{amount_msat}/{role}/{hash}"),
                 member,
+                Map::new(),
                 None,
                 None,
                 &key,
@@ -1079,7 +1210,7 @@ mod tests {
         pair.payer_accounted();
         legs.on_exchange(&pair.payer, "ex", Some(PROVIDER_PEER), Some(RESPONSE));
         assert!(legs_of(a.path()).is_empty());
-        assert_eq!(legs.held(), [0; 9], "the exchange's entries are cleared");
+        assert_eq!(legs.held(), [0; 12], "the exchange's entries are cleared");
     }
 
     #[test]
@@ -1094,12 +1225,12 @@ mod tests {
             pair.provider.settlement_legs(),
         );
         payer.expire(Instant::now());
-        assert_ne!(payer.held(), [0; 9], "fresh entries stay");
+        assert_ne!(payer.held(), [0; 12], "fresh entries stay");
         let later = Instant::now() + MAX_AGE + Duration::from_secs(1);
         payer.expire(later);
         provider.expire(later);
-        assert_eq!(payer.held(), [0; 9]);
-        assert_eq!(provider.held(), [0; 9]);
+        assert_eq!(payer.held(), [0; 12]);
+        assert_eq!(provider.held(), [0; 12]);
         assert!(payer.retry().is_empty());
     }
 
@@ -1145,8 +1276,270 @@ mod tests {
                 ),
             );
         }
-        let [.., invoices, _, waiting] = legs.held();
+        let [.., invoices, _, waiting, _, _, _] = legs.held();
         assert_eq!((invoices, waiting), (MAX_HELD, MAX_HELD));
+    }
+
+    /// `requester` and `provider` agree a session for `model` at `now` (the
+    /// agreement bridge in process); the acceptance digest.
+    fn agree(requester: &CapsuleState, provider: &CapsuleState, model: &str, now: i64) -> String {
+        use crate::agreement::{Proposal, SessionTerms, Store};
+        use crate::agreement_bridge::{conclude, respond, Outcome};
+        let (rstore, pstore) = (
+            Store::open(requester.ledger_dir()),
+            Store::open(provider.ledger_dir()),
+        );
+        let proposal = Proposal::new(
+            requester.signing_key(),
+            &hex::encode(provider.public_key()),
+            &crate::agreement::new_session_id(),
+            &SessionTerms {
+                spend_cap_msat: 3_000,
+                max_exchanges: None,
+                window_seconds: 3_600,
+            },
+            &[model.to_string()],
+            now,
+        );
+        let reply = respond(provider, &pstore, &proposal.to_message(), &|_| true, now);
+        let Outcome::Accepted { session, receipt } = conclude(
+            requester,
+            &rstore,
+            &proposal,
+            &serde_json::to_vec(&reply).unwrap(),
+            now,
+        ) else {
+            panic!("accepted: {reply}")
+        };
+        let frame = serde_json::to_vec(&json!({ "receipt": receipt })).unwrap();
+        assert_eq!(
+            respond(provider, &pstore, &frame, &|_| true, now),
+            json!({"ok": true})
+        );
+        session.acceptance_digest
+    }
+
+    fn citation(leg: &Value) -> Option<&str> {
+        leg["model_attestation"]["compute_attestation"]["x-mesh-poc-v1"]["acceptance"]["target"]
+            .as_str()
+    }
+
+    /// Which sessions the payer and provider hold when the exchange runs.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Sessions {
+        /// One, for the model served.
+        One,
+        /// Two at once, both for the model served.
+        TwoForTheModel,
+        /// One, for another model only.
+        OtherModelOnly,
+    }
+
+    const SERVED_MODEL: &str = "hf:example/model@main";
+
+    /// Two nodes that hold `sessions`, then one paid exchange whose deposit
+    /// covers the bill, run as a live host orders the events: the payer's
+    /// and the provider's legs, and the acceptance the payer's session for
+    /// the served model has (if any).
+    fn agreed_exchange(
+        sessions: Sessions,
+        a: &Path,
+        b: &Path,
+    ) -> (Vec<Value>, Vec<Value>, Option<String>) {
+        let pair = Pair::open(a, b);
+        let now = chrono::Utc::now().timestamp();
+        let tag = sessions as u64 + 1;
+        let (payer_peer, provider_peer) = (
+            format!("{:064x}", 0xa11ce0 + tag),
+            format!("{:064x}", 0xb0b0 + tag),
+        );
+        crate::peer_keys::announced::announce_for_test(
+            &payer_peer,
+            &hex::encode(pair.payer.public_key()),
+        );
+        crate::peer_keys::announced::announce_for_test(
+            &provider_peer,
+            &hex::encode(pair.provider.public_key()),
+        );
+        let digest = match sessions {
+            Sessions::One => Some(agree(&pair.payer, &pair.provider, SERVED_MODEL, now)),
+            Sessions::TwoForTheModel => {
+                agree(&pair.payer, &pair.provider, SERVED_MODEL, now - 60);
+                Some(agree(&pair.payer, &pair.provider, SERVED_MODEL, now))
+            }
+            Sessions::OtherModelOnly => {
+                agree(&pair.payer, &pair.provider, "hf:other/model@main", now);
+                None
+            }
+        };
+        pair.provider_event(Phase::InputInvoiceIssued, 0, INPUT, &[]);
+        pair.payer_event(Phase::InputInvoiceIssued, 0, INPUT, &[]);
+        pair.provider_event(Phase::InputSettlementObserved, 0, INPUT, WALLET);
+        pair.payer_event(Phase::InputSettlementObserved, 0, INPUT, &[("fee_msat", 0)]);
+        pair.payer_accounted();
+        // The terminal events: the provider notes the model it served; the
+        // payer decides the exchange's citation (main.rs does both).
+        pair.provider
+            .settlement_legs()
+            .decide_served_citation("p-ex", || {
+                crate::agreement_bridge::served_citation(
+                    &pair.provider,
+                    &payer_peer,
+                    SERVED_MODEL,
+                    now,
+                )
+            });
+        pair.payer.settlement_legs().decide_citation("ex", || {
+            crate::agreement_bridge::delivered_citation(
+                &pair.payer,
+                &provider_peer,
+                SERVED_MODEL,
+                now,
+            )
+        });
+        let pushes = pair.payer.settlement_legs().on_exchange(
+            &pair.payer,
+            "ex",
+            Some(&provider_peer),
+            Some(RESPONSE),
+        );
+        for push in &pushes {
+            pair.provider
+                .settlement_legs()
+                .on_received(&pair.provider, &push.capsule);
+        }
+        // The delivered leg is sealed (the bill was accounted first) and the
+        // decision is still there for the requested half, sealed after it.
+        assert_eq!(
+            pair.payer.settlement_legs().citation_of("ex"),
+            Some(digest.clone()),
+            "the requested half still reads the decision"
+        );
+        (legs_of(a), legs_of(b), digest)
+    }
+
+    /// A payee leg sealed late (its terms leg's push failed, a session was
+    /// set up, the retry arrived) takes the decision made when the exchange
+    /// was served, so it never cites the session that appeared later.
+    #[test]
+    fn a_late_payee_leg_never_cites_a_session_set_up_after_its_exchange() {
+        let (a, b) = dirs();
+        let pair = Pair::open(a.path(), b.path());
+        let now = chrono::Utc::now().timestamp();
+        let payer_peer = format!("{:064x}", 0x1a7e);
+        crate::peer_keys::announced::announce_for_test(
+            &payer_peer,
+            &hex::encode(pair.payer.public_key()),
+        );
+        pair.provider_event(Phase::InputInvoiceIssued, 0, INPUT, &[]);
+        pair.provider_event(Phase::InputSettlementObserved, 0, INPUT, WALLET);
+        // Served, with no session yet: the decision is "none".
+        let decided = pair
+            .provider
+            .settlement_legs()
+            .decide_served_citation("p-ex", || {
+                crate::agreement_bridge::served_citation(
+                    &pair.provider,
+                    &payer_peer,
+                    SERVED_MODEL,
+                    now,
+                )
+            });
+        assert_eq!(decided, None);
+        // The requester sets up a session from that exchange...
+        agree(&pair.payer, &pair.provider, SERVED_MODEL, now);
+        // ...then its terms leg arrives late.
+        pair.payer
+            .settlement_legs()
+            .on_exchange(&pair.payer, "ex", Some(PROVIDER_PEER), None);
+        let pushes = pair.payer_event(Phase::InputInvoiceIssued, 0, INPUT, &[]);
+        pair.deliver(&pushes);
+        let provider = legs_of(b.path());
+        assert_eq!(kinds(&provider), ["payee_observed"]);
+        assert_eq!(citation(&provider[0]), None);
+    }
+
+    /// An exchange's citation is decided once: a session that appears later
+    /// (set up from this very exchange) never changes it, and the delivered
+    /// leg uses the decision.
+    #[test]
+    fn an_exchange_cites_what_was_decided_before_any_session_was_set_up() {
+        let legs = Legs::default();
+        assert_eq!(legs.citation_of("ex"), None, "not decided yet");
+        assert_eq!(legs.decide_citation("ex", || None), None);
+        assert_eq!(
+            legs.decide_citation("ex", || Some("ab".repeat(32))),
+            None,
+            "the first decision stands"
+        );
+        assert_eq!(legs.citation_of("ex"), Some(None));
+        assert_eq!(
+            legs.decide_citation("other", || Some("cd".repeat(32))),
+            Some("cd".repeat(32))
+        );
+    }
+
+    /// Under an agreement, the payer's delivered leg and the provider's
+    /// payee_observed leg cite it (R12); the payer's terms and payer_observed
+    /// legs, sealed before the provider is known, cite nothing. The payee
+    /// leg cites only the one session for the model served: with two for it,
+    /// or one for another model only, it cites nothing rather than guess.
+    #[test]
+    fn under_an_agreement_one_leg_per_side_cites_it() {
+        for sessions in [
+            Sessions::One,
+            Sessions::TwoForTheModel,
+            Sessions::OtherModelOnly,
+        ] {
+            let (a, b) = dirs();
+            let (payer, provider, digest) = agreed_exchange(sessions, a.path(), b.path());
+            assert_eq!(
+                kinds(&payer),
+                ["terms", "payer_observed", "delivered"],
+                "{sessions:?}"
+            );
+            assert_eq!(kinds(&provider), ["payee_observed"], "{sessions:?}");
+            assert_eq!(
+                citation(&payer[0]),
+                None,
+                "terms: sealed before the provider is known"
+            );
+            assert_eq!(citation(&payer[1]), None, "payer_observed: likewise");
+            assert_eq!(
+                citation(&payer[2]),
+                digest.as_deref(),
+                "delivered, {sessions:?}"
+            );
+            let payee = if sessions == Sessions::One {
+                digest.as_deref()
+            } else {
+                None
+            };
+            assert_eq!(
+                citation(&provider[0]),
+                payee,
+                "payee_observed, {sessions:?}"
+            );
+        }
+    }
+
+    /// The legs [`agreed_exchange`] seals under one session, as the plugin
+    /// seals them (node keys, chained, the real acceptance digest), written
+    /// to `$AGREEMENT_LEGS_OUT` for the reference verifiers: the R5
+    /// seal-and-verify gate of evidencebook#48 PR 4.
+    #[test]
+    #[ignore]
+    fn cited_legs_for_the_reference_verifiers() {
+        let Ok(out) = std::env::var("AGREEMENT_LEGS_OUT") else {
+            panic!("AGREEMENT_LEGS_OUT not set (this test is run on purpose, so fail loudly)");
+        };
+        let (a, b) = dirs();
+        let (payer, provider, digest) = agreed_exchange(Sessions::One, a.path(), b.path());
+        assert!(
+            digest.is_some() && citation(&payer[2]).is_some() && citation(&provider[0]).is_some()
+        );
+        let all: Vec<Value> = payer.into_iter().chain(provider).collect();
+        std::fs::write(out, serde_json::to_vec(&all).unwrap()).unwrap();
     }
 
     /// Both nodes' legs, checked by the Python reference verifier:

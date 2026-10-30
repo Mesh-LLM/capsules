@@ -5,8 +5,8 @@ requester proposes what the provider is to produce evidence for, the
 provider accepts, and later exchanges in the session cite that acceptance.
 The agreement is the interop profile's acceptance record
 (`evidence-interop/0` §11.1), session-scoped. This page describes what this
-plugin sends and keeps. Citing the agreement in halves and settlement legs,
-and showing which exchanges it covers, come in later releases.
+plugin sends, keeps and cites. Showing which exchanges an agreement covers
+comes in a later release.
 
 ## Turning it on
 
@@ -69,6 +69,38 @@ exact octets the other signed.
 
 No agreement digest goes into a Lightning invoice description, which routing
 nodes and wallets can read.
+
+## What cites the agreement
+
+A record under a session names the session's accepted record by its digest,
+as an EL `cites` link in its `x-mesh-poc-v1` block:
+`"acceptance": {"type": "cites", "target": "<digest>"}`. It is committed into
+the record's `capsule_id` like every other member. A record under no session
+has no such member.
+
+- The requester's requested half and the provider's served half cite the
+  session between the two nodes for the model the host states was served.
+  Each side decides this once, at the exchange's terminal event. The
+  provider cites a session only when it holds exactly one for that requester
+  and model.
+- In settlement records, one leg per side cites it. The payer's `delivered`
+  leg, sealed once the provider and model are known, cites the payer's session.
+  The provider's `payee_observed` leg cites what the provider decided for
+  that payment's exchange when it served it, and only when that session's
+  requester is the payer whose key signed the terms leg the payee leg
+  answers. A payment settled before the provider has served the exchange (a
+  deposit, often) has no decision yet and cites nothing. The payment and the
+  exchange are matched by the host's exchange id. The
+  payer's `terms` and `payer_observed` legs are sealed before the provider is
+  known and cite nothing.
+- An exchange's citation is decided at its terminal event, before a session
+  can be set up from it, so the exchange that sets up a session never cites
+  it, and a record of that exchange sealed later never cites a session that
+  appeared after it.
+
+A leg carries the link in the same block, beside the settlement member, so
+the settlement record's own checks are unchanged; the interop profile's and
+the settlement records' reference verifiers both accept such a leg.
 
 ## The Evidence Contract
 
