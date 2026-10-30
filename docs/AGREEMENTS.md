@@ -20,7 +20,7 @@ nothing is proposed and nothing changes.
 | `CAPSULES_AGREEMENT_WINDOW_SECONDS` | Optional: how long a session lasts, from its proposal. Default 3600; 60 to 86400. |
 | `CAPSULES_AGREEMENT_TIMEOUT_MS` | Optional: how long the requester waits for each round trip with the provider, connecting included. Default 8000. |
 | `CAPSULES_AGREEMENT_RESPONDER_TIMEOUT_MS` | Optional: how long a provider waits at each step of an inbound agreement stream. Default 10000. |
-| `CAPSULES_AGREEMENT_HOOK_WAIT_MS` | Optional: with the admission hook granted, how long a request may be held for its session to be set up, counted from when the hook is called. Off (0) by default. Set it below the grant's `deadline_ms` (the plugin declares at most 2000). |
+| `CAPSULES_AGREEMENT_HOOK_WAIT_MS` | Optional: with the admission hook granted, how long a request may be held for its session to be set up, counted from when the hook is called. Off (0) by default. Set it below the grant's `deadline_ms`; at most 1750, under the 2000 the plugin declares. |
 
 The spend cap is the requester's own statement of what it expects to spend,
 an agent-origin assertion. It is not a signed authorization by a person, and

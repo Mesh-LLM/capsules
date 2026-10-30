@@ -1609,6 +1609,8 @@ async fn main() -> anyhow::Result<()> {
     // plugin (under a `best_effort` grant a host routes to every peer past a
     // plugin it has no manifest for).
     let capsules_for_hook = capsules.clone();
+    // The hold, read now so the hook never reads a setting.
+    let _ = agreement_bridge::hook_wait();
     let peer_admission = Arc::new(admission::Admission::new(
         admission::Policy::from_settings(),
         capsules.clone(),

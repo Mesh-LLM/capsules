@@ -32,6 +32,8 @@ struct Host {
     stream: LocalStream,
     next_request_id: u64,
     data_dir: PathBuf,
+    /// What the plugin sent that answered none of this host's requests.
+    others: Vec<Payload>,
 }
 
 impl Host {
@@ -63,6 +65,7 @@ impl Host {
             stream,
             next_request_id: 1,
             data_dir,
+            others: Vec::new(),
         }
     }
 
@@ -93,6 +96,7 @@ impl Host {
             if envelope.request_id == request_id {
                 return envelope.payload.expect("an answer carries a payload");
             }
+            self.others.extend(envelope.payload);
         }
     }
 
@@ -309,4 +313,99 @@ async fn a_setting_that_does_not_parse_fails_closed_and_the_plugin_keeps_running
         [json!("unreadable_policy"), json!("unreadable_policy")]
     );
     let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+/// R11's hook path over the wire protocol. With a hold set, a request
+/// admitted to a peer that the host's status lists with one model is held
+/// while the agreement set-up starts, and released at the hold although the
+/// provider never answers; the set-up goes on and asks the host for an
+/// agreement stream. A denied request is answered at once and reads no
+/// status.
+#[tokio::test]
+async fn an_admitted_request_is_held_for_its_agreement_set_up_and_a_denied_one_is_not() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    let reads = Arc::new(AtomicUsize::new(0));
+    let counted = reads.clone();
+    let status = json!({
+        "node_id": "c5e7af08d8",
+        "serving_models": [],
+        "peers": [{"id": &ALLOWED[..10], "serving_models": ["local-gguf/sha256-74a4da8c"]}],
+    });
+    let app = axum::Router::new().route(
+        "/api/status",
+        axum::routing::get(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            let status = status.clone();
+            async move { axum::Json(status) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let console = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let peer_keys = json!({ ALLOWED: "ab".repeat(32) }).to_string();
+
+    let mut host = Host::spawn(&[
+        ("CAPSULES_ADMISSION_ALLOW", ALLOWED),
+        ("CAPSULES_ADMISSION_DENY", DENIED),
+        ("CAPSULES_ADMISSION_DEFAULT", "no"),
+        ("CAPSULES_AGREEMENT_SPEND_CAP_MSAT", "3000"),
+        ("CAPSULES_AGREEMENT_HOOK_WAIT_MS", "600"),
+        ("CAPSULES_HOST_CONSOLE_URL", &console),
+        ("CAPSULES_PEER_KEYS", &peer_keys),
+    ])
+    .await;
+    let init = host.initialize().await;
+    let hook = init
+        .manifest
+        .as_ref()
+        .and_then(|m| m.openai_exchange_hook.as_deref())
+        .expect("the plugin declares the lifecycle hook");
+    assert_eq!(hook.deadline_ms, 2_000, "room for the hold: {hook:?}");
+    let handler = hook.handler.clone();
+
+    let started = Instant::now();
+    let denied = host.select(&handler, &remote(DENIED), 1).await;
+    assert_eq!(denied["decision"], "deny", "{denied}");
+    assert!(
+        started.elapsed() < Duration::from_millis(400),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        0,
+        "a denied request reads no status"
+    );
+
+    let started = Instant::now();
+    let allowed = host.select(&handler, &remote(ALLOWED), 2).await;
+    let held = started.elapsed();
+    assert_eq!(allowed["decision"], "allow", "{allowed}");
+    assert!(
+        held >= Duration::from_millis(450) && held < Duration::from_millis(1_750),
+        "held for the set-up, released at the hold: {held:?}"
+    );
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        1,
+        "the provider's model was read"
+    );
+    let agreement_streams = host
+        .others
+        .iter()
+        .filter(|payload| {
+            matches!(payload, Payload::OpenMeshStreamRequest(open)
+                if open.channel == "x-capsules-agreement/1" && open.target_peer_id == ALLOWED)
+        })
+        .count();
+    assert_eq!(
+        agreement_streams, 1,
+        "the set-up asked for an agreement stream: {:?}",
+        host.others
+    );
+
+    host.shutdown().await;
 }

@@ -79,13 +79,22 @@ fn responder_timeout() -> Duration {
     env_millis("CAPSULES_AGREEMENT_RESPONDER_TIMEOUT_MS", 10_000)
 }
 
+/// Room the hold leaves under the declared deadline for the decision itself.
+const HOLD_MARGIN_MS: u64 = 250;
+
 /// How long after the admission hook is called a request may be held for
 /// its session set-up. Off (0) unless the operator sets it, since the plugin
 /// cannot see the grant's `deadline_ms`, which it must stay below; at most
-/// [`crate::admission::HOOK_DEADLINE_MS`], what the hook declares.
-fn hook_wait() -> Duration {
-    env_millis("CAPSULES_AGREEMENT_HOOK_WAIT_MS", 0)
-        .min(Duration::from_millis(crate::admission::HOOK_DEADLINE_MS))
+/// [`HOLD_MARGIN_MS`] under [`crate::admission::HOOK_DEADLINE_MS`], what the
+/// hook declares. Read once, at the first call (`main.rs` makes it at
+/// start), so the hook never reads a setting while it holds a request.
+pub fn hook_wait() -> Duration {
+    static WAIT: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *WAIT.get_or_init(|| {
+        env_millis("CAPSULES_AGREEMENT_HOOK_WAIT_MS", 0).min(Duration::from_millis(
+            crate::admission::HOOK_DEADLINE_MS - HOLD_MARGIN_MS,
+        ))
+    })
 }
 
 /// The bounded wait for one frame's round trip, connect included (R9).
@@ -722,10 +731,11 @@ pub async fn hold_for_session(
     peer_id: String,
     entered: Instant,
 ) {
-    let Some(terms) = SessionTerms::from_settings() else {
-        return;
-    };
     let set_up = tokio::spawn(async move {
+        let terms = tokio::task::spawn_blocking(SessionTerms::from_settings).await;
+        let Ok(Some(terms)) = terms else {
+            return;
+        };
         let Some(model) = crate::host_status::peer_model_now(&peer_id).await else {
             return;
         };
@@ -745,8 +755,9 @@ async fn wait_at_most(budget: Duration, task: tokio::task::JoinHandle<()>) -> bo
     tokio::time::timeout(budget, task).await.is_ok()
 }
 
-/// Whether this node keeps a complete session with the node `peer_id`, in
-/// either role: what makes reading a model for its exchange worth it.
+/// Whether this node keeps an unexpired complete session with the node
+/// `peer_id`, in either role: what makes reading a model for its exchange
+/// worth it.
 pub fn holds_session_with(capsules: &CapsuleState, peer_id: &str) -> bool {
     let registry = crate::peer_keys::registry();
     let Some(key) = crate::peer_keys::announced_key_in(registry.as_deref(), peer_id) else {
@@ -754,6 +765,7 @@ pub fn holds_session_with(capsules: &CapsuleState, peer_id: &str) -> bool {
     };
     complete_sessions(&Store::open(capsules.ledger_dir()))
         .iter()
+        .filter(|c| c.end >= now())
         .any(|c| {
             text(&c.record, "proposer") == Some(key.as_str())
                 || text(&c.record, "acceptor") == Some(key.as_str())
@@ -936,13 +948,19 @@ mod tests {
         crate::peer_keys::announced::announce_for_test(&requester_node, &own_key(&p.requester));
         crate::peer_keys::announced::announce_for_test(&provider_node, &own_key(&p.provider));
         assert!(!holds_session_with(&p.requester, &provider_node));
-        p.agree(NOW);
+        p.agree(now());
         assert!(holds_session_with(&p.requester, &provider_node));
         assert!(holds_session_with(&p.provider, &requester_node));
         assert!(
             !holds_session_with(&p.requester, &"7c".repeat(32)),
             "an unannounced peer"
         );
+
+        // One that has expired is not held.
+        let q = pair();
+        crate::peer_keys::announced::announce_for_test(&"7d".repeat(32), &own_key(&q.provider));
+        q.agree(now() - 2 * 3_600);
+        assert!(!holds_session_with(&q.requester, &"7d".repeat(32)));
     }
 
     fn node(dir: &std::path::Path, name: &str) -> CapsuleState {
