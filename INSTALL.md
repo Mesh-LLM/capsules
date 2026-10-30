@@ -125,6 +125,12 @@ exchanges ended; the record itself goes only to the counterparty:
 | One of this node's records, when a peer asks for it by id | the peer that record names as the other side | on: an answer, never a push | `share_history_segments = "off"` |
 | A signed checkpoint of the log | the witness services you name | **off**: none by default | add witnesses under **Witnesses** |
 
+The value this node is acting on is written to `sharing-effective.json` in
+its data directory (`share_record_at_completion`: `counterparty` or `off`,
+plus `source`: `env`, `console` or `default`, and `written_at`). A value the
+plugin does not know is `off`, with the value you set shown as `raw_value`.
+The file is the node's own report, unsigned, and is never sent to a peer.
+
 The referee also needs the pair's text on this node. Stock mesh-llm passes no
 exchange text to plugins, so the client that marked the pair supplies it
 (`referee_supply_twin_texts`: the request and both answers). They are kept

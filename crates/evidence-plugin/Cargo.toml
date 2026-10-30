@@ -230,11 +230,11 @@ opt-level = 3
 [patch.crates-io]
 mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "a39211e78f3dd73cf9a94b08417c0da17e5fa5d9" }
 # The interop profile's acceptance records (`acceptance` feature,
-# agent-action-capsule #454) are on its main but in no published
-# evidence-request yet. Taken from that merge commit until a release carries
-# it; the patch replaces the crate for evidencebook too, so the graph keeps
+# agent-action-capsule #454) and the §11.1.5 rule 2 equal-time fix (#461)
+# are on its main but in no published evidence-request yet. Taken from #461's
+# merge commit until a release carries them; the patch replaces the crate for evidencebook too, so the graph keeps
 # one evidence-request (`cargo tree -d` shows none twice).
-evidence-request = { git = "https://github.com/action-state-group/agent-action-capsule", rev = "a8f7ac7f9d4b76d96796885e5eac795211c28180" }
+evidence-request = { git = "https://github.com/action-state-group/agent-action-capsule", rev = "d59c57b5cd63985b3be1e6de238f42531e93b3fd" }
 
 # x-deal-v0 (`deal` feature, evidencebook#93/#180) is on evidencebook main but in no published
 # evidencebook yet; `produce::build`, the Go-identical Rust seal (capsule-emit#383), is on

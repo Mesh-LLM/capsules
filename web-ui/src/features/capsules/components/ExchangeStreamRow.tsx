@@ -14,6 +14,7 @@ import { StatusBadge, type StatusBadgeTone } from '@/components/ui/StatusBadge'
 import { cn } from '@/lib/cn'
 import type { CapsuleRecord } from '@/features/capsules/api/types'
 import { SeeInLogsLink } from '@/features/capsules/components/ExchangeIdCell'
+import { AgreementStrip } from '@/features/capsules/components/AgreementStrip'
 import { ExchangeRowChips } from '@/features/capsules/components/ExchangeRowChips'
 import { SecurityChecksView } from '@/features/capsules/components/SecurityChecksView'
 import {
@@ -652,6 +653,10 @@ export function ExchangeStreamRow({
            node's own payment records for it. */}
         <SettlementStrip settlement={row.raw.settlement} />
         <ProviderSettlementStrip requester={row.raw.counterparty} settlement={row.raw.provider_settlement} />
+        <AgreementStrip
+          agreement={row.raw.agreement}
+          paid={Boolean(row.raw.settlement || row.raw.provider_settlement)}
+        />
         {/* v3 §2's row footer: two independent
            disclosure toggles, never a modal. Always present, regardless of
            the right-cell state. */}

@@ -62,7 +62,10 @@
 //! `counterparty_half` citing record AND a second, `counterparty_inclusion`
 //! citing record -- the row reaches "in their log" in one step. A receiver
 //! that predates bundles refuses one `request_malformed` (no top-level
-//! `capsule_id`); the sender then re-pushes the bare capsule once.
+//! `capsule_id`); the sender then re-pushes the bare capsule once. A bundle
+//! also carries this node's own controller binding, whole, while it holds
+//! one that applies ([`own_binding`]); a receiver that does not take that
+//! member refuses `bundle_malformed`, and the bundle goes again without it.
 //!
 //! **Single `on_open_stream` slot.** The plugin SDK gives a plugin exactly
 //! ONE `on_open_stream` handler slot (`SimplePlugin::open_stream_handler:
@@ -118,6 +121,26 @@ pub fn split_bundle_body(
 ) -> serde_json::Value {
     let mut body = bundle_body(capsule_json, coverage);
     body[SPLIT_STAGE_RECORDS] = serde_json::Value::Array(stage_records.to_vec());
+    body
+}
+
+/// [`split_bundle_body`] (or [`bundle_body`] with no stage records) plus
+/// this node's own controller binding, whole, as
+/// [`crate::record_push_receive::CONTROLLER_BINDING`] when given.
+pub fn carrying_bundle_body(
+    capsule_json: &serde_json::Value,
+    coverage: &Coverage,
+    stage_records: &[serde_json::Value],
+    controller_binding: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let mut body = if stage_records.is_empty() {
+        bundle_body(capsule_json, coverage)
+    } else {
+        split_bundle_body(capsule_json, coverage, stage_records)
+    };
+    if let Some(binding) = controller_binding {
+        body[crate::controller_binding::MEMBER] = binding.clone();
+    }
     body
 }
 
@@ -570,6 +593,8 @@ async fn seal_citing_record(
         .and_then(|v| v.as_str())
         .map(str::to_string);
     let accepted_via = accepted_key.map(|a| a.via.clone());
+    let controller_binding = accepted_key.and_then(|a| a.binding.clone());
+    let tied = own_half_tie(capsules, &foreign, sender_peer_id, via).await;
     let capsules = capsules.clone();
 
     let sealed = tokio::task::spawn_blocking(move || {
@@ -589,9 +614,19 @@ async fn seal_citing_record(
             foreign_agent_output_digest: foreign_output.as_deref(),
             sender_key_id: sender_key_id.as_deref(),
             accepted_via: accepted_via.as_ref(),
+            controller_binding: controller_binding.as_ref(),
+            same_controller_as_receiver: same_controller_as_receiver(
+                &capsules,
+                controller_binding.as_ref(),
+                sender_key_id.as_deref(),
+                &crate::producer::timestamp::utc_now_iso8601(),
+            ),
+            own_half_capsule_id: tied.as_deref(),
         };
         capsules
-            .emit_citing_record(&prov)
+            .emit_citing_record_checked(&prov, |own| {
+                own_half(&capsules, &foreign, &received_from) == OwnHalf::Tied(own.to_string())
+            })
             .map(|emitted| (foreign_capsule_id, received_from, emitted))
     })
     .await
@@ -609,6 +644,150 @@ async fn seal_citing_record(
         }
     }
     Ok(())
+}
+
+/// This node's own controller binding, whole, when it holds one that binds
+/// its key and applies now (`controller_binding::held_applying`): what a
+/// push bundle carries to the exchange's counterparty.
+pub fn own_binding(capsules: &CapsuleState) -> Option<serde_json::Value> {
+    let own_key = hex::encode(capsules.signing_key().verifying_key().to_bytes());
+    let now = crate::producer::timestamp::utc_now_iso8601();
+    crate::controller_binding::held_applying(
+        capsules.ledger_dir().parent()?,
+        &own_key,
+        evidence_request::time::parse_utc(&now)?,
+    )
+    .map(|(record, _)| record)
+}
+
+/// [`crate::controller_binding::same_controller`] for a carried binding of
+/// `sender_key`, against this node's own binding at `now`.
+pub(crate) fn same_controller_as_receiver(
+    capsules: &CapsuleState,
+    carried: Option<&crate::controller_binding::Applied>,
+    sender_key: Option<&str>,
+    now: &str,
+) -> Option<bool> {
+    let own_key = hex::encode(capsules.signing_key().verifying_key().to_bytes());
+    crate::controller_binding::same_controller(
+        carried?,
+        sender_key?,
+        capsules.ledger_dir().parent()?,
+        &own_key,
+        evidence_request::time::parse_utc(now)?,
+    )
+}
+
+/// How long a pushed half waits for this node's own half of the same
+/// exchange to seal. Each side pushes within moments of sealing, so the
+/// other side's half can arrive first; the citing record is sealed before
+/// the ack, so the wait stays well inside the pusher's reply timeout
+/// (`CAPSULES_MESH_REQUEST_TIMEOUT_MS`, 8 s by default).
+const OWN_HALF_WAIT: Duration = Duration::from_secs(2);
+const OWN_HALF_POLL: Duration = Duration::from_millis(50);
+
+/// Whether this node's own half of `foreign`'s exchange can be named.
+#[derive(Debug, PartialEq, Eq)]
+enum OwnHalf {
+    /// Exactly one own half with the sender binds the nonce, and no other
+    /// held half does.
+    Tied(String),
+    /// No own half binds it yet.
+    NotYet,
+    /// No usable nonce, more than one own half with the sender or another
+    /// held half binds it (a client-set nonce can repeat, and a wrong pair is
+    /// worse than none), or the half is already cited.
+    Untied,
+}
+
+/// This node's own half of `foreign`'s exchange with `sender`, for the
+/// citing record's `own_half_capsule_id`. A pushed half waits up to
+/// [`OWN_HALF_WAIT`] for the own half to seal; an asked one never waits (its
+/// exchange is over).
+async fn own_half_tie(
+    capsules: &Arc<CapsuleState>,
+    foreign: &serde_json::Value,
+    sender: &str,
+    via: &str,
+) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + OWN_HALF_WAIT;
+    loop {
+        let (capsules, foreign, sender) = (capsules.clone(), foreign.clone(), sender.to_string());
+        let look = tokio::task::spawn_blocking(move || own_half(&capsules, &foreign, &sender));
+        // The deadline bounds the look too: a tie found after it is not taken.
+        match tokio::time::timeout_at(deadline, look).await {
+            Ok(Ok(OwnHalf::Tied(id))) => return Some(id),
+            Ok(Ok(OwnHalf::NotYet))
+                if via == "push" && tokio::time::Instant::now() + OWN_HALF_POLL < deadline =>
+            {
+                tokio::time::sleep(OWN_HALF_POLL).await;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// One look for `foreign`'s own half: the own records binding its client
+/// nonce (`evidence_log`'s nonce index, which only exchange halves enter)
+/// whose counterparty is `sender` -- a push or an ask comes from the node the
+/// own half names (`main.rs`'s `push_counterparty`), so an own half of an
+/// earlier exchange with another peer under a reused nonce is never taken --
+/// then, once exactly one is, the other held halves binding the nonce.
+fn own_half(capsules: &CapsuleState, foreign: &serde_json::Value, sender: &str) -> OwnHalf {
+    let (Some(nonce), Some(foreign_id)) = (
+        crate::evidence_log::client_nonce_digest(foreign),
+        foreign.get("capsule_id").and_then(|v| v.as_str()),
+    ) else {
+        return OwnHalf::Untied;
+    };
+    let own = crate::evidence_log::with_index(
+        capsules.ledger_dir(),
+        &crate::commitment::key_id(capsules.signing_key()),
+        |index| {
+            // Already cited: nothing will be sealed, so there is nothing to
+            // wait for.
+            if !index.citing(foreign_id).is_empty() {
+                return None;
+            }
+            Some(
+                index
+                    .by_client_nonce(&nonce)
+                    .iter()
+                    .filter_map(|&leaf| index.leaves.get(usize::try_from(leaf).ok()?))
+                    .filter(|leaf| leaf.counterparty.as_deref() == Some(sender))
+                    .map(|leaf| leaf.capsule_id.clone())
+                    .collect::<Vec<_>>(),
+            )
+        },
+    );
+    match own.as_ref().map(|own| own.as_deref()) {
+        Ok(Some([])) => OwnHalf::NotYet,
+        Ok(Some([one])) if !held_half_shares_nonce(capsules.ledger_dir(), &nonce, foreign_id) => {
+            OwnHalf::Tied(one.clone())
+        }
+        _ => OwnHalf::Untied,
+    }
+}
+
+/// Whether a held half other than `foreign_id` binds the client nonce whose
+/// digest is `nonce`. A torn or garbled line is skipped, as the receiver
+/// skips one; a store that cannot be read at all counts as shared, since the
+/// check could not be made.
+fn held_half_shares_nonce(ledger_dir: &std::path::Path, nonce: &str, foreign_id: &str) -> bool {
+    let bytes = match std::fs::read(
+        ledger_dir.join(crate::record_push_receive::RECEIVED_CAPSULES_FILENAME),
+    ) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+    bytes
+        .split(|&b| b == b'\n')
+        .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+        .any(|held| {
+            held.get("capsule_id").and_then(|v| v.as_str()) != Some(foreign_id)
+                && crate::evidence_log::client_nonce_digest(&held).as_deref() == Some(nonce)
+        })
 }
 
 /// Hold a record this node asked `peer_id` for (`mesh_evidence_request`)
@@ -734,13 +913,21 @@ async fn seal_inclusion_citing_record_for_push(
 /// `capsule_json` (this node's own just-sealed capsule, unmodified -- a
 /// receiver holds it as transmitted, never re-signed), self-
 /// declaring `self_peer_id` as the sender (see module doc's "wire shape").
-/// With `coverage` the body is the bundle (module doc, "push-a-bundle");
-/// a `request_malformed` refusal of a bundle is read as a receiver that
+/// With `coverage` the body is the bundle (module doc, "push-a-bundle"),
+/// carrying `split_stage_records` and `controller_binding` when given; a
+/// `request_malformed` refusal of a bundle is read as a receiver that
 /// predates bundles, and the bare capsule is pushed once more.
 /// Best-effort by design -- the caller (`main.rs`'s seal-on-observe path)
 /// logs success/failure and never lets a push failure disturb sealing or
 /// channel-message processing, same discipline as
 /// `seal_observed_host_exchange`'s own producer-error handling.
+///
+/// `controller_binding` is this node's own binding, whole
+/// (`controller_binding::held_applying`). It names the operator's Nostr key,
+/// so it goes only to `peer_id`, the exchange's counterparty, and only in a
+/// bundle: Steven's loop step 12 ruling has counterparties verify the full
+/// record while the public commitment names it by digest alone
+/// (Mesh-LLM/capsules-plugin#113).
 pub async fn push_capsule_to_peer(
     context: &mut PluginContext<'_>,
     peer_id: &str,
@@ -748,23 +935,20 @@ pub async fn push_capsule_to_peer(
     capsule_json: &serde_json::Value,
     coverage: Option<&Coverage>,
     split_stage_records: &[serde_json::Value],
+    controller_binding: Option<&serde_json::Value>,
 ) -> anyhow::Result<()> {
     let response = match coverage {
-        Some(coverage) if !split_stage_records.is_empty() => {
-            let bundle = split_bundle_body(capsule_json, coverage, split_stage_records);
-            let response = send_push(context, peer_id, self_peer_id, &bundle).await?;
-            if refused_as_bundle_malformed(&response) {
-                // A receiver that reads bundles but not split stage records
-                // refuses the unknown member. The main record still goes;
-                // the requester then reads those stages as not received.
-                tracing::info!(%peer_id, "peer does not take split stage records -- re-pushing the plain bundle");
-                push_plain_bundle(context, peer_id, self_peer_id, capsule_json, coverage).await?
-            } else {
-                response
-            }
-        }
         Some(coverage) => {
-            push_plain_bundle(context, peer_id, self_peer_id, capsule_json, coverage).await?
+            push_bundle(
+                context,
+                peer_id,
+                self_peer_id,
+                capsule_json,
+                coverage,
+                split_stage_records,
+                controller_binding,
+            )
+            .await?
         }
         None if !split_stage_records.is_empty() => {
             tracing::warn!(%peer_id, "no checkpoint coverage, so the split's stage records cannot be carried -- pushing the bare record");
@@ -776,6 +960,75 @@ pub async fn push_capsule_to_peer(
         anyhow::bail!("peer {peer_id} refused record-push: {response}");
     }
     Ok(())
+}
+
+/// The bundle with what it carries beside the half. A receiver that reads
+/// bundles but not one of those members refuses `bundle_malformed`: the
+/// half still goes, first without the controller binding (the newer
+/// member), then without the split's stage records, which the requester
+/// then reads as not received. Stage records are as old as the receiver,
+/// so one that takes the binding refuses stages only when they are
+/// malformed; the half then goes without either, and its citing record
+/// reads as holding no binding rather than a wrong one. A receiver that
+/// predates bundles refuses `request_malformed` and gets the bare record.
+async fn push_bundle(
+    context: &mut PluginContext<'_>,
+    peer_id: &str,
+    self_peer_id: &str,
+    capsule_json: &serde_json::Value,
+    coverage: &Coverage,
+    mut split_stage_records: &[serde_json::Value],
+    mut controller_binding: Option<&serde_json::Value>,
+) -> anyhow::Result<serde_json::Value> {
+    while controller_binding.is_some() || !split_stage_records.is_empty() {
+        let bundle = carrying_bundle_body(
+            capsule_json,
+            coverage,
+            split_stage_records,
+            controller_binding,
+        );
+        let response = send_push(context, peer_id, self_peer_id, &bundle).await?;
+        match retry_after(&response, controller_binding.is_some()) {
+            Retry::Final => return Ok(response),
+            Retry::Bare => {
+                tracing::info!(%peer_id, "peer's receiver predates bundles -- re-pushing the bare record");
+                return send_push(context, peer_id, self_peer_id, capsule_json).await;
+            }
+            Retry::WithoutBinding => {
+                tracing::info!(%peer_id, "peer does not take a controller binding -- re-pushing the bundle without it");
+                controller_binding = None;
+            }
+            Retry::WithoutSplits => {
+                tracing::info!(%peer_id, "peer does not take split stage records -- re-pushing the plain bundle");
+                split_stage_records = &[];
+            }
+        }
+    }
+    push_plain_bundle(context, peer_id, self_peer_id, capsule_json, coverage).await
+}
+
+/// What [`push_bundle`] sends after a carrying bundle's reply.
+#[derive(Debug, PartialEq)]
+enum Retry {
+    /// The reply stands, accepted or refused.
+    Final,
+    /// The receiver predates bundles ([`refused_as_older_door`]).
+    Bare,
+    /// The receiver reads bundles but not a member: the newer one goes first.
+    WithoutBinding,
+    WithoutSplits,
+}
+
+fn retry_after(response: &serde_json::Value, carries_binding: bool) -> Retry {
+    if refused_as_older_door(response) {
+        Retry::Bare
+    } else if !refused_as_bundle_malformed(response) {
+        Retry::Final
+    } else if carries_binding {
+        Retry::WithoutBinding
+    } else {
+        Retry::WithoutSplits
+    }
 }
 
 fn refused_as_bundle_malformed(response: &serde_json::Value) -> bool {
@@ -910,6 +1163,52 @@ pub(crate) mod tests {
         coverage
     }
 
+    /// The node's own binding rides whole in the binding member, beside
+    /// split stage records or without them, and only when given.
+    #[test]
+    fn a_bundle_carries_the_held_binding_whole_only_when_given() {
+        let coverage = sample_coverage();
+        let half =
+            serde_json::json!({"capsule_id": "a".repeat(64), "signature": "s", "key_id": "k"});
+        let binding = serde_json::json!({"binding_version": "controller-binding/0"});
+        let member = crate::record_push_receive::CONTROLLER_BINDING;
+        assert_eq!(
+            carrying_bundle_body(&half, &coverage, &[], None),
+            bundle_body(&half, &coverage)
+        );
+        let carried = carrying_bundle_body(&half, &coverage, &[], Some(&binding));
+        assert_eq!(carried[member], binding);
+        assert_eq!(carried.as_object().unwrap().len(), 5);
+        let stages = [serde_json::json!({"stage": 1})];
+        let both = carrying_bundle_body(&half, &coverage, &stages, Some(&binding));
+        assert_eq!(both[member], binding);
+        assert_eq!(both[SPLIT_STAGE_RECORDS], serde_json::json!(stages));
+        assert_eq!(pushed_half(&both), &half);
+    }
+
+    /// What a push carries is the node's own binding while it applies,
+    /// never another node's.
+    #[test]
+    fn own_binding_is_the_held_binding_of_this_nodes_key_while_it_applies() {
+        let dir = tempfile::tempdir().unwrap();
+        let capsules = CapsuleState::open(dir.path(), "rust-node").unwrap();
+        assert_eq!(own_binding(&capsules), None);
+        let operator = k256::schnorr::SigningKey::from_bytes(&[7; 32]).unwrap();
+        let now = crate::producer::timestamp::utc_now_iso8601();
+        let at = evidence_request::time::parse_utc(&now).unwrap();
+        let until = chrono::Utc::now() + chrono::Duration::days(1);
+        let binding = crate::controller_binding::bind_to_nostr_for_test(
+            capsules.signing_key(),
+            &operator,
+            "0123456789abcdef0123456789abcdef",
+            "2026-01-01T00:00:00Z",
+            &until.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        );
+        let own = hex::encode(capsules.signing_key().verifying_key().to_bytes());
+        crate::controller_binding::store_held(dir.path(), &binding, &own, at).unwrap();
+        assert_eq!(own_binding(&capsules), Some(binding));
+    }
+
     #[test]
     fn bundle_body_carries_the_half_unchanged_beside_proof_and_checkpoint() {
         let coverage = sample_coverage();
@@ -937,6 +1236,34 @@ pub(crate) mod tests {
         );
         assert_eq!(pushed_half(&body), &half);
         assert_eq!(pushed_half(&half), &half);
+    }
+
+    /// A carrying bundle's reply decides the next push: a receiver that
+    /// predates bundles gets the bare record, as a plain bundle's would
+    /// (Mesh-LLM/capsules-plugin#113 carries the binding on every push).
+    #[test]
+    fn a_carrying_bundle_falls_back_by_its_reply() {
+        let reply = |reason: &str| serde_json::json!({"reason": reason});
+        let received = serde_json::json!({"status": "received"});
+        for carries_binding in [true, false] {
+            assert_eq!(
+                retry_after(&reply("request_malformed"), carries_binding),
+                Retry::Bare
+            );
+            assert_eq!(retry_after(&received, carries_binding), Retry::Final);
+            assert_eq!(
+                retry_after(&reply("signature_unverified"), carries_binding),
+                Retry::Final
+            );
+        }
+        assert_eq!(
+            retry_after(&reply("bundle_malformed"), true),
+            Retry::WithoutBinding
+        );
+        assert_eq!(
+            retry_after(&reply("bundle_malformed"), false),
+            Retry::WithoutSplits
+        );
     }
 
     #[test]
@@ -1061,6 +1388,316 @@ pub(crate) mod tests {
         assert_eq!(citing.len(), 1, "cited once: {citing:?}");
         assert_eq!(citing[0]["cited_capsule_id"], id);
         assert_eq!(citing[0]["via"], "ask");
+    }
+
+    /// One exchange half sealed by `state` under `nonce`, served to
+    /// `counterparty`.
+    fn half(
+        state: &CapsuleState,
+        nonce: &str,
+        exchange_id: &str,
+        counterparty: &str,
+    ) -> serde_json::Value {
+        state
+            .emit_for_exchange(&crate::capsule_emit::ExchangeRecord {
+                model: "m",
+                client_nonce: Some(nonce),
+                request_bytes: br#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#,
+                response_bytes:
+                    br#"{"id":"x","choices":[{"message":{"role":"assistant","content":"y"}}]}"#,
+                latency_ms: 1.0,
+                exchange_id: Some(exchange_id),
+                requesting_party: Some(counterparty),
+                host_provenance: None,
+            })
+            .unwrap()
+            .capsule
+    }
+
+    /// The `received_half` blocks of `state`'s citing records, oldest first.
+    fn received_halves(state: &CapsuleState) -> Vec<serde_json::Value> {
+        std::fs::read_to_string(state.ledger_dir().join("capsules.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| {
+                serde_json::from_str::<serde_json::Value>(l)
+                    .unwrap()
+                    .pointer("/model_attestation/compute_attestation/received_half")
+                    .cloned()
+            })
+            .collect()
+    }
+
+    /// Two nodes for one test: `theirs` seals the halves pushed or asked
+    /// for, and `peer` is announced with its key so `mine` holds them.
+    fn two_nodes(
+        peer: &str,
+    ) -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        CapsuleState,
+        Arc<CapsuleState>,
+    ) {
+        let theirs_dir = tempfile::tempdir().unwrap();
+        let mine_dir = tempfile::tempdir().unwrap();
+        let theirs = CapsuleState::open(theirs_dir.path(), "their-node").unwrap();
+        let mine = Arc::new(CapsuleState::open(mine_dir.path(), "my-node").unwrap());
+        crate::peer_keys::announced::announce_for_test(
+            peer,
+            &crate::commitment::key_id(theirs.signing_key()),
+        );
+        (theirs_dir, mine_dir, theirs, mine)
+    }
+
+    /// The citing record names this node's own half of the exchange, found by
+    /// the client nonce both halves bind (capsules-plugin#130), and the
+    /// member is part of the record's recomputed `capsule_id`.
+    #[tokio::test]
+    async fn a_citing_record_names_the_own_half_of_the_same_exchange() {
+        let peer = "peer-own-half-tied";
+        let (_t, _m, theirs, mine) = two_nodes(peer);
+        let own = half(&mine, "nonce-tied", "e-mine", peer);
+        let other = half(&mine, "nonce-elsewhere", "e-other", peer);
+        let foreign = half(&theirs, "nonce-tied", "e-theirs", "my-node");
+        let bytes = serde_json::to_vec(&foreign).unwrap();
+        assert!(hold_asked_record(&mine, peer, &bytes).await.unwrap());
+
+        let cited = received_halves(&mine);
+        assert_eq!(cited.len(), 1, "{cited:?}");
+        assert_eq!(cited[0]["cited_capsule_id"], foreign["capsule_id"]);
+        assert_eq!(cited[0]["own_half_capsule_id"], own["capsule_id"]);
+        assert_ne!(cited[0]["own_half_capsule_id"], other["capsule_id"]);
+        let record = std::fs::read_to_string(mine.ledger_dir().join("capsules.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .next_back()
+            .unwrap();
+        assert_eq!(
+            record["capsule_id"].as_str().unwrap(),
+            crate::producer::jcs::compute_capsule_id(&record).unwrap()
+        );
+    }
+
+    /// No own half under the nonce: the half is still held and cited, with
+    /// no `own_half_capsule_id` (an asked half never waits).
+    #[tokio::test]
+    async fn a_half_with_no_own_half_is_cited_untied() {
+        let peer = "peer-own-half-none";
+        let (_t, _m, theirs, mine) = two_nodes(peer);
+        half(&mine, "nonce-mine-only", "e-mine", peer);
+        let foreign = half(&theirs, "nonce-theirs-only", "e-theirs", "my-node");
+        let bytes = serde_json::to_vec(&foreign).unwrap();
+        assert!(hold_asked_record(&mine, peer, &bytes).await.unwrap());
+        let cited = received_halves(&mine);
+        assert_eq!(cited.len(), 1);
+        assert!(cited[0].get("own_half_capsule_id").is_none(), "{cited:?}");
+    }
+
+    /// A client-set nonce can repeat. Two own halves under it: no tie, since
+    /// a wrong pair is worse than none.
+    #[tokio::test]
+    async fn two_own_halves_under_one_nonce_tie_nothing() {
+        let peer = "peer-own-half-two-own";
+        let (_t, _m, theirs, mine) = two_nodes(peer);
+        half(&mine, "nonce-reused", "e-mine-1", peer);
+        half(&mine, "nonce-reused", "e-mine-2", peer);
+        let foreign = half(&theirs, "nonce-reused", "e-theirs", "my-node");
+        let bytes = serde_json::to_vec(&foreign).unwrap();
+        assert!(hold_asked_record(&mine, peer, &bytes).await.unwrap());
+        let cited = received_halves(&mine);
+        assert_eq!(cited.len(), 1);
+        assert!(cited[0].get("own_half_capsule_id").is_none(), "{cited:?}");
+    }
+
+    /// Two held halves under one nonce: the second ties nothing, even though
+    /// one own half binds it.
+    #[tokio::test]
+    async fn a_second_held_half_under_the_nonce_ties_nothing() {
+        let peer = "peer-own-half-two-held";
+        let (_t, _m, theirs, mine) = two_nodes(peer);
+        let own = half(&mine, "nonce-shared", "e-mine", peer);
+        let first = half(&theirs, "nonce-shared", "e-theirs-1", "my-node");
+        let second = half(&theirs, "nonce-shared", "e-theirs-2", "my-node");
+        for foreign in [&first, &second] {
+            let bytes = serde_json::to_vec(foreign).unwrap();
+            assert!(hold_asked_record(&mine, peer, &bytes).await.unwrap());
+        }
+        let cited = received_halves(&mine);
+        assert_eq!(cited.len(), 2, "{cited:?}");
+        assert_eq!(cited[0]["own_half_capsule_id"], own["capsule_id"]);
+        assert!(cited[1].get("own_half_capsule_id").is_none(), "{cited:?}");
+    }
+
+    /// A reused nonce: this node's only own half under it is of an earlier
+    /// exchange with another peer, whose half never arrived. A half from
+    /// this peer under the nonce is not tied to it.
+    #[tokio::test]
+    async fn an_own_half_with_another_peer_is_never_tied() {
+        let peer = "peer-own-half-other-peer";
+        let (_t, _m, theirs, mine) = two_nodes(peer);
+        half(
+            &mine,
+            "nonce-reused-across-peers",
+            "e-mine",
+            "some-other-peer",
+        );
+        let foreign = half(&theirs, "nonce-reused-across-peers", "e-theirs", "my-node");
+        let bytes = serde_json::to_vec(&foreign).unwrap();
+        assert!(hold_asked_record(&mine, peer, &bytes).await.unwrap());
+        let cited = received_halves(&mine);
+        assert_eq!(cited.len(), 1);
+        assert!(cited[0].get("own_half_capsule_id").is_none(), "{cited:?}");
+    }
+
+    /// The wait is bounded: a pushed half whose own half never seals is cited
+    /// untied once `OWN_HALF_WAIT` has passed, well inside the pusher's reply
+    /// timeout, and an asked half does not wait at all.
+    #[tokio::test]
+    async fn a_pushed_half_waits_at_most_the_bound_and_an_asked_one_not_at_all() {
+        let peer = "peer-own-half-bound";
+        let (_t, _m, theirs, mine) = two_nodes(peer);
+        let pushed = half(&theirs, "nonce-never-mine-1", "e-theirs-1", "my-node");
+        let asked = half(&theirs, "nonce-never-mine-2", "e-theirs-2", "my-node");
+
+        let started = std::time::Instant::now();
+        seal_citing_record(
+            &mine,
+            peer,
+            &serde_json::to_vec(&pushed).unwrap(),
+            "push",
+            None,
+        )
+        .await
+        .unwrap();
+        let waited = started.elapsed();
+        assert!(waited >= OWN_HALF_WAIT - OWN_HALF_POLL, "{waited:?}");
+        assert!(
+            waited < OWN_HALF_WAIT + Duration::from_secs(1),
+            "{waited:?}"
+        );
+
+        let started = std::time::Instant::now();
+        assert!(
+            hold_asked_record(&mine, peer, &serde_json::to_vec(&asked).unwrap())
+                .await
+                .unwrap()
+        );
+        assert!(
+            started.elapsed() < OWN_HALF_WAIT / 2,
+            "{:?}",
+            started.elapsed()
+        );
+
+        let cited = received_halves(&mine);
+        assert_eq!(cited.len(), 2, "{cited:?}");
+        assert!(
+            cited.iter().all(|c| c.get("own_half_capsule_id").is_none()),
+            "{cited:?}"
+        );
+
+        // A re-push of the half already cited does not wait again.
+        let started = std::time::Instant::now();
+        seal_citing_record(
+            &mine,
+            peer,
+            &serde_json::to_vec(&pushed).unwrap(),
+            "push",
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            started.elapsed() < OWN_HALF_WAIT / 2,
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    /// The look and the seal are not one step: an own half sealed between
+    /// them makes the nonce ambiguous, and the check made again under the
+    /// ledger lock seals the record untied.
+    #[tokio::test]
+    async fn an_own_half_sealed_after_the_look_unties_the_record() {
+        let peer = "peer-own-half-race";
+        let (_t, _m, theirs, mine) = two_nodes(peer);
+        let own = half(&mine, "nonce-race", "e-mine-1", peer);
+        let foreign = half(&theirs, "nonce-race", "e-theirs", "my-node");
+        let tied = own_half_tie(&mine, &foreign, peer, "ask").await;
+        assert_eq!(tied.as_deref(), own["capsule_id"].as_str());
+        half(&mine, "nonce-race", "e-mine-2", peer);
+
+        let foreign_id = foreign["capsule_id"].as_str().unwrap();
+        let prov = ReceivedHalfProvenance {
+            foreign_capsule_id: foreign_id,
+            received_from: peer,
+            via: "ask",
+            received_at: "2026-10-30T06:00:00Z",
+            signature_ok: true,
+            digest_match: None,
+            foreign_agent_input_digest: None,
+            foreign_agent_output_digest: None,
+            sender_key_id: None,
+            accepted_via: None,
+            controller_binding: None,
+            same_controller_as_receiver: None,
+            own_half_capsule_id: tied.as_deref(),
+        };
+        mine.emit_citing_record_checked(&prov, |own| {
+            own_half(&mine, &foreign, peer) == OwnHalf::Tied(own.to_string())
+        })
+        .unwrap()
+        .expect("a new citing record");
+        let cited = received_halves(&mine);
+        assert_eq!(cited.len(), 1);
+        assert!(cited[0].get("own_half_capsule_id").is_none(), "{cited:?}");
+    }
+
+    /// A garbled line in the held store is skipped, not taken as "no other
+    /// held half": a conflicting half after it still unties.
+    #[test]
+    fn a_garbled_held_line_does_not_hide_a_held_half_under_the_nonce() {
+        let dir = tempfile::tempdir().unwrap();
+        let theirs = CapsuleState::open(dir.path(), "their-node").unwrap();
+        let other = half(&theirs, "nonce-held", "e-1", "my-node");
+        let nonce = crate::evidence_log::client_nonce_digest(&other).unwrap();
+        let store = dir
+            .path()
+            .join(crate::record_push_receive::RECEIVED_CAPSULES_FILENAME);
+        let mut bytes = b"{\"capsule_id\":\"\xff\xfe torn\n".to_vec();
+        bytes.extend(serde_json::to_vec(&other).unwrap());
+        bytes.push(b'\n');
+        std::fs::write(&store, bytes).unwrap();
+        assert!(held_half_shares_nonce(
+            dir.path(),
+            &nonce,
+            "some-other-half"
+        ));
+        assert!(!held_half_shares_nonce(
+            dir.path(),
+            &nonce,
+            other["capsule_id"].as_str().unwrap()
+        ));
+    }
+
+    /// The other side pushed first: the pushed half waits for this node's
+    /// own half to seal, then the citing record names it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_pushed_half_that_arrives_first_is_tied_when_the_own_half_seals() {
+        let peer = "peer-own-half-late";
+        let (_t, _m, theirs, mine) = two_nodes(peer);
+        let foreign = half(&theirs, "nonce-late", "e-theirs", "my-node");
+        let bytes = serde_json::to_vec(&foreign).unwrap();
+        let receiving = {
+            let mine = mine.clone();
+            tokio::spawn(async move { seal_citing_record(&mine, peer, &bytes, "push", None).await })
+        };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let own = half(&mine, "nonce-late", "e-mine", peer);
+        receiving.await.unwrap().unwrap();
+        let cited = received_halves(&mine);
+        assert_eq!(cited.len(), 1, "{cited:?}");
+        assert_eq!(cited[0]["own_half_capsule_id"], own["capsule_id"]);
     }
 
     /// After an ask, the held record is read back from disk like any other:

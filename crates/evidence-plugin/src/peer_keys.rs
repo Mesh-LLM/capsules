@@ -327,6 +327,11 @@ pub struct Accepted {
     /// in the registry: the host's peers when a host announced it, else the
     /// operator's names for it. Never empty.
     pub peers: Vec<String>,
+    /// The carried declaration, when it applies and binds the key, however
+    /// the key was accepted: a sender's operator binding (loop step 12)
+    /// rides beside a key its host announced too
+    /// (Mesh-LLM/capsules-plugin#113). Recorded, never gated on.
+    pub binding: Option<crate::controller_binding::Applied>,
 }
 
 /// Whether this node accepts `key_id`, from the operator's map
@@ -365,29 +370,39 @@ pub fn accepted_via(
             Accepted {
                 via: AcceptedVia::OperatorStopgap,
                 peers,
+                binding: None,
             }
         } else {
             Accepted {
                 via: AcceptedVia::HostAnnounced,
                 peers: hosted,
+                binding: None,
             }
         })
     };
     if key_id == own_key || binds_to_own(declaration, key_id, own_key, now) {
         return None;
     }
+    let binding = declaration
+        .zip(now)
+        .and_then(|(declaration, now)| crate::controller_binding::applies(declaration, now))
+        .filter(|applied| applied.other(key_id).is_some());
     if let Some(accepted) = direct(key_id) {
-        return Some(accepted);
+        return Some(Accepted {
+            binding,
+            ..accepted
+        });
     }
-    let applied = crate::controller_binding::applies(declaration?, now?)?;
-    let anchor = applied.other(key_id)?;
-    let anchored = direct(anchor)?;
+    let applied = binding?;
+    let anchor = applied.other(key_id)?.to_string();
+    let anchored = direct(&anchor)?;
     Some(Accepted {
         via: AcceptedVia::ControllerDeclaration {
             binding_digest: applied.digest.clone(),
-            anchor_key: anchor.to_string(),
+            anchor_key: anchor,
         },
         peers: anchored.peers,
+        binding: Some(applied),
     })
 }
 

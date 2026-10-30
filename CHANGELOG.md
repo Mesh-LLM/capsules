@@ -19,6 +19,18 @@
   "your receipt only", Mesh-LLM/capsules-plugin#134). `check_profile.py` accepts the built chains
   (`EVIDENCEBOOK_DEAL_PROFILE_DIR` runs it in the tests). Takes `evidencebook` and `capsule-emit`
   from git revs until their releases; not mergeable before then. Mesh-LLM/capsules-plugin#96.
+- **Counterparties receive and check the operator binding (loop step 12).** A node holding a
+  controller binding of its key to its operator's Nostr key carries it whole in the bundles it
+  pushes to an exchange's counterparty, in the existing `controller_binding` member, and never in
+  a request or an answer. A receiver that does not take the member refuses `bundle_malformed`, and
+  the bundle goes again without it. The receiver checks the binding applies and binds the half's
+  key, and its citing record's `received_half` carries `controller_binding_digest` however the key
+  was accepted, plus `same_controller_as_receiver` when the receiver holds its own binding (true
+  when both name the same operator key). The operator's Nostr key is never sealed: a declaration
+  anchored on a `bip340` key no longer records `controller_anchor_key_id`. Nothing new is gated.
+  `vectors/evidence-key-acceptance/cases.json` gains four operator-binding cases, covering
+  `same_controller_as_receiver` true, false and absent.
+  Mesh-LLM/capsules-plugin#113.
 - **A deal capsule goes to the counterparty of the exchange it is of.** A step or a report of an
   `x-deal-v0` deal names no counterparty itself, so under `share_history_segments=counterparties`
   it would have gone to nobody. The node now writes `deal-links.jsonl` in the ledger directory,
@@ -33,6 +45,24 @@
   the saved page checks the history card inside (its digest, the checkpoint signatures, the chain
   and the anchor) and shows the node's own per-week counts as it states them, saying the counts
   were not checked. Otherwise the page holds the card, as before. Mesh-LLM/capsules-plugin#96.
+- **Service evidence agreements on the Evidence page (M4, fourth part).** An Exchanges row shows
+  the agreement's coverage label for this node's side, the ordering finding ("accepted before the
+  exchange", or "agreement present; ordering not established" for an exchange in the receipt's
+  minute), the exchange count and the observed spend against the cap, marked "spend cap:
+  agent-origin assertion". "Covered" is shown in the good tone only when the agreement is shown
+  to come before the exchange. A paid exchange under no agreement says "no agreement"; one citing
+  an agreement this node does not keep says it is not evaluated here.
+  action-state-group/evidencebook#48.
+- **Service evidence agreements: coverage on the Exchanges rows (M4, third part).** Each row whose
+  own half this node sealed carries `agreement`: its side's coverage label (covered, outside the
+  window, over the count, over the cap, cap not evaluable, agreement present but not cited,
+  agreement set up after the exchange, no agreement, or not evaluated when the half cites a
+  session this node does not keep), the count and the observed spend against
+  the cap, the interop profile's §11.1.8 finding over the provider's served half, and the
+  contract's requirement results. A requester states no finding until it holds the provider's
+  served half. Agreement records and receipts now commit their times to the
+  minute, like every other committed time. See `docs/AGREEMENTS.md`.
+  action-state-group/evidencebook#48.
 - **Service evidence agreements: records cite the session (M4, second part).** A requested half,
   a served half, the payer's `delivered` leg and the provider's `payee_observed` leg under a
   session carry `"acceptance": {"type": "cites", "target": <digest>}` in their `x-mesh-poc-v1`
