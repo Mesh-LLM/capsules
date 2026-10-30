@@ -815,5 +815,8 @@ fn the_service_history_reply_fixture_is_what_the_node_serves() {
         std::fs::write(&path, &text).unwrap();
     }
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
-    assert_eq!(served["responder"], hex::encode(key.verifying_key().as_bytes()));
+    assert_eq!(
+        served["responder"],
+        hex::encode(key.verifying_key().as_bytes())
+    );
 }

@@ -56,7 +56,10 @@ fn latest_boundary_anchor(responder: &evidence_answer::Responder<'_>) -> Option<
                 .chain
                 .iter()
                 .rev()
-                .find(|c| crate::service_history::is_boundary(&c.record.timestamp))
+                .find(|c| {
+                    !crate::service_history::Definition::active()
+                        .declines_anchor(&c.record.timestamp)
+                })
                 .map(|c| c.anchor_digest())
         },
     )
@@ -72,7 +75,7 @@ pub(crate) fn serve(responder: &evidence_answer::Responder<'_>) -> Result<Value,
                 "profile": evidence_request::envelope::PROFILE,
                 "subject": {"full_history": null},
                 "coverage": {"expected_pin": pin},
-                "derivation": crate::service_history::DEFINITION_DIGEST,
+                "derivation": crate::service_history::definition_digest(),
             }))
             .expect("a JSON value serializes");
             return outcome_json(
