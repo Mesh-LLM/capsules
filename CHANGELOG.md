@@ -17,8 +17,8 @@
   `deal-payloads.jsonl`, and a step counts as sealed only if its Capsule is in the ledger, so a
   restart neither repeats a step nor loses one. The provider seals no deal (its receipt is
   "your receipt only", Mesh-LLM/capsules-plugin#134). `check_profile.py` accepts the built chains
-  (`EVIDENCEBOOK_DEAL_PROFILE_DIR` runs it in the tests). Takes `evidencebook` and `capsule-emit`
-  from git revs until their releases; not mergeable before then. Mesh-LLM/capsules-plugin#96.
+  (`EVIDENCEBOOK_DEAL_PROFILE_DIR` runs it in the tests). Takes `evidencebook` (feature `deal`)
+  from a git rev until its release; not mergeable before then. Mesh-LLM/capsules-plugin#96.
 - **Counterparties receive and check the operator binding (loop step 12).** A node holding a
   controller binding of its key to its operator's Nostr key carries it whole in the bundles it
   pushes to an exchange's counterparty, in the existing `controller_binding` member, and never in

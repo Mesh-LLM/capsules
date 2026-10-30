@@ -235,8 +235,9 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "capsule-emit"
-version = "0.0.8"
-source = "git+https://github.com/action-state-group/capsule-emit?rev=dbb9d33#dbb9d337e2f81d38ba6bb258560a77ab67f45c83"
+version = "0.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a702ce5401bfd9d6408a451334c974856b39ff163ffef590033634e2c02c9b6"
 dependencies = [
  "agent-action-capsule",
  "anyhow",
@@ -260,7 +261,8 @@ dependencies = [
 [[package]]
 name = "capsule-emit-artifact"
 version = "0.0.1"
-source = "git+https://github.com/action-state-group/capsule-emit?rev=dbb9d33#dbb9d337e2f81d38ba6bb258560a77ab67f45c83"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "464967f86e61bbb5c550fa66963338f9a7a1dc040842a8f54b43267a48009d45"
 dependencies = [
  "agent-action-capsule",
  "base64 0.22.1",

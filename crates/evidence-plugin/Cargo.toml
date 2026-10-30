@@ -142,7 +142,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # built-in service, no redirect followed); 0.0.8 sits on cll 0.3.1 directly,
 # with no evidencebook. Its canonicalizer turns on serde_json's
 # `arbitrary_precision` for the whole binary (see `strict_json`).
-capsule-emit-lib = { package = "capsule-emit", version = "0.0.8" }
+capsule-emit-lib = { package = "capsule-emit", version = "0.0.9" }
 cll = { package = "checkpointed-local-log", version = "0.3.1" }
 # Evidence requests are answered in-process (`evidence_answer`): parsing,
 # resolution and signed refusals come from the protocol crate
@@ -237,8 +237,6 @@ mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "a39211e
 evidence-request = { git = "https://github.com/action-state-group/agent-action-capsule", rev = "d59c57b5cd63985b3be1e6de238f42531e93b3fd" }
 
 # x-deal-v0 (`deal` feature, evidencebook#93/#180) is on evidencebook main but in no published
-# evidencebook yet; `produce::build`, the Go-identical Rust seal (capsule-emit#383), is on
-# capsule-emit main but in no crate past 0.0.8. Both are taken from these revs until releases
-# carry them; then these two patches go and the requirements above move to the releases.
+# evidencebook yet; taken from that rev until a release carries it; then this patch goes and the
+# requirement above moves to the release.
 evidencebook = { git = "https://github.com/action-state-group/evidencebook", rev = "248d6fef78cb28df8e37a836734bb7b58bab97a5" }
-capsule-emit = { git = "https://github.com/action-state-group/capsule-emit", rev = "dbb9d33" }
