@@ -131,6 +131,7 @@ fn cite(receiver: &Node, sender: &str, half: &Value, accepted: &Accepted) -> Val
             half["key_id"].as_str(),
             NOW,
         ),
+        own_half_capsule_id: None,
     };
     receiver
         .state

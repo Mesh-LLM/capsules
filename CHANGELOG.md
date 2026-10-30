@@ -30,6 +30,16 @@
   the saved page checks the history card inside (its digest, the checkpoint signatures, the chain
   and the anchor) and shows the node's own per-week counts as it states them, saying the counts
   were not checked. Otherwise the page holds the card, as before. Mesh-LLM/capsules-plugin#96.
+- **Service evidence agreements: coverage on the Exchanges rows (M4, third part).** Each row whose
+  own half this node sealed carries `agreement`: its side's coverage label (covered, outside the
+  window, over the count, over the cap, cap not evaluable, agreement present but not cited,
+  agreement set up after the exchange, no agreement, or not evaluated when the half cites a
+  session this node does not keep), the count and the observed spend against
+  the cap, the interop profile's §11.1.8 finding over the provider's served half, and the
+  contract's requirement results. A requester states no finding until it holds the provider's
+  served half. Agreement records and receipts now commit their times to the
+  minute, like every other committed time. See `docs/AGREEMENTS.md`.
+  action-state-group/evidencebook#48.
 - **Service evidence agreements: records cite the session (M4, second part).** A requested half,
   a served half, the payer's `delivered` leg and the provider's `payee_observed` leg under a
   session carry `"acceptance": {"type": "cites", "target": <digest>}` in their `x-mesh-poc-v1`

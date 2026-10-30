@@ -744,6 +744,13 @@ pub struct ReceivedHalfProvenance<'a> {
     /// this node's own binding binds its key to: one operator on both sides
     /// of the exchange. `None` when either binding is missing.
     pub same_controller_as_receiver: Option<bool>,
+    /// This node's own half of the same exchange, joined on a client nonce
+    /// that names exactly one own half and one held half
+    /// (`record_push_bridge::own_half_for`). It ties the earlier half to the
+    /// other side's: neither half can cite the other, since each is sealed
+    /// before its node can know the other's id. `None` when no own half is
+    /// sealed yet or the nonce is ambiguous -- an absent tie, never a guess.
+    pub own_half_capsule_id: Option<&'a str>,
 }
 
 /// Seal the LOCAL CITING record for a
@@ -798,6 +805,9 @@ pub fn seal_citing_record(
     }
     if let Some(key) = prov.sender_key_id {
         received_half.insert("sender_key_id".into(), json!(key));
+    }
+    if let Some(own) = prov.own_half_capsule_id {
+        received_half.insert("own_half_capsule_id".into(), json!(own));
     }
     if let Some(via) = prov.accepted_via {
         received_half.insert("accepted_via".into(), json!(via.token()));
@@ -2810,6 +2820,7 @@ mod tests {
             accepted_via: None,
             controller_binding: None,
             same_controller_as_receiver: None,
+            own_half_capsule_id: None,
         }
     }
 

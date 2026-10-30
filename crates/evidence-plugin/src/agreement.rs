@@ -221,6 +221,14 @@ fn digest(v: &Value) -> String {
     acceptance::record_digest(v).expect("a parsed or built value is JCS-representable")
 }
 
+/// A time a record commits to, truncated to the minute, as every committed
+/// time this plugin seals is (Evidence Layer -00 §12.1, "What a Checkpoint
+/// Reveals"; capsule-emit's `utc_now_minute`): a disclosed agreement must not
+/// reveal the node's activity pattern any finer than its other records do.
+pub fn committed_time(unix_seconds: i64) -> String {
+    profile_time(unix_seconds - unix_seconds.rem_euclid(60))
+}
+
 /// The profile's time form (§5.2), whole seconds, UTC.
 pub fn profile_time(unix_seconds: i64) -> String {
     chrono::DateTime::from_timestamp(unix_seconds, 0)
@@ -272,10 +280,10 @@ impl Proposal {
             "transaction": {"scheme": TRANSACTION_SCHEME, "id": session_id},
             "proposer": hex_key(requester),
             "acceptor": provider_key,
-            "issued_at": profile_time(now),
+            "issued_at": committed_time(now),
             "session": {
-                "not_before": profile_time(now),
-                "not_after": profile_time(now + terms.window_seconds as i64),
+                "not_before": committed_time(now),
+                "not_after": committed_time(now + terms.window_seconds as i64),
                 "policy": digest(&policy),
                 "terms": digest(&terms_doc),
             },
@@ -485,7 +493,7 @@ pub fn answer(checked: &CheckedProposal, provider: &SigningKey, accept: bool, no
         "proposal_digest".into(),
         Value::from(checked.digest.clone()),
     );
-    unsigned.insert("issued_at".into(), Value::from(profile_time(now)));
+    unsigned.insert("issued_at".into(), Value::from(committed_time(now)));
     sign(Value::Object(unsigned), provider)
 }
 
@@ -620,7 +628,7 @@ pub fn receipt(acceptance_digest: &str, requester: &SigningKey, now: i64) -> Val
         json!({
             "profile": PROFILE,
             "acceptance_digest": acceptance_digest,
-            "received_at": profile_time(now),
+            "received_at": committed_time(now),
             "receiver": hex_key(requester),
         }),
         requester,
@@ -794,6 +802,29 @@ mod tests {
             &["hf:example/model@main".to_string()],
             now,
         )
+    }
+
+    #[test]
+    fn committed_times_are_to_the_minute() {
+        let (p, q) = (key(1), key(2));
+        let proposal = proposal(&p, &q, NOW);
+        let r = &proposal.record;
+        let start = profile_time(NOW - NOW.rem_euclid(60));
+        assert_eq!(r["issued_at"], json!(start));
+        assert_eq!(r["session"]["not_before"], json!(start));
+        assert!(r["session"]["not_after"]
+            .as_str()
+            .unwrap()
+            .ends_with(":00Z"));
+        let checked = check_proposal(&proposal.to_message(), &hex_key(&q), NOW).unwrap();
+        assert!(answer(&checked, &q, true, NOW + 7)["issued_at"]
+            .as_str()
+            .unwrap()
+            .ends_with(":00Z"));
+        assert!(receipt(&"ab".repeat(32), &p, NOW + 7)["received_at"]
+            .as_str()
+            .unwrap()
+            .ends_with(":00Z"));
     }
 
     #[test]
@@ -1026,11 +1057,13 @@ mod tests {
         let (p, q) = (key(1), key(2));
         let proposal = proposal(&p, &q, NOW);
         assert!(check_proposal(&proposal.to_message(), &hex_key(&q), NOW - 120).is_ok());
+        // The window starts at the proposal's minute.
+        let start = NOW - NOW.rem_euclid(60);
         assert_eq!(
             check_proposal(
                 &proposal.to_message(),
                 &hex_key(&q),
-                NOW - CLOCK_SKEW_SECONDS - 1
+                start - CLOCK_SKEW_SECONDS - 1
             )
             .err(),
             Some(Refusal::Window)
