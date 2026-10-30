@@ -98,6 +98,16 @@ and how it was accepted (`accepted_via`: `host_announced`,
 `operator_stopgap` or `controller_declaration`). That is provenance only:
 nothing decides on it.
 
+A sender that holds a binding of its key to its operator's Nostr key (loop
+step 12) carries it whole in the bundles it pushes to the exchange's
+counterparty, and nowhere else. The receiver checks that it applies and
+binds the half's key, and its citing record then names the binding by its
+digest (`controller_binding_digest`) however the key was accepted. When the
+receiver holds its own binding, the record also says whether both bindings
+name the same operator key (`same_controller_as_receiver`). The record never
+names the operator's Nostr key: a declaration anchored on one records no
+`controller_anchor_key_id`.
+
 ## Reading records back (`share_history_segments`)
 
 A peer can ask this node for one of its records by id, over the plugin's

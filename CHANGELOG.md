@@ -4,6 +4,18 @@
 
 ### Added
 
+- **Counterparties receive and check the operator binding (loop step 12).** A node holding a
+  controller binding of its key to its operator's Nostr key carries it whole in the bundles it
+  pushes to an exchange's counterparty, in the existing `controller_binding` member, and never in
+  a request or an answer. A receiver that does not take the member refuses `bundle_malformed`, and
+  the bundle goes again without it. The receiver checks the binding applies and binds the half's
+  key, and its citing record's `received_half` carries `controller_binding_digest` however the key
+  was accepted, plus `same_controller_as_receiver` when the receiver holds its own binding (true
+  when both name the same operator key). The operator's Nostr key is never sealed: a declaration
+  anchored on a `bip340` key no longer records `controller_anchor_key_id`. Nothing new is gated.
+  `vectors/evidence-key-acceptance/cases.json` gains four operator-binding cases, covering
+  `same_controller_as_receiver` true, false and absent.
+  Mesh-LLM/capsules-plugin#113.
 - **A deal capsule goes to the counterparty of the exchange it is of.** A step or a report of an
   `x-deal-v0` deal names no counterparty itself, so under `share_history_segments=counterparties`
   it would have gone to nobody. The node now writes `deal-links.jsonl` in the ledger directory,

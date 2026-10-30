@@ -357,6 +357,7 @@ fn request_claimants(
         Some(crate::peer_keys::Accepted {
             via: crate::peer_keys::AcceptedVia::ControllerDeclaration { anchor_key, .. },
             peers,
+            ..
         }) => Claimed {
             nodes: peers,
             replay_key: anchor_key,

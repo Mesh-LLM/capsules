@@ -1,4 +1,5 @@
-//! D-34's acceptance cases (Mesh-LLM/capsules-plugin#69), end to end over
+//! D-34's acceptance cases (Mesh-LLM/capsules-plugin#69), and a pushed
+//! operator binding's (#113), end to end over
 //! real sealed records: what the receiver does with a push
 //! (`record_push_receive`), and the citing record this node then seals
 //! (`producer::capsule::seal_citing_record`), which records the sender's key
@@ -24,6 +25,23 @@ use crate::record_push_receive::{
 const NOW: &str = "2026-10-28T12:00:00Z";
 const FROM: &str = "2026-10-01T00:00:00Z";
 const UNTIL: &str = "2027-10-01T00:00:00Z";
+/// A `bip340` binding's nonce: 32 lowercase hex or more (CB §3.3).
+const NOSTR_NONCE: &str = "0123456789abcdef0123456789abcdef";
+
+/// A test operator's Nostr key.
+fn nostr(seed: u8) -> k256::schnorr::SigningKey {
+    k256::schnorr::SigningKey::from_bytes(&[seed; 32]).unwrap()
+}
+
+fn nostr_id(key: &k256::schnorr::SigningKey) -> String {
+    hex::encode(key.verifying_key().to_bytes())
+}
+
+/// The binding of `node_key` to the operator's Nostr key `operator`, as
+/// loop step 12's `join` makes it.
+fn operator_binding(node_key: &SigningKey, operator: &k256::schnorr::SigningKey) -> Value {
+    crate::controller_binding::bind_to_nostr_for_test(node_key, operator, NOSTR_NONCE, FROM, UNTIL)
+}
 
 fn key_id(key: &SigningKey) -> String {
     hex::encode(key.verifying_key().to_bytes())
@@ -106,6 +124,13 @@ fn cite(receiver: &Node, sender: &str, half: &Value, accepted: &Accepted) -> Val
         foreign_agent_output_digest: None,
         sender_key_id: half["key_id"].as_str(),
         accepted_via: Some(&accepted.via),
+        controller_binding: accepted.binding.as_ref(),
+        same_controller_as_receiver: crate::record_push_bridge::same_controller_as_receiver(
+            &receiver.state,
+            accepted.binding.as_ref(),
+            half["key_id"].as_str(),
+            NOW,
+        ),
         own_half_capsule_id: None,
     };
     receiver
@@ -269,6 +294,82 @@ fn cases() -> Vec<Value> {
         "node-n",
         &on_own,
     ));
+
+    // The sender's operator binding (loop step 12) rides in its bundle
+    // (Mesh-LLM/capsules-plugin#113). Each case pushes a half of its own
+    // sender: a half already held is acknowledged, never cited again.
+    let operator = nostr(0x51);
+    let bound = |dir: &Path| {
+        let (mut body, node_key) = bundle(dir);
+        body[crate::controller_binding::MEMBER] = operator_binding(&node_key, &operator);
+        let announced = BTreeMap::from([("node-n".to_string(), key_id(&node_key))]);
+        (body, announced)
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let (body, announced) = bound(dir.path());
+    out.push(case(
+        "operator_binding_beside_announced_key",
+        "a bundle whose half's key a host announced, carrying the sender's binding to its operator's Nostr key, is held: accepted_via host_announced, with the binding digest and never the Nostr key",
+        &receiver,
+        None,
+        &announced,
+        "node-n",
+        &body,
+    ));
+
+    let dir = tempfile::tempdir().unwrap();
+    let (body, _) = bound(dir.path());
+    let configured = format!(r#"{{"muse-operator": "{}"}}"#, nostr_id(&operator));
+    out.push(case(
+        "operator_binding_declaration",
+        "a bundle whose half's key only the sender's operator binding binds to a Nostr key the receiver's operator lists is held: accepted_via controller_declaration, with the binding digest and no anchor key, since the anchor is the operator's Nostr key",
+        &receiver,
+        Some(&configured),
+        &BTreeMap::new(),
+        "ephemeral-91c2",
+        &body,
+    ));
+
+    let same_operator = node("same-operator");
+    crate::controller_binding::store_held(
+        same_operator.state.ledger_dir().parent().unwrap(),
+        &operator_binding(same_operator.state.signing_key(), &operator),
+        &key_id(same_operator.state.signing_key()),
+        evidence_request::time::parse_utc(NOW).unwrap(),
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let (body, announced) = bound(dir.path());
+    out.push(case(
+        "operator_binding_same_controller",
+        "a receiver whose own binding names the same operator's Nostr key as the sender's holds the half and records same_controller_as_receiver: one operator on both sides, the key never sealed",
+        &same_operator,
+        None,
+        &announced,
+        "node-n",
+        &body,
+    ));
+
+    let other_operator = node("other-operator");
+    crate::controller_binding::store_held(
+        other_operator.state.ledger_dir().parent().unwrap(),
+        &operator_binding(other_operator.state.signing_key(), &nostr(0x52)),
+        &key_id(other_operator.state.signing_key()),
+        evidence_request::time::parse_utc(NOW).unwrap(),
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let (body, announced) = bound(dir.path());
+    out.push(case(
+        "operator_binding_other_controller",
+        "a receiver whose own binding names a different operator's Nostr key than the sender's holds the half and records same_controller_as_receiver: false, neither key sealed",
+        &other_operator,
+        None,
+        &announced,
+        "node-n",
+        &body,
+    ));
     out
 }
 
@@ -321,6 +422,52 @@ fn assert_case_holds(case: &Value) {
                 applied.other(half["key_id"].as_str().unwrap())
             );
         }
+        "operator_binding_beside_announced_key"
+        | "operator_binding_declaration"
+        | "operator_binding_same_controller"
+        | "operator_binding_other_controller" => {
+            let via = if name == "operator_binding_declaration" {
+                "controller_declaration"
+            } else {
+                "host_announced"
+            };
+            let facts = expect_held(via);
+            let binding = &case["push"]["body"][crate::controller_binding::MEMBER];
+            let applied = crate::controller_binding::applies(
+                binding,
+                evidence_request::time::parse_utc(NOW).unwrap(),
+            )
+            .expect("the carried binding applies");
+            let half_key = half["key_id"].as_str().unwrap();
+            let operator = applied.other(half_key).unwrap();
+            assert!(applied.is_bip340(operator), "{name}");
+            assert_eq!(facts["controller_binding_digest"], json!(applied.digest));
+            assert!(facts.get("controller_anchor_key_id").is_none(), "{name}");
+            assert!(
+                !case["citing_record"].to_string().contains(operator),
+                "{name}: the operator's Nostr key is never sealed"
+            );
+            if name == "operator_binding_other_controller" {
+                assert!(
+                    !case["citing_record"]
+                        .to_string()
+                        .contains(&nostr_id(&nostr(0x52))),
+                    "{name}: nor the receiver's own operator's"
+                );
+            }
+            // Three states loop#96 tells apart: true, false (checked, a
+            // different operator), and absent (no own binding to check).
+            let same = match name {
+                "operator_binding_same_controller" => Some(json!(true)),
+                "operator_binding_other_controller" => Some(json!(false)),
+                _ => None,
+            };
+            assert_eq!(
+                facts.get("same_controller_as_receiver"),
+                same.as_ref(),
+                "{name}"
+            );
+        }
         "known_transport_id_unknown_key"
         | "controller_declaration_on_receivers_own_key"
         | "known_key_declared_on_receivers_own_key" => {
@@ -336,7 +483,7 @@ fn assert_case_holds(case: &Value) {
 #[test]
 fn every_acceptance_case_holds_on_a_fresh_run() {
     let cases = cases();
-    assert_eq!(cases.len(), 6);
+    assert_eq!(cases.len(), 10);
     for case in &cases {
         assert_case_holds(case);
     }
@@ -374,6 +521,46 @@ fn a_refused_push_holds_nothing_and_the_announced_id_still_works() {
         1,
         "one held copy whatever id it came under"
     );
+}
+
+/// A pushed operator binding is verified and only its digest is kept: the
+/// receiver writes the operator's Nostr key nowhere in its data, so nothing
+/// it serves or pushes on can name it (Mesh-LLM/capsules-plugin#113).
+#[test]
+fn a_receiver_keeps_no_copy_of_the_senders_operator_key() {
+    let receiver = node("receiver");
+    let dir = tempfile::tempdir().unwrap();
+    let (mut body, node_key) = bundle(dir.path());
+    let operator = nostr(0x51);
+    body[crate::controller_binding::MEMBER] = operator_binding(&node_key, &operator);
+    let announced = BTreeMap::from([("node-n".to_string(), key_id(&node_key))]);
+    let (reply, accepted) = push(&receiver, None, &announced, &body, "node-n");
+    assert_eq!(reply["status"], "received", "{reply}");
+    let accepted = accepted.unwrap();
+    assert_eq!(accepted.via, AcceptedVia::HostAnnounced);
+    let citing = cite(&receiver, "node-n", &body["capsule"], &accepted);
+    assert_eq!(
+        received_half(&citing)["controller_binding_digest"],
+        json!(accepted.binding.unwrap().digest)
+    );
+
+    let operator = nostr_id(&operator);
+    let mut files = vec![receiver._dir.path().to_path_buf()];
+    let mut read = 0;
+    while let Some(path) = files.pop() {
+        if path.is_dir() {
+            files.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+        } else {
+            read += 1;
+            let bytes = std::fs::read(&path).unwrap();
+            assert!(
+                !String::from_utf8_lossy(&bytes).contains(&operator),
+                "{} names the operator's Nostr key",
+                path.display()
+            );
+        }
+    }
+    assert!(read > 1, "the receiver wrote its held stores");
 }
 
 /// A declaration that does not apply is not used: without it, expired, or
@@ -443,7 +630,7 @@ fn the_committed_fixtures_verify() {
     let doc: Value =
         serde_json::from_str(&std::fs::read_to_string(fixture_path()).unwrap()).unwrap();
     let cases = doc["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 6);
+    assert_eq!(cases.len(), 10);
     for name in [
         "known_key_other_transport_id",
         "known_transport_id_unknown_key",
@@ -451,6 +638,10 @@ fn the_committed_fixtures_verify() {
         "controller_declaration",
         "controller_declaration_on_receivers_own_key",
         "known_key_declared_on_receivers_own_key",
+        "operator_binding_beside_announced_key",
+        "operator_binding_declaration",
+        "operator_binding_same_controller",
+        "operator_binding_other_controller",
     ] {
         assert_case_holds(by_name(cases, name));
     }
@@ -463,7 +654,7 @@ fn the_committed_fixtures_verify() {
 fn writes_the_evidence_key_acceptance_fixtures() {
     let doc = json!({
         "v": 1,
-        "about": "D-34 acceptance (Mesh-LLM/capsules-plugin#69): pushes are accepted on the half's evidence key, not the sender id. Each case is a push to a receiver, its reply, and the citing record the receiver sealed when it held the half. Test keys only.",
+        "about": "D-34 acceptance (Mesh-LLM/capsules-plugin#69): pushes are accepted on the half's evidence key, not the sender id. Each case is a push to a receiver, its reply, and the citing record the receiver sealed when it held the half. The operator_binding cases carry the sender's binding to its operator's Nostr key (Mesh-LLM/capsules-plugin#113): the citing record seals its digest, and whether the receiver's own binding names the same operator, never the Nostr key. Test keys only.",
         "now": NOW,
         "cases": cases(),
     });

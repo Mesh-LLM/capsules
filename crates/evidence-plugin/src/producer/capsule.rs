@@ -734,6 +734,16 @@ pub struct ReceivedHalfProvenance<'a> {
     /// has no acceptance to record.
     pub sender_key_id: Option<&'a str>,
     pub accepted_via: Option<&'a crate::peer_keys::AcceptedVia>,
+    /// The controller binding the push carried, when it applies and binds
+    /// `sender_key_id` (`peer_keys::Accepted::binding`), however the key was
+    /// accepted. Only its digest is sealed: a `bip340` key in it is an
+    /// operator's Nostr identity, which the book never names (Steven's loop
+    /// step 12 ruling, Mesh-LLM/capsules-plugin#113).
+    pub controller_binding: Option<&'a crate::controller_binding::Applied>,
+    /// Whether that binding binds the sender's key to the same other key
+    /// this node's own binding binds its key to: one operator on both sides
+    /// of the exchange. `None` when either binding is missing.
+    pub same_controller_as_receiver: Option<bool>,
     /// This node's own half of the same exchange, joined on a client nonce
     /// that names exactly one own half and one held half
     /// (`record_push_bridge::own_half_for`). It ties the earlier half to the
@@ -807,8 +817,19 @@ pub fn seal_citing_record(
         } = via
         {
             received_half.insert("controller_binding_digest".into(), json!(binding_digest));
-            received_half.insert("controller_anchor_key_id".into(), json!(anchor_key));
+            if !prov
+                .controller_binding
+                .is_some_and(|binding| binding.is_bip340(anchor_key))
+            {
+                received_half.insert("controller_anchor_key_id".into(), json!(anchor_key));
+            }
         }
+    }
+    if let Some(binding) = prov.controller_binding {
+        received_half.insert("controller_binding_digest".into(), json!(binding.digest));
+    }
+    if let Some(same) = prov.same_controller_as_receiver {
+        received_half.insert("same_controller_as_receiver".into(), json!(same));
     }
 
     seal_local_citation(
@@ -2797,6 +2818,8 @@ mod tests {
             foreign_agent_output_digest: Some("b".repeat(64).leak()),
             sender_key_id: None,
             accepted_via: None,
+            controller_binding: None,
+            same_controller_as_receiver: None,
             own_half_capsule_id: None,
         }
     }

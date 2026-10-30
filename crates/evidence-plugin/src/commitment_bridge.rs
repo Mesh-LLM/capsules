@@ -122,11 +122,13 @@ pub(crate) fn own(capsules: &CapsuleState, node_id: Option<&str>) -> Result<Sign
 /// The digest of this node's own controller binding, when it holds one that
 /// binds its key and applies now (`controller_binding::binds_own`).
 fn held_digest(capsules: &CapsuleState, responder: &Responder<'_>) -> Option<String> {
-    let record = crate::controller_binding::read_held(capsules.ledger_dir().parent()?)?;
     let at = evidence_request::time::parse_utc(responder.now)?;
-    crate::controller_binding::binds_own(&record, &commitment::key_id(responder.signing_key), at)
-        .ok()
-        .map(|applied| applied.digest)
+    crate::controller_binding::held_applying(
+        capsules.ledger_dir().parent()?,
+        &commitment::key_id(responder.signing_key),
+        at,
+    )
+    .map(|(_, applied)| applied.digest)
 }
 
 /// The frame the responder writes.

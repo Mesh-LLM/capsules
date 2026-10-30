@@ -2207,6 +2207,8 @@ pub(crate) mod tests {
             foreign_agent_output_digest: None,
             sender_key_id: None,
             accepted_via: None,
+            controller_binding: None,
+            same_controller_as_receiver: None,
             own_half_capsule_id: None,
         };
         let citing = state
@@ -2293,6 +2295,8 @@ pub(crate) mod tests {
             foreign_agent_output_digest: None,
             sender_key_id: None,
             accepted_via: None,
+            controller_binding: None,
+            same_controller_as_receiver: None,
             own_half_capsule_id: None,
         };
         let half_citation = state.emit_citing_record(&prov).unwrap().unwrap();
