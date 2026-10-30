@@ -67,8 +67,9 @@ that names this id, and only then one for the model its status gives. A
 provider serving several single-file local GGUFs therefore still cites the
 session for the one that served the exchange. A split GGUF's id, or one
 resolved from a Hugging Face ref, hashes more than the file, so it matches
-no digest and the provider falls back to the status's model. The requester's events carry no digest, so a requester still
-proposes only to a provider serving one model.
+no digest and the provider falls back to the status's model. The
+requester's events carry no digest, so a requester still proposes only to
+a provider serving one model.
 
 A provider whose plugin predates agreements answers the proposal with
 something else at once, and the requester goes on without an agreement.
