@@ -61,11 +61,13 @@ again for 30 seconds after a read fails.
 
 The provider's own exchange events state a digest of the weights it served
 (`weights_digest`, the SHA-256 of the GGUF file) even when they name no
-model. A local GGUF's model id is that digest (`local-gguf/sha256-` and the
-digest), so the provider first cites a session that names this id, and
-only then one for the model its status gives. A provider serving several
-local GGUFs therefore still cites the session for the one that served the
-exchange. The requester's events carry no digest, so a requester still
+model. A single-file GGUF loaded from disk has that digest as its model id
+(`local-gguf/sha256-` and the digest), so the provider first cites a session
+that names this id, and only then one for the model its status gives. A
+provider serving several single-file local GGUFs therefore still cites the
+session for the one that served the exchange. A split GGUF's id, or one
+resolved from a Hugging Face ref, hashes more than the file, so it matches
+no digest and the provider falls back to the status's model. The requester's events carry no digest, so a requester still
 proposes only to a provider serving one model.
 
 A provider whose plugin predates agreements answers the proposal with
@@ -201,7 +203,10 @@ None of these is a failed exchange.
   and `not_evaluable` otherwise, with the accepted record and the receipt it
   relies on as evidence; `R-served` is `met` when the served half is held and
   verifies; `R-model-stated` is `met` when the model that half states is one
-  the session's policy names, as stated, not verified.
+  the session's policy names, as stated, not verified. A half that states no
+  model id but a weights digest D (mesh-llm 0.78) states the local GGUF
+  `local-gguf/sha256-D`; `stated_as` says which form the result rests on
+  (`canonical_ref` or `weights_digest`), and `stated_weights_digest` gives D.
 
 ## What is kept
 
