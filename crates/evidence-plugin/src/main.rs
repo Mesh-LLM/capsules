@@ -14,6 +14,7 @@ mod controller_binding;
 #[cfg(test)]
 mod controller_binding_e2e_setup;
 mod data_dir;
+mod deal_records;
 mod decision;
 mod doctor;
 mod evidence_answer;
