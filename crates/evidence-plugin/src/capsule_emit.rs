@@ -841,6 +841,8 @@ impl CapsuleState {
                 latency_ms: crate::producer::capsule::committed_latency_ms(latency_ms),
                 binary_attestation,
                 tee_attestation: Some(tee_attestation),
+                // This path serves a local request: no mesh counterparty, no agreement.
+                acceptance_digest: None,
             },
             effect_status: "confirmed".to_string(),
             effect_type: "inference_completion".to_string(),
@@ -1208,6 +1210,13 @@ impl CapsuleState {
             host.served_by_node_id.as_deref(),
             learned_self.as_deref(),
         );
+        // The service evidence agreement this half is under, if any (R5, R6).
+        let acceptance_digest = crate::agreement_bridge::half_citation(
+            self,
+            &role,
+            &host,
+            chrono::Utc::now().timestamp(),
+        );
         if split.is_some() && role != "served" {
             anyhow::bail!("a split's main record is the coordinator's served record, not {role:?}");
         }
@@ -1429,6 +1438,7 @@ impl CapsuleState {
                 latency_ms: "0.000".to_string(),
                 binary_attestation,
                 tee_attestation: Some(tee_attestation),
+                acceptance_digest: acceptance_digest.clone(),
             },
             // Confirmed only over the host's digest of the REAL response body;
             // without one the completion was dispatched but its output is
@@ -1986,6 +1996,7 @@ impl CapsuleState {
         &self,
         action_id: String,
         member: Value,
+        blocks: serde_json::Map<String, Value>,
         references: Option<Value>,
     ) -> anyhow::Result<Option<EmittedCapsule>> {
         let (leg, subject) =
@@ -2006,6 +2017,7 @@ impl CapsuleState {
         let capsule = crate::producer::capsule::seal_settlement_leg(
             action_id,
             member,
+            blocks,
             references,
             chain,
             &self.keys.signing_key,

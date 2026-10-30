@@ -367,6 +367,21 @@ pub fn active_session(
     model: &str,
     now: i64,
 ) -> Option<Session> {
+    sessions(store, proposer, acceptor, Some(model), now)
+        .into_iter()
+        .next()
+}
+
+/// Every unexpired session between `proposer` and `acceptor` that holds
+/// `now`, has its receipt and documents kept and, with `model`, names it in
+/// its policy; the latest-starting first.
+fn sessions(
+    store: &Store,
+    proposer: &str,
+    acceptor: &str,
+    model: Option<&str>,
+    now: i64,
+) -> Vec<Session> {
     let start = |r: &Value| {
         r.get("session")?
             .get("not_before")?
@@ -381,7 +396,7 @@ pub fn active_session(
             .and_then(|d| store.get(Kind::Document, d))
             .and_then(|o| parse(&o))
     };
-    store
+    let mut found = store
         .all(Kind::Record)
         .into_iter()
         .filter_map(|o| parse(&o))
@@ -394,18 +409,96 @@ pub fn active_session(
                 && document(r, "terms").is_some()
                 && document(r, "policy")
                     .and_then(|p| agreement::read_policy(&p))
-                    .is_some_and(|models| models.iter().any(|m| m == model))
+                    .is_some_and(|models| model.is_none_or(|m| models.iter().any(|x| x == m)))
         })
         .filter_map(|record| {
             let digest = evidence_request::acceptance::record_digest(&record).ok()?;
             receipt_for(store, &digest)?;
             Some((start(&record), digest, record))
         })
-        .max_by(|a, b| a.0.cmp(&b.0))
+        .collect::<Vec<_>>();
+    found.sort_by_key(|f| std::cmp::Reverse(f.0));
+    found
+        .into_iter()
         .map(|(_, acceptance_digest, record)| Session {
             acceptance_digest,
             record,
         })
+        .collect()
+}
+
+/// The acceptance the payer's `delivered` leg cites (R12): its session with
+/// the provider at `peer`, for `model`, holding `now`.
+pub fn delivered_citation(
+    capsules: &CapsuleState,
+    peer: &str,
+    model: &str,
+    now: i64,
+) -> Option<String> {
+    let registry = crate::peer_keys::registry();
+    let provider = crate::peer_keys::announced_key_in(registry.as_deref(), peer)?;
+    let store = Store::open(capsules.ledger_dir());
+    active_session(&store, &own_key(capsules), &provider, model, now).map(|s| s.acceptance_digest)
+}
+
+/// The acceptance the provider's `payee_observed` leg cites (R12): its one
+/// unexpired session with the payer whose key signed the terms leg the
+/// payee leg answers, that key announced by a peer. With none, or several
+/// (sessions for several models at once), the leg cites nothing rather than
+/// guess; it still counts toward the cap through the exchange binding.
+pub fn payee_citation(capsules: &CapsuleState, payer_key: &str, now: i64) -> Option<String> {
+    let registry = crate::peer_keys::registry();
+    crate::peer_keys::peer_id_for_key_in(registry.as_deref(), payer_key)?;
+    let store = Store::open(capsules.ledger_dir());
+    match sessions(&store, payer_key, &own_key(capsules), None, now).as_slice() {
+        [only] => Some(only.acceptance_digest.clone()),
+        _ => None,
+    }
+}
+
+/// The acceptance a half cites (R5, R6): on the requester's `requested`
+/// half, its session with the provider that served (`served_by_node_id`);
+/// on the provider's `served` half, its session with the requester that
+/// asked (`requested_by_node_id`); in both, for the model the host states
+/// served and with a window that holds `now`. `None` when the counterparty,
+/// its announced key, the model or such a session is missing: the half then
+/// cites nothing (T9-U).
+pub fn half_citation(
+    capsules: &CapsuleState,
+    role: &str,
+    host: &crate::capsule_emit::HostProvenance,
+    now: i64,
+) -> Option<String> {
+    let registry = crate::peer_keys::registry();
+    half_citation_in(capsules, role, host, registry.as_deref(), now)
+}
+
+fn half_citation_in(
+    capsules: &CapsuleState,
+    role: &str,
+    host: &crate::capsule_emit::HostProvenance,
+    registry: Option<&str>,
+    now: i64,
+) -> Option<String> {
+    let clean = |id: Option<&String>| {
+        id.map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "unknown")
+    };
+    let counterparty = match role {
+        "requested" => clean(host.served_by_node_id.as_ref())?,
+        "served" => clean(host.requested_by_node_id.as_ref())?,
+        _ => return None,
+    };
+    let model = clean(host.model_canonical_ref.as_ref())?;
+    let their_key = crate::peer_keys::announced_key_in(registry, &counterparty)?;
+    let own = own_key(capsules);
+    let (proposer, acceptor) = if role == "requested" {
+        (own.as_str(), their_key.as_str())
+    } else {
+        (their_key.as_str(), own.as_str())
+    };
+    let store = Store::open(capsules.ledger_dir());
+    active_session(&store, proposer, acceptor, &model, now).map(|s| s.acceptance_digest)
 }
 
 /// What the requester concluded from the provider's reply to a proposal.
@@ -989,6 +1082,61 @@ mod tests {
             t0 + Duration::from_secs(1)
         ));
         assert!(begin_attempt(&mut attempts, "peer", t0 + RETRY_AFTER));
+    }
+
+    #[test]
+    fn each_half_cites_the_session_its_counterparty_and_model_name() {
+        let p = pair();
+        let (_, session, _) = p.agree(NOW);
+        let (requester_peer, provider_peer) = ("aa".repeat(32), "bb".repeat(32));
+        let registry = json!({
+            requester_peer.clone(): own_key(&p.requester),
+            provider_peer.clone(): own_key(&p.provider),
+        })
+        .to_string();
+        let host = |served_by: Option<&str>, requested_by: Option<&str>, model: &str| {
+            crate::capsule_emit::HostProvenance {
+                served_by_node_id: served_by.map(String::from),
+                requested_by_node_id: requested_by.map(String::from),
+                model_canonical_ref: Some(model.to_string()),
+                ..Default::default()
+            }
+        };
+        let cite =
+            |node: &CapsuleState, role: &str, h: &crate::capsule_emit::HostProvenance, now| {
+                half_citation_in(node, role, h, Some(&registry), now)
+            };
+        let requested = host(Some(&provider_peer), None, MODEL);
+        let served = host(Some(&provider_peer), Some(&requester_peer), MODEL);
+        let want = Some(session.acceptance_digest.clone());
+        assert_eq!(cite(&p.requester, "requested", &requested, NOW + 10), want);
+        assert_eq!(cite(&p.provider, "served", &served, NOW + 10), want);
+        // Another model, outside the window, an unknown counterparty, or a
+        // role that is neither: no citation.
+        let other = host(
+            Some(&provider_peer),
+            Some(&requester_peer),
+            "hf:other/model@main",
+        );
+        assert_eq!(cite(&p.requester, "requested", &other, NOW + 10), None);
+        assert_eq!(cite(&p.provider, "served", &other, NOW + 10), None);
+        assert_eq!(
+            cite(&p.requester, "requested", &requested, NOW + 3_601),
+            None
+        );
+        let stranger = host(Some(&"cc".repeat(32)), Some(&"cc".repeat(32)), MODEL);
+        assert_eq!(cite(&p.requester, "requested", &stranger, NOW + 10), None);
+        assert_eq!(cite(&p.provider, "served", &stranger, NOW + 10), None);
+        assert_eq!(cite(&p.provider, "conflict", &served, NOW + 10), None);
+        assert_eq!(
+            cite(
+                &p.provider,
+                "served",
+                &host(Some(&provider_peer), Some("unknown"), MODEL),
+                NOW + 10
+            ),
+            None
+        );
     }
 
     #[test]

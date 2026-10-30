@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Service evidence agreements: records cite the session (M4, second part).** A requested half,
+  a served half, the payer's `delivered` leg and the provider's `payee_observed` leg under a
+  session carry `"acceptance": {"type": "cites", "target": <digest>}` in their `x-mesh-poc-v1`
+  block, committed into the record's `capsule_id`. A leg carries the block beside its settlement
+  member, so the settlement checks are unchanged. A record under no session is as before. See
+  `docs/AGREEMENTS.md`. action-state-group/evidencebook#48.
 - **Each ask is recorded (loop step 7).** Every evidence request this node sends is sealed as an
   `evidence_request` record, holding the request exactly as sent, before it is sent; a request
   that is not well formed, or reuses a nonce, is refused and never sent. A reply inside the

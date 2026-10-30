@@ -461,8 +461,17 @@ async fn settlement_legs_on_exchange(
     };
     let peer = push_counterparty(&envelope).map(str::to_string);
     let digest = envelope.response_digest.clone();
+    let model = envelope
+        .serving_provenance
+        .as_ref()
+        .and_then(|p| p.model_canonical_ref.clone());
     let capsules = capsules.clone();
     let pushes = tokio::task::spawn_blocking(move || {
+        // The model the provider states it served: what the delivered leg's
+        // agreement citation is looked up by (R12).
+        if let Some(model) = &model {
+            capsules.settlement_legs().note_model(&exchange_id, model);
+        }
         let pushes = capsules.settlement_legs().on_exchange(
             &capsules,
             &exchange_id,
