@@ -162,9 +162,9 @@ evidence-request = { version = "=0.2.0", features = ["cll", "receipt", "acceptan
 # keys its receipts are checked under are this plugin's
 # (`evidence_artifact::served_summary`). Every answer is built by its
 # `answer::build` over this plugin's index (`evidence_log`, a store of the
-# crate's); 0.0.9 carries a derivation of this node's own named by its
+# crate's); 0.0.10 carries a derivation of this node's own named by its
 # digest (exchange corroboration). Receipts are checked with
-# agent-action-capsule 0.4's witness verifier. Same checkpointed-local-log
+# agent-action-capsule 0.5's witness verifier. Same checkpointed-local-log
 # and evidence-request lines as above.
 evidencebook = { version = "0.0.10", features = ["deal"] }
 # Class 1 verification of a received half (capsule-emit main moved it here).
