@@ -462,6 +462,16 @@ impl Legs {
         let (Some(credited), Some(fee)) = (event.credited_msat, event.fee_msat) else {
             return;
         };
+        // The leg names no exchange. The payment is noted for this one before
+        // the leg is sealed, so a crash between the two (or a replay that finds
+        // the leg already sealed) leaves the note, and the provider's receipt
+        // finds the leg by its payment hash.
+        if let Err(error) =
+            crate::provider_receipt::note_payment(capsules.ledger_dir(), &event.exchange_id, hash)
+        {
+            tracing::warn!(%error, "payment not noted for its exchange; the leg is not sealed");
+            return;
+        }
         let leg = built(
             "payee_observed",
             "payee",
@@ -498,19 +508,7 @@ impl Legs {
             }
             _ => None,
         };
-        if let Some(sealed) =
-            seal_with(capsules, "payee_observed", leg, citation_blocks(acceptance))
-        {
-            // The leg names no exchange; the node notes which it was for, so
-            // the provider's receipt can find it.
-            if let Err(error) = crate::provider_receipt::link_leg(
-                capsules.ledger_dir(),
-                &event.exchange_id,
-                &sealed.capsule_id,
-            ) {
-                tracing::warn!(%error, "provider leg not linked to its exchange");
-            }
-        }
+        seal_with(capsules, "payee_observed", leg, citation_blocks(acceptance));
     }
 
     /// Payer: the agreement `exchange_id` cites, decided by `decide` the

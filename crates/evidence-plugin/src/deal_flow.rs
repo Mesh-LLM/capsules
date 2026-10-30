@@ -784,7 +784,7 @@ fn read_or_make_secret(path: &Path) -> Option<[u8; 32]> {
 
 /// Append `line`. A last line a crash cut short (no newline) is ended first,
 /// so the new line is not glued to it and lost with it.
-fn append_line(path: &Path, line: &Value) -> std::io::Result<()> {
+pub(crate) fn append_line(path: &Path, line: &Value) -> std::io::Result<()> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::OpenOptions::new()
         .create(true)

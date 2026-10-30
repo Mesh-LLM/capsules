@@ -11,8 +11,8 @@
 //! acceptance and an authority this node does not make, so none is sealed.
 //!
 //! Which legs belong to which exchange is the node's own note
-//! ([`PROVIDER_LINKS_FILE`], written when a leg is sealed): a leg names no
-//! exchange itself. The bundle is owner-only and producer-selected, like the
+//! ([`PROVIDER_LINKS_FILE`], the payment hash, written before the leg is
+//! sealed): a leg names no exchange itself. The bundle is owner-only and producer-selected, like the
 //! payer's ([`crate::deal_receipt`]); it carries those records and no
 //! payload, so the digests stay and no inference content or payer identity
 //! beyond what the records name is in it.
@@ -30,8 +30,8 @@ use crate::checkpoint_cadence::CheckpointHandle;
 use crate::deal_receipt::{selected_bundle, Error, Selection};
 use crate::evidence_log::{self, LedgerIndex};
 
-/// One `{"exchange_id", "capsule_id"}` line per `payee_observed` leg this node
-/// sealed: the host's exchange id the leg was for.
+/// One `{"exchange_id", "payment_hash"}` line per payment this node received
+/// and sealed a `payee_observed` leg for: the host's exchange id it was for.
 pub const PROVIDER_LINKS_FILE: &str = "provider-links.jsonl";
 
 /// Why no bundle is given.
@@ -79,39 +79,67 @@ impl From<Refusal> for Failure {
     }
 }
 
-/// Note that `leg_capsule_id` is a leg this node sealed for `exchange_id`.
-pub fn link_leg(ledger_dir: &Path, exchange_id: &str, leg_capsule_id: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut line = serde_json::to_vec(&json!({
-        "exchange_id": exchange_id, "capsule_id": leg_capsule_id,
-    }))
-    .map_err(std::io::Error::other)?;
-    line.push(b'\n');
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(ledger_dir.join(PROVIDER_LINKS_FILE))?
-        .write_all(&line)
+/// Note that the payment `payment_hash` was received for `exchange_id`. A
+/// last line a crash cut short is ended first (the deal flow's append).
+pub fn note_payment(
+    ledger_dir: &Path,
+    exchange_id: &str,
+    payment_hash: &str,
+) -> std::io::Result<()> {
+    crate::deal_flow::append_line(
+        &ledger_dir.join(PROVIDER_LINKS_FILE),
+        &json!({"exchange_id": exchange_id, "payment_hash": payment_hash}),
+    )
 }
 
-/// The legs noted for `exchange_id`, in the order noted. By bytes: a torn
-/// last line is skipped.
+/// The legs for `exchange_id`: the `payee_observed` records whose payment
+/// hash is one noted for it, in ledger order. Read from the capsules file
+/// off the index lock, parsing only lines that name a noted hash.
 fn legs_of(ledger_dir: &Path, exchange_id: &str) -> std::io::Result<Vec<String>> {
-    let bytes = match std::fs::read(ledger_dir.join(PROVIDER_LINKS_FILE)) {
+    let notes = match std::fs::read(ledger_dir.join(PROVIDER_LINKS_FILE)) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e),
     };
-    let mut legs: Vec<String> = Vec::new();
-    for line in bytes.split(|b| *b == b'\n') {
+    let mut hashes: Vec<String> = Vec::new();
+    for line in notes.split(|b| *b == b'\n') {
         let Ok(v) = serde_json::from_slice::<Value>(line) else {
             continue;
         };
         if v.get("exchange_id").and_then(Value::as_str) != Some(exchange_id) {
             continue;
         }
-        if let Some(id) = v.get("capsule_id").and_then(Value::as_str) {
-            if !legs.iter().any(|l| l == id) {
+        if let Some(hash) = v.get("payment_hash").and_then(Value::as_str) {
+            if !hashes.iter().any(|h| h == hash) {
+                hashes.push(hash.to_string());
+            }
+        }
+    }
+    if hashes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ledger = match std::fs::read(ledger_dir.join(evidence_log::CAPSULES_FILE)) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut legs = Vec::new();
+    for line in ledger.split(|b| *b == b'\n') {
+        let text = String::from_utf8_lossy(line);
+        if !hashes.iter().any(|h| text.contains(h.as_str())) {
+            continue;
+        }
+        let Ok(capsule) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let leg = capsule.get("settlement");
+        let paid = leg
+            .and_then(|l| l.pointer("/payment_ref/value"))
+            .and_then(Value::as_str);
+        if leg.and_then(|l| l.get("leg")).and_then(Value::as_str) == Some("payee_observed")
+            && paid.is_some_and(|p| hashes.iter().any(|h| h == p))
+        {
+            if let Some(id) = capsule.get("capsule_id").and_then(Value::as_str) {
                 legs.push(id.to_string());
             }
         }
@@ -119,13 +147,21 @@ fn legs_of(ledger_dir: &Path, exchange_id: &str) -> std::io::Result<Vec<String>>
     Ok(legs)
 }
 
-/// The single record this node served for `exchange_id`.
+/// The single exchange record this node served for the host's `exchange_id`:
+/// a record with the mesh exchange block (`x-mesh-poc-v1`) that names that id
+/// as its own and is not marked as the requester's side. The lifecycle and
+/// settlement records the node seals for the same id are not it.
 fn served_record(index: &LedgerIndex, exchange_id: &str) -> Option<String> {
     let view = index.view().ok()?;
     let mut served = index.correlated(exchange_id).iter().filter_map(|&i| {
         let record = view.record_at(i)?;
         let capsule: Value = serde_json::from_slice(&record.body).ok()?;
-        (crate::evidence_panes::label_role(&capsule) == "served").then_some(record.digest)
+        let poc = capsule.pointer("/model_attestation/compute_attestation/x-mesh-poc-v1")?;
+        let named = poc
+            .pointer("/serving_provenance/exchange_id")
+            .and_then(Value::as_str);
+        (named == Some(exchange_id) && crate::evidence_panes::label_role(&capsule) == "served")
+            .then_some(record.digest)
     });
     let first = served.next()?;
     served.next().is_none().then_some(first)
@@ -341,7 +377,7 @@ mod tests {
             Err(Failure::Refused(Refusal::NoPayment))
         ));
         // A payment noted for an exchange this node holds no served record for.
-        link_leg(state.ledger_dir(), "orphan", &"a".repeat(64)).unwrap();
+        note_payment(state.ledger_dir(), "orphan", &"a".repeat(64)).unwrap();
         assert!(matches!(
             ask("orphan"),
             Err(Failure::Refused(Refusal::NoPayment))
@@ -356,5 +392,59 @@ mod tests {
         assert_eq!(answered["state"], "refused");
         assert!(answer(state.ledger_dir(), &key(&state), &json!("")).is_err());
         assert!(answer(state.ledger_dir(), &key(&state), &json!(7)).is_err());
+    }
+
+    /// A note cut short by a crash does not swallow the next one, and a
+    /// payment noted twice (a replay) is one leg.
+    #[test]
+    fn a_torn_note_and_a_replayed_note_cost_no_leg() {
+        let (_a, dir) = dirs();
+        let (state, _) = provider(dir.path());
+        cut(&state);
+        let before = bundle(state.ledger_dir(), &key(&state), HOST_EXCHANGE).unwrap();
+        let notes = state.ledger_dir().join(PROVIDER_LINKS_FILE);
+        // The file as a crash left it: the last line cut short.
+        let mut raw = std::fs::read(&notes).unwrap();
+        raw.extend_from_slice(br#"{"exchange_id":"p-ex","payment_ha"#);
+        std::fs::write(&notes, raw).unwrap();
+        let hash = std::fs::read_to_string(&notes)
+            .unwrap()
+            .lines()
+            .next()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap()["payment_hash"].clone())
+            .unwrap();
+        note_payment(state.ledger_dir(), HOST_EXCHANGE, hash.as_str().unwrap()).unwrap();
+        note_payment(state.ledger_dir(), "later", &"b".repeat(64)).unwrap();
+        let after = bundle(state.ledger_dir(), &key(&state), HOST_EXCHANGE).unwrap();
+        assert_eq!(after["records"], before["records"], "still the same legs");
+        assert_eq!(
+            legs_of(state.ledger_dir(), "later").unwrap(),
+            Vec::<String>::new()
+        );
+        let lines: Vec<_> = std::fs::read_to_string(&notes)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert!(
+            lines.iter().any(|l| l.contains("\"later\"")),
+            "the line after the torn one is whole"
+        );
+    }
+
+    /// Two records served under one exchange id are not one exchange: no
+    /// receipt picks between them.
+    #[test]
+    fn two_served_records_for_one_exchange_id_are_refused() {
+        let (_a, dir) = dirs();
+        let (state, _) = provider(dir.path());
+        let mut again = crate::capsule_emit::tests::sample_exchange("payer-node");
+        again.exchange_id = Some(HOST_EXCHANGE);
+        state.emit_for_exchange(&again).unwrap();
+        cut(&state);
+        assert!(matches!(
+            bundle(state.ledger_dir(), &key(&state), HOST_EXCHANGE),
+            Err(Failure::Refused(Refusal::NoExchange))
+        ));
     }
 }
