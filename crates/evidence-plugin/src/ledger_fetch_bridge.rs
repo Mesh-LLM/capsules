@@ -220,20 +220,14 @@ async fn bridge_inbound_ledger_fetch_stream(
 }
 
 /// Whether `record` goes to the asker under the node's `history_segments`
-/// switch. `off` serves nothing. A local block, an owner-maintenance
-/// record and a deal's report never leave this node. Under `peers` any other record goes to any
+/// switch. `off` serves nothing. A record that `never_leaves`
+/// (a local block, an ask, a deal's report, an owner-maintenance record)
+/// is never served. Under `peers` any other record goes to any
 /// proven node; otherwise a record goes only to the node it names as the other side
 /// of its exchange, so a record that names no other side is not served.
 /// `requester_id` is the node the request's signature proved ([`answer`]).
 fn may_serve(record: &Value, requester: &[String], history_segments: &str) -> bool {
-    if history_segments == "off"
-        || crate::evidence_panes::is_local_routing_choice(record)
-        || crate::evidence_log::is_deal_report(record)
-        || record
-            .pointer("/model_attestation/compute_attestation")
-            .and_then(|c| c.get(crate::producer::capsule::OWNER_MAINTENANCE_BLOCK))
-            .is_some()
-    {
+    if history_segments == "off" || crate::evidence_log::never_leaves(record) {
         return false;
     }
     if history_segments == "peers" {

@@ -160,6 +160,20 @@ fn is_deal_capsule(record: &Value) -> bool {
     record.get("deal_id").is_some() || is_deal_report(record)
 }
 
+/// Whether `record` never leaves this node, whoever asks: a local routing
+/// choice, a record of the node's asks, a deal's report or an owner-maintenance
+/// record. Every path that serves a ledger record to another node checks this
+/// one predicate (the index's [`Leaf::never_leaves`] is it).
+pub(crate) fn never_leaves(record: &Value) -> bool {
+    crate::evidence_panes::is_local_routing_choice(record)
+        || crate::ask_book::is_ask_record(record)
+        || is_deal_report(record)
+        || record
+            .pointer("/model_attestation/compute_attestation")
+            .and_then(|c| c.get(crate::producer::capsule::OWNER_MAINTENANCE_BLOCK))
+            .is_some()
+}
+
 /// A deal's in-log report. It is the owner's own (audience `keep`): a copy
 /// for the counterparty is made only by a share path, so this one never
 /// leaves the node (Mesh-LLM/capsules-plugin#146).
@@ -415,13 +429,7 @@ impl LedgerIndex {
             len: body.len() as u64,
             padding,
             counterparty,
-            never_leaves: crate::evidence_panes::is_local_routing_choice(&record)
-                || crate::ask_book::is_ask_record(&record)
-                || is_deal_report(&record)
-                || record
-                    .pointer("/model_attestation/compute_attestation")
-                    .and_then(|c| c.get(crate::producer::capsule::OWNER_MAINTENANCE_BLOCK))
-                    .is_some(),
+            never_leaves: never_leaves(&record),
             facts: leaf_facts(&record),
         });
         Ok(())
