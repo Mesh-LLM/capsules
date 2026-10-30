@@ -486,70 +486,51 @@ pub fn delivered_citation(
     active_session(&store, &own_key(capsules), &provider, model, now).map(|s| s.acceptance_digest)
 }
 
-/// The acceptance the provider's `payee_observed` leg cites (R12): its one
-/// unexpired session, for the `model` it served the payment's exchange,
-/// with the payer whose key signed the terms leg the payee leg answers,
-/// that key announced by a peer. With none, or several, the leg cites
-/// nothing rather than guess; it still counts toward the cap through the
-/// exchange binding.
-pub fn payee_citation(
+/// The acceptance a provider's exchange cites (R5, R6, R12): its session
+/// with the requester at `requester_peer` (the host's `requested_by_node_id`)
+/// for `model`, holding `now`, when it holds exactly one such session. The
+/// provider decides this once, at the
+/// exchange's terminal event; its served half and its payee leg both use the
+/// decision, so a session that appears later never reaches them.
+pub fn served_citation(
     capsules: &CapsuleState,
-    payer_key: &str,
+    requester_peer: &str,
     model: &str,
     now: i64,
 ) -> Option<String> {
     let registry = crate::peer_keys::registry();
-    crate::peer_keys::peer_id_for_key_in(registry.as_deref(), payer_key)?;
+    served_citation_in(capsules, requester_peer, model, registry.as_deref(), now)
+}
+
+fn served_citation_in(
+    capsules: &CapsuleState,
+    requester_peer: &str,
+    model: &str,
+    registry: Option<&str>,
+    now: i64,
+) -> Option<String> {
+    let requester_peer = requester_peer.trim();
+    if requester_peer.is_empty() || requester_peer == "unknown" {
+        return None;
+    }
+    let requester = crate::peer_keys::announced_key_in(registry, requester_peer)?;
     let store = Store::open(capsules.ledger_dir());
-    match sessions(&store, payer_key, &own_key(capsules), Some(model), now).as_slice() {
+    // One session for the model, or none cited: with several, the provider
+    // does not guess which one the requester meant (R12).
+    match sessions(&store, &requester, &own_key(capsules), Some(model), now).as_slice() {
         [only] => Some(only.acceptance_digest.clone()),
         _ => None,
     }
 }
 
-/// The acceptance a half cites (R5, R6): on the requester's `requested`
-/// half, its session with the provider that served (`served_by_node_id`);
-/// on the provider's `served` half, its session with the requester that
-/// asked (`requested_by_node_id`); in both, for the model the host states
-/// served and with a window that holds `now`. `None` when the counterparty,
-/// its announced key, the model or such a session is missing: the half then
-/// cites nothing (T9-U).
-pub fn half_citation(
-    capsules: &CapsuleState,
-    role: &str,
-    host: &crate::capsule_emit::HostProvenance,
-    now: i64,
-) -> Option<String> {
-    let registry = crate::peer_keys::registry();
-    half_citation_in(capsules, role, host, registry.as_deref(), now)
-}
-
-fn half_citation_in(
-    capsules: &CapsuleState,
-    role: &str,
-    host: &crate::capsule_emit::HostProvenance,
-    registry: Option<&str>,
-    now: i64,
-) -> Option<String> {
-    let clean = |id: Option<&String>| {
-        id.map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty() && s != "unknown")
-    };
-    let counterparty = match role {
-        "requested" => clean(host.served_by_node_id.as_ref())?,
-        "served" => clean(host.requested_by_node_id.as_ref())?,
-        _ => return None,
-    };
-    let model = clean(host.model_canonical_ref.as_ref())?;
-    let their_key = crate::peer_keys::announced_key_in(registry, &counterparty)?;
-    let own = own_key(capsules);
-    let (proposer, acceptor) = if role == "requested" {
-        (own.as_str(), their_key.as_str())
-    } else {
-        (their_key.as_str(), own.as_str())
-    };
+/// The proposer of the complete session `acceptance_digest`, if this node
+/// keeps it.
+pub fn session_proposer(capsules: &CapsuleState, acceptance_digest: &str) -> Option<String> {
     let store = Store::open(capsules.ledger_dir());
-    active_session(&store, proposer, acceptor, &model, now).map(|s| s.acceptance_digest)
+    complete_sessions(&store)
+        .iter()
+        .find(|c| c.digest == acceptance_digest)
+        .and_then(|c| text(&c.record, "proposer").map(String::from))
 }
 
 /// What the requester concluded from the provider's reply to a proposal.
@@ -1137,63 +1118,32 @@ mod tests {
     }
 
     #[test]
-    fn each_half_cites_the_session_its_counterparty_and_model_name() {
+    fn each_side_finds_the_session_its_counterparty_and_model_name() {
         let p = pair();
         let (_, session, _) = p.agree(NOW);
-        let (requester_peer, provider_peer) = ("aa".repeat(32), "bb".repeat(32));
-        let registry = json!({
-            requester_peer.clone(): own_key(&p.requester),
-            provider_peer.clone(): own_key(&p.provider),
-        })
-        .to_string();
-        let host = |served_by: Option<&str>, requested_by: Option<&str>, model: &str| {
-            crate::capsule_emit::HostProvenance {
-                served_by_node_id: served_by.map(String::from),
-                requested_by_node_id: requested_by.map(String::from),
-                model_canonical_ref: Some(model.to_string()),
-                ..Default::default()
-            }
+        let requester_peer = "aa".repeat(32);
+        let registry = json!({ requester_peer.clone(): own_key(&p.requester) }).to_string();
+        let served = |peer: &str, model: &str, now| {
+            served_citation_in(&p.provider, peer, model, Some(&registry), now)
         };
-        let cite =
-            |node: &CapsuleState, role: &str, h: &crate::capsule_emit::HostProvenance, now| {
-                half_citation_in(node, role, h, Some(&registry), now)
-            };
-        let requested = host(Some(&provider_peer), None, MODEL);
-        let served = host(Some(&provider_peer), Some(&requester_peer), MODEL);
         let want = Some(session.acceptance_digest.clone());
-        assert_eq!(cite(&p.requester, "requested", &requested, NOW + 10), want);
-        assert_eq!(cite(&p.provider, "served", &served, NOW + 10), want);
-        // Another model, outside the window, an unknown counterparty, or a
-        // role that is neither: no citation.
-        let other = host(
-            Some(&provider_peer),
-            Some(&requester_peer),
-            "hf:other/model@main",
-        );
-        assert_eq!(cite(&p.requester, "requested", &other, NOW + 10), None);
-        assert_eq!(cite(&p.provider, "served", &other, NOW + 10), None);
+        assert_eq!(served(&requester_peer, MODEL, NOW + 10), want);
+        // Another model, outside the window, an unknown or unannounced
+        // requester: no citation.
         assert_eq!(
-            cite(&p.requester, "requested", &requested, NOW + 3_601),
+            served(&requester_peer, "hf:other/model@main", NOW + 10),
             None
         );
-        let stranger = host(Some(&"cc".repeat(32)), Some(&"cc".repeat(32)), MODEL);
-        assert_eq!(cite(&p.requester, "requested", &stranger, NOW + 10), None);
-        assert_eq!(cite(&p.provider, "served", &stranger, NOW + 10), None);
-        assert_eq!(cite(&p.provider, "conflict", &served, NOW + 10), None);
+        assert_eq!(served(&requester_peer, MODEL, NOW + 3_601), None);
+        assert_eq!(served("unknown", MODEL, NOW + 10), None);
+        assert_eq!(served(&"cc".repeat(32), MODEL, NOW + 10), None);
         assert_eq!(
-            cite(
-                &p.provider,
-                "served",
-                &host(Some(&provider_peer), Some("unknown"), MODEL),
-                NOW + 10
-            ),
-            None
+            session_proposer(&p.provider, &session.acceptance_digest),
+            Some(own_key(&p.requester))
         );
+        assert_eq!(session_proposer(&p.provider, &"0".repeat(64)), None);
     }
 
-    /// The complete sessions are read from disk once per change: asked
-    /// again with nothing new kept, the same list comes back; a new session
-    /// is seen at once.
     #[test]
     fn complete_sessions_are_read_again_only_after_a_change() {
         let p = pair();

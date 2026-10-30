@@ -79,20 +79,24 @@ the record's `capsule_id` like every other member. A record under no session
 has no such member.
 
 - The requester's requested half and the provider's served half cite the
-  session between the two nodes for the model the host states was served,
-  whose window holds the time the half is sealed.
+  session between the two nodes for the model the host states was served.
+  Each side decides this once, at the exchange's terminal event. The
+  provider cites a session only when it holds exactly one for that requester
+  and model.
 - In settlement records, one leg per side cites it. The payer's `delivered`
   leg, sealed once the provider and model are known, cites the payer's session.
-  The provider's `payee_observed` leg cites its one open session, for the
-  model it served the payment's exchange, with the payer whose key signed the
-  terms leg it answers. With none, or several, it cites nothing rather than
-  guess. A payment settled before the provider has served the exchange (a
-  deposit, often) is sealed before the model is known and cites nothing. The
+  The provider's `payee_observed` leg cites what the provider decided for
+  that payment's exchange when it served it, and only when that session's
+  requester is the payer whose key signed the terms leg the payee leg
+  answers. A payment settled before the provider has served the exchange (a
+  deposit, often) has no decision yet and cites nothing. The payment and the
+  exchange are matched by the host's exchange id. The
   payer's `terms` and `payer_observed` legs are sealed before the provider is
   known and cite nothing.
 - An exchange's citation is decided at its terminal event, before a session
   can be set up from it, so the exchange that sets up a session never cites
-  it.
+  it, and a record of that exchange sealed later never cites a session that
+  appeared after it.
 
 A leg carries the link in the same block, beside the settlement member, so
 the settlement record's own checks are unchanged; the interop profile's and

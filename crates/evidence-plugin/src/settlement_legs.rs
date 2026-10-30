@@ -169,9 +169,10 @@ struct Inner {
     /// from it, so the exchange never cites a session it triggered (R11,
     /// R12). `None` inside is a decision too: it cites nothing.
     citation: Bounded<Option<String>>,
-    /// Provider: the model it states it served, by its host's exchange id:
-    /// the payee leg cites only a session for that model (R12).
-    served_model: Bounded<String>,
+    /// Provider: the agreement its exchange cites, by its host's exchange
+    /// id, decided at the exchange's terminal event (`decide_served_citation`):
+    /// the served half and the payee leg both use it (R12).
+    served_citation: Bounded<Option<String>>,
     /// Provider: the key that signed the terms leg it cites, by payment
     /// hash: whose agreement the payee leg cites (R12).
     received_from: Bounded<String>,
@@ -273,7 +274,7 @@ impl Legs {
             ("own invoices", inner.invoices.expire(cutoff)),
             ("received terms legs", inner.received_terms.expire(cutoff)),
             ("exchange citations", inner.citation.expire(cutoff)),
-            ("served models", inner.served_model.expire(cutoff)),
+            ("served citations", inner.served_citation.expire(cutoff)),
             ("terms leg signers", inner.received_from.expire(cutoff)),
             (
                 "waiting payee observations",
@@ -453,22 +454,28 @@ impl Legs {
                 ("observed_at", json!(now())),
             ],
         );
-        let (payer_key, model) = {
+        // The provider's decision for the exchange, made when it was served,
+        // and only for the session of the payer whose key signed the terms
+        // leg. A payment settled before the exchange was served (a deposit)
+        // has no decision yet and cites nothing.
+        let (payer_key, decided) = {
             let inner = self.inner();
             (
                 inner.received_from.get(hash).cloned(),
-                inner.served_model.get(&event.exchange_id).cloned(),
+                inner
+                    .served_citation
+                    .get(&event.exchange_id)
+                    .cloned()
+                    .flatten(),
             )
         };
-        let acceptance = match (payer_key, model) {
-            (Some(key), Some(model)) => crate::agreement_bridge::payee_citation(
-                capsules,
-                &key,
-                &model,
-                chrono::Utc::now().timestamp(),
-            ),
-            // The model is known once the exchange is served; a payment
-            // settled before that (a deposit) cites nothing.
+        let acceptance = match (payer_key, decided) {
+            (Some(key), Some(digest))
+                if crate::agreement_bridge::session_proposer(capsules, &digest).as_deref()
+                    == Some(key.as_str()) =>
+            {
+                Some(digest)
+            }
             _ => None,
         };
         seal_with(capsules, "payee_observed", leg, citation_blocks(acceptance));
@@ -497,12 +504,28 @@ impl Legs {
         self.inner().citation.get(exchange_id).cloned()
     }
 
-    /// Provider: the model it states it served `exchange_id`, from the
-    /// exchange's terminal event.
-    pub fn note_served_model(&self, exchange_id: &str, model: &str) {
+    /// Provider: the agreement its exchange `exchange_id` cites, decided by
+    /// `decide` at the exchange's terminal event the first time it is asked
+    /// and kept, so a session set up later never reaches the served half or
+    /// a payee leg sealed after it.
+    pub fn decide_served_citation(
+        &self,
+        exchange_id: &str,
+        decide: impl FnOnce() -> Option<String>,
+    ) -> Option<String> {
+        if let Some(decided) = self.inner().served_citation.get(exchange_id) {
+            return decided.clone();
+        }
+        let decided = decide();
         self.inner()
-            .served_model
-            .insert(exchange_id.to_string(), model.to_string());
+            .served_citation
+            .insert(exchange_id.to_string(), decided.clone());
+        decided
+    }
+
+    /// Provider: the citation decided for its exchange `exchange_id`.
+    pub fn served_citation_of(&self, exchange_id: &str) -> Option<Option<String>> {
+        self.inner().served_citation.get(exchange_id).cloned()
     }
 
     /// Payer: the exchange event for `exchange_id` named its serving `peer`
@@ -628,7 +651,8 @@ impl Legs {
         inner.accounted.remove(exchange_id);
         inner.cited_hash.remove(exchange_id);
         inner.response.remove(exchange_id);
-        inner.citation.remove(exchange_id);
+        // The decision stays (it expires with the other entries): the
+        // requested half, sealed after this, still reads it.
         if !inner.unpushed.contains(exchange_id) {
             inner.peer.remove(exchange_id);
         }
@@ -727,7 +751,7 @@ impl Legs {
             inner.received_terms.len(),
             inner.waiting_payee.len(),
             inner.citation.len(),
-            inner.served_model.len(),
+            inner.served_citation.len(),
             inner.received_from.len(),
         ]
     }
@@ -1357,7 +1381,14 @@ mod tests {
         // payer decides the exchange's citation (main.rs does both).
         pair.provider
             .settlement_legs()
-            .note_served_model("p-ex", SERVED_MODEL);
+            .decide_served_citation("p-ex", || {
+                crate::agreement_bridge::served_citation(
+                    &pair.provider,
+                    &payer_peer,
+                    SERVED_MODEL,
+                    now,
+                )
+            });
         pair.payer.settlement_legs().decide_citation("ex", || {
             crate::agreement_bridge::delivered_citation(
                 &pair.payer,
@@ -1377,7 +1408,55 @@ mod tests {
                 .settlement_legs()
                 .on_received(&pair.provider, &push.capsule);
         }
+        // The delivered leg is sealed (the bill was accounted first) and the
+        // decision is still there for the requested half, sealed after it.
+        assert_eq!(
+            pair.payer.settlement_legs().citation_of("ex"),
+            Some(digest.clone()),
+            "the requested half still reads the decision"
+        );
         (legs_of(a), legs_of(b), digest)
+    }
+
+    /// A payee leg sealed late (its terms leg's push failed, a session was
+    /// set up, the retry arrived) takes the decision made when the exchange
+    /// was served, so it never cites the session that appeared later.
+    #[test]
+    fn a_late_payee_leg_never_cites_a_session_set_up_after_its_exchange() {
+        let (a, b) = dirs();
+        let pair = Pair::open(a.path(), b.path());
+        let now = chrono::Utc::now().timestamp();
+        let payer_peer = format!("{:064x}", 0x1a7e);
+        crate::peer_keys::announced::announce_for_test(
+            &payer_peer,
+            &hex::encode(pair.payer.public_key()),
+        );
+        pair.provider_event(Phase::InputInvoiceIssued, 0, INPUT, &[]);
+        pair.provider_event(Phase::InputSettlementObserved, 0, INPUT, WALLET);
+        // Served, with no session yet: the decision is "none".
+        let decided = pair
+            .provider
+            .settlement_legs()
+            .decide_served_citation("p-ex", || {
+                crate::agreement_bridge::served_citation(
+                    &pair.provider,
+                    &payer_peer,
+                    SERVED_MODEL,
+                    now,
+                )
+            });
+        assert_eq!(decided, None);
+        // The requester sets up a session from that exchange...
+        agree(&pair.payer, &pair.provider, SERVED_MODEL, now);
+        // ...then its terms leg arrives late.
+        pair.payer
+            .settlement_legs()
+            .on_exchange(&pair.payer, "ex", Some(PROVIDER_PEER), None);
+        let pushes = pair.payer_event(Phase::InputInvoiceIssued, 0, INPUT, &[]);
+        pair.deliver(&pushes);
+        let provider = legs_of(b.path());
+        assert_eq!(kinds(&provider), ["payee_observed"]);
+        assert_eq!(citation(&provider[0]), None);
     }
 
     /// An exchange's citation is decided once: a session that appears later

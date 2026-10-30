@@ -458,16 +458,34 @@ async fn settlement_legs_on_exchange(
         .as_ref()
         .and_then(|p| p.model_canonical_ref.clone());
     if envelope.dispatch_path != lifecycle_channel::DispatchPath::RemoteMesh {
-        // Provider: the model it served this exchange, for the payee leg's
-        // agreement citation (R12).
-        if let (Some(exchange_id), Some(model), lifecycle_channel::Phase::Terminal) = (
+        // Provider: the agreement this served exchange cites, decided at its
+        // terminal event, before the served half is sealed below; the payee
+        // leg uses the same decision (R12).
+        let requester = envelope
+            .serving_provenance
+            .as_ref()
+            .and_then(|p| p.requested_by_node_id.clone());
+        if let (
+            Some(exchange_id),
+            Some(model),
+            Some(requester),
+            lifecycle_channel::Phase::Terminal,
+        ) = (
             envelope.exchange_id.as_deref(),
             model.as_deref(),
+            requester.as_deref(),
             &envelope.phase,
         ) {
             capsules
                 .settlement_legs()
-                .note_served_model(exchange_id, model);
+                .decide_served_citation(exchange_id, || {
+                    agreement_bridge::served_citation(
+                        capsules,
+                        requester,
+                        model,
+                        chrono::Utc::now().timestamp(),
+                    )
+                });
         }
         return;
     }

@@ -1210,23 +1210,17 @@ impl CapsuleState {
             host.served_by_node_id.as_deref(),
             learned_self.as_deref(),
         );
-        // The service evidence agreement this half is under, if any (R5, R6).
-        // A requested half takes the decision made at the exchange's terminal
-        // event, before a session could be set up from it; with none made,
-        // it cites nothing. A served half looks its session up: a provider
-        // sets up no sessions, so none can appear from this exchange.
-        let acceptance_digest = if role == "requested" {
-            exchange_id
-                .and_then(|id| self.settlement_legs().citation_of(id))
-                .flatten()
-        } else {
-            crate::agreement_bridge::half_citation(
-                self,
-                &role,
-                &host,
-                chrono::Utc::now().timestamp(),
-            )
-        };
+        // The service evidence agreement this half is under, if any (R5, R6):
+        // the decision each side made at the exchange's terminal event,
+        // before a session could be set up from it (main.rs). With none
+        // made, the half cites nothing.
+        let legs = self.settlement_legs();
+        let acceptance_digest = match role.as_str() {
+            "requested" => exchange_id.and_then(|id| legs.citation_of(id)),
+            "served" => exchange_id.and_then(|id| legs.served_citation_of(id)),
+            _ => None,
+        }
+        .flatten();
         if split.is_some() && role != "served" {
             anyhow::bail!("a split's main record is the coordinator's served record, not {role:?}");
         }
