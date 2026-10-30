@@ -349,6 +349,26 @@ fn cases() -> Vec<Value> {
         "node-n",
         &body,
     ));
+
+    let other_operator = node("other-operator");
+    crate::controller_binding::store_held(
+        other_operator.state.ledger_dir().parent().unwrap(),
+        &operator_binding(other_operator.state.signing_key(), &nostr(0x52)),
+        &key_id(other_operator.state.signing_key()),
+        evidence_request::time::parse_utc(NOW).unwrap(),
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let (body, announced) = bound(dir.path());
+    out.push(case(
+        "operator_binding_other_controller",
+        "a receiver whose own binding names a different operator's Nostr key than the sender's holds the half and records same_controller_as_receiver: false, neither key sealed",
+        &other_operator,
+        None,
+        &announced,
+        "node-n",
+        &body,
+    ));
     out
 }
 
@@ -403,7 +423,8 @@ fn assert_case_holds(case: &Value) {
         }
         "operator_binding_beside_announced_key"
         | "operator_binding_declaration"
-        | "operator_binding_same_controller" => {
+        | "operator_binding_same_controller"
+        | "operator_binding_other_controller" => {
             let via = if name == "operator_binding_declaration" {
                 "controller_declaration"
             } else {
@@ -425,7 +446,21 @@ fn assert_case_holds(case: &Value) {
                 !case["citing_record"].to_string().contains(operator),
                 "{name}: the operator's Nostr key is never sealed"
             );
-            let same = (name == "operator_binding_same_controller").then_some(json!(true));
+            if name == "operator_binding_other_controller" {
+                assert!(
+                    !case["citing_record"]
+                        .to_string()
+                        .contains(&nostr_id(&nostr(0x52))),
+                    "{name}: nor the receiver's own operator's"
+                );
+            }
+            // Three states loop#96 tells apart: true, false (checked, a
+            // different operator), and absent (no own binding to check).
+            let same = match name {
+                "operator_binding_same_controller" => Some(json!(true)),
+                "operator_binding_other_controller" => Some(json!(false)),
+                _ => None,
+            };
             assert_eq!(
                 facts.get("same_controller_as_receiver"),
                 same.as_ref(),
@@ -447,7 +482,7 @@ fn assert_case_holds(case: &Value) {
 #[test]
 fn every_acceptance_case_holds_on_a_fresh_run() {
     let cases = cases();
-    assert_eq!(cases.len(), 9);
+    assert_eq!(cases.len(), 10);
     for case in &cases {
         assert_case_holds(case);
     }
@@ -594,7 +629,7 @@ fn the_committed_fixtures_verify() {
     let doc: Value =
         serde_json::from_str(&std::fs::read_to_string(fixture_path()).unwrap()).unwrap();
     let cases = doc["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 9);
+    assert_eq!(cases.len(), 10);
     for name in [
         "known_key_other_transport_id",
         "known_transport_id_unknown_key",
@@ -605,6 +640,7 @@ fn the_committed_fixtures_verify() {
         "operator_binding_beside_announced_key",
         "operator_binding_declaration",
         "operator_binding_same_controller",
+        "operator_binding_other_controller",
     ] {
         assert_case_holds(by_name(cases, name));
     }

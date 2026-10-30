@@ -13,7 +13,8 @@
   was accepted, plus `same_controller_as_receiver` when the receiver holds its own binding (true
   when both name the same operator key). The operator's Nostr key is never sealed: a declaration
   anchored on a `bip340` key no longer records `controller_anchor_key_id`. Nothing new is gated.
-  `vectors/evidence-key-acceptance/cases.json` gains three operator-binding cases.
+  `vectors/evidence-key-acceptance/cases.json` gains four operator-binding cases, covering
+  `same_controller_as_receiver` true, false and absent.
   Mesh-LLM/capsules-plugin#113.
 - **The saved History page carries the Service History when the node shares it.** With
   `share_standard_history` on and a checkpoint at a period boundary, the `history-page` route
