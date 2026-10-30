@@ -216,6 +216,12 @@ pub fn salt(signing_key: &ed25519_dalek::SigningKey) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// The longest the hook may take, as declared: room for a service evidence
+/// agreement's set-up when the operator grants it and sets
+/// `CAPSULES_AGREEMENT_HOOK_WAIT_MS` (`agreement_bridge`). The host applies
+/// the smaller of this and the grant's `deadline_ms`.
+pub const HOOK_DEADLINE_MS: u64 = 2_000;
+
 /// The hook the plugin declares: admission on `backend_selected` only, no
 /// bodies or headers. Not required, so a host without the lifecycle still
 /// loads the plugin; the operator's grant decides whether a failed hook
@@ -224,6 +230,7 @@ pub fn hook_manifest() -> OpenAiExchangeHookManifest {
     let mut hook = openai_exchange_hook(HANDLER);
     hook.phases = vec!["backend_selected".into()];
     hook.admission = true;
+    hook.deadline_ms = HOOK_DEADLINE_MS;
     hook
 }
 
@@ -846,6 +853,7 @@ mod tests {
         let hook = hook_manifest();
         assert_eq!(hook.handler, HANDLER);
         assert_eq!(hook.phases, vec!["backend_selected".to_string()]);
+        assert_eq!(hook.deadline_ms, HOOK_DEADLINE_MS);
         assert!(hook.admission);
         assert!(
             !hook.required,

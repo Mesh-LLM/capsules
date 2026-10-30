@@ -448,6 +448,14 @@ async fn settlement_legs_on_lifecycle(
     }
 }
 
+/// [`agreement_bridge::holds_session_with`], off the async runtime.
+async fn keeps_session_with(capsules: &Arc<CapsuleState>, peer_id: String) -> bool {
+    let capsules = capsules.clone();
+    tokio::task::spawn_blocking(move || agreement_bridge::holds_session_with(&capsules, &peer_id))
+        .await
+        .unwrap_or(false)
+}
+
 /// Settlement-records legs from an exchange event: a remote exchange names
 /// the serving peer (where this node's terms legs go) and, when terminal,
 /// the response digest (this node's delivered leg).
@@ -467,9 +475,18 @@ async fn settlement_legs_on_exchange(
     let terminal = envelope.phase == lifecycle_channel::Phase::Terminal;
     if envelope.dispatch_path != lifecycle_channel::DispatchPath::RemoteMesh {
         // A host that names no model: this node's own, from its status.
-        let model = match model {
-            None if terminal => host_status::own_model_now().await,
-            model => model,
+        // Read only for a requester this node keeps a session with.
+        let requester_id = envelope
+            .serving_provenance
+            .as_ref()
+            .and_then(|p| p.requested_by_node_id.clone());
+        let model = match (model, requester_id) {
+            (None, Some(requester))
+                if terminal && keeps_session_with(capsules, requester.clone()).await =>
+            {
+                host_status::own_model_now().await
+            }
+            (model, _) => model,
         };
         // Provider: the agreement this served exchange cites, decided at its
         // terminal event, before the served half is sealed below; the payee
@@ -508,8 +525,15 @@ async fn settlement_legs_on_exchange(
     let peer = push_counterparty(&envelope).map(str::to_string);
     let digest = envelope.response_digest.clone();
     // A host that names no model: the provider's, from this host's status.
+    // Read only when a session may be proposed or cited.
     let model = match (model, &peer) {
-        (None, Some(peer)) if terminal => host_status::peer_model_now(peer).await,
+        (None, Some(peer))
+            if terminal
+                && (agreement::SessionTerms::from_settings().is_some()
+                    || keeps_session_with(capsules, peer.clone()).await) =>
+        {
+            host_status::peer_model_now(peer).await
+        }
         (model, _) => model,
     };
     let capsules = capsules.clone();
@@ -1871,6 +1895,7 @@ fn with_admission_hook(
     plugin
         .with_manifest(manifest)
         .with_openai_exchange_handler(move |_handler, event, context| {
+            let entered = std::time::Instant::now();
             let admission = admission.clone();
             let capsules = capsules.clone();
             let context = context.owned();
@@ -1887,7 +1912,7 @@ fn with_admission_hook(
                     == mesh_llm_plugin::openai_exchange::OpenAiAdmissionDecision::Allow
                 {
                     if let Some(peer) = peer {
-                        agreement_bridge::hold_for_session(context, capsules, peer).await;
+                        agreement_bridge::hold_for_session(context, capsules, peer, entered).await;
                     }
                 }
                 Ok(decision)

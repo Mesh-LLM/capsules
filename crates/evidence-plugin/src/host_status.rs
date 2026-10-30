@@ -21,8 +21,9 @@ use serde_json::Value;
 
 const ROUTE: &str = "/api/status";
 const TIMEOUT: Duration = Duration::from_secs(2);
-/// How long a status read is reused, so exchanges in a burst read it once.
-const FRESH: Duration = Duration::from_secs(10);
+/// After a failed read, how long the console is not asked again, so an
+/// unreachable console does not cost each exchange its timeout.
+const BACK_OFF: Duration = Duration::from_secs(30);
 /// The shortest node id prefix the status may name a peer by.
 const MIN_PREFIX: usize = 8;
 
@@ -58,22 +59,20 @@ pub fn peer_model(status: &Value, peer_id: &str) -> Option<String> {
     only_one(peer.get("serving_models"))
 }
 
-/// The host's status, as read within [`FRESH`]; `None` when it cannot be
-/// read.
+/// The host's status, read now; `None` when it cannot be read, or within
+/// [`BACK_OFF`] of a read that failed. Never reused: a model the provider
+/// changed is read as changed.
 async fn fetch() -> Option<Value> {
-    static LAST: Mutex<Option<(Instant, Value)>> = Mutex::new(None);
-    let cached = || {
-        let last = LAST.lock().unwrap_or_else(PoisonError::into_inner);
-        last.as_ref()
-            .filter(|(at, _)| at.elapsed() < FRESH)
-            .map(|(_, status)| status.clone())
-    };
-    if let Some(status) = cached() {
-        return Some(status);
+    static FAILED: Mutex<Option<Instant>> = Mutex::new(None);
+    let backing_off = |at: &Option<Instant>| at.is_some_and(|at| at.elapsed() < BACK_OFF);
+    if backing_off(&FAILED.lock().unwrap_or_else(PoisonError::into_inner)) {
+        return None;
     }
-    let status = fetch_from(&crate::peer_keys::announced::console_url()).await?;
-    *LAST.lock().unwrap_or_else(PoisonError::into_inner) = Some((Instant::now(), status.clone()));
-    Some(status)
+    let status = fetch_from(&crate::peer_keys::announced::console_url()).await;
+    if status.is_none() {
+        *FAILED.lock().unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+    }
+    status
 }
 
 /// [`fetch`] from the console at `base`.

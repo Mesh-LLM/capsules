@@ -38,9 +38,11 @@
 //!
 //! Where the operator granted the admission hook, the requester sets the
 //! session up at `backend_selected` instead, before the request goes out,
-//! holding it at most [`hook_wait`] ([`hold_for_session`]). A set-up that
-//! takes longer finishes in the background and the request goes on; the
-//! provider still cites only a session it held complete when it served.
+//! holding it at most [`hook_wait`], which the operator sets below the
+//! grant's `deadline_ms` ([`hold_for_session`]). A set-up that takes longer
+//! finishes in the background and the request goes on; whether that
+//! exchange then cites the session is decided at its terminal event, and
+//! the provider cites only a session it held complete when it served.
 //! A host that names no model there (or at the terminal event) is asked
 //! for the provider's model through its status (`host_status`).
 
@@ -77,10 +79,13 @@ fn responder_timeout() -> Duration {
     env_millis("CAPSULES_AGREEMENT_RESPONDER_TIMEOUT_MS", 10_000)
 }
 
-/// The longest the admission hook holds a request for a session set-up.
-/// Keep it below the operator grant's `deadline_ms`.
+/// How long after the admission hook is called a request may be held for
+/// its session set-up. Off (0) unless the operator sets it, since the plugin
+/// cannot see the grant's `deadline_ms`, which it must stay below; at most
+/// [`crate::admission::HOOK_DEADLINE_MS`], what the hook declares.
 fn hook_wait() -> Duration {
-    env_millis("CAPSULES_AGREEMENT_HOOK_WAIT_MS", 1_500)
+    env_millis("CAPSULES_AGREEMENT_HOOK_WAIT_MS", 0)
+        .min(Duration::from_millis(crate::admission::HOOK_DEADLINE_MS))
 }
 
 /// The bounded wait for one frame's round trip, connect included (R9).
@@ -700,34 +705,37 @@ pub fn ensure_session(
     peer_id: String,
     model: String,
 ) {
-    spawn_set_up(context, capsules, peer_id, model);
+    if let Some(terms) = SessionTerms::from_settings() {
+        spawn_set_up(context, capsules, peer_id, model, terms);
+    }
 }
 
-/// [`ensure_session`] from the admission hook, for the model the host's
-/// status says `peer_id` serves: the same set-up, with the request held
-/// until it ends or [`hook_wait`] passes, whichever is first, the status
-/// read included. It never fails the request: a set-up still running when
-/// the wait ends goes on in the background.
+/// [`ensure_session`] from the admission hook, at `backend_selected`, for
+/// the model the host's status says `peer_id` serves. The set-up starts
+/// before the request goes out; the request is held until it ends or
+/// [`hook_wait`] has passed since `entered` (when the hook was called),
+/// whichever is first. With no hold set, or a set-up still running when it
+/// ends, the request goes on and the set-up finishes in the background.
 pub async fn hold_for_session(
     context: PluginContext<'static>,
     capsules: Arc<CapsuleState>,
     peer_id: String,
+    entered: Instant,
 ) {
-    if SessionTerms::from_settings().is_none() {
-        return;
-    }
-    let budget = hook_wait();
-    let started = Instant::now();
-    let Ok(Some(model)) =
-        tokio::time::timeout(budget, crate::host_status::peer_model_now(&peer_id)).await
-    else {
+    let Some(terms) = SessionTerms::from_settings() else {
         return;
     };
-    let Some(set_up) = spawn_set_up(context, capsules, peer_id.clone(), model) else {
-        return;
-    };
-    if !wait_at_most(budget.saturating_sub(started.elapsed()), set_up).await {
-        tracing::info!(%peer_id, "agreement set-up outlasted the admission hold; the request goes on");
+    let set_up = tokio::spawn(async move {
+        let Some(model) = crate::host_status::peer_model_now(&peer_id).await else {
+            return;
+        };
+        if let Some(set_up) = spawn_set_up(context, capsules, peer_id, model, terms) {
+            let _ = set_up.await;
+        }
+    });
+    let budget = hook_wait().saturating_sub(entered.elapsed());
+    if !budget.is_zero() && !wait_at_most(budget, set_up).await {
+        tracing::info!("agreement set-up outlasted the admission hold; the request goes on");
     }
 }
 
@@ -737,13 +745,28 @@ async fn wait_at_most(budget: Duration, task: tokio::task::JoinHandle<()>) -> bo
     tokio::time::timeout(budget, task).await.is_ok()
 }
 
+/// Whether this node keeps a complete session with the node `peer_id`, in
+/// either role: what makes reading a model for its exchange worth it.
+pub fn holds_session_with(capsules: &CapsuleState, peer_id: &str) -> bool {
+    let registry = crate::peer_keys::registry();
+    let Some(key) = crate::peer_keys::announced_key_in(registry.as_deref(), peer_id) else {
+        return false;
+    };
+    complete_sessions(&Store::open(capsules.ledger_dir()))
+        .iter()
+        .any(|c| {
+            text(&c.record, "proposer") == Some(key.as_str())
+                || text(&c.record, "acceptor") == Some(key.as_str())
+        })
+}
+
 fn spawn_set_up(
     context: PluginContext<'static>,
     capsules: Arc<CapsuleState>,
     peer_id: String,
     model: String,
+    terms: SessionTerms,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    let terms = SessionTerms::from_settings()?;
     Some(tokio::spawn(async move {
         let mut context = context;
         let peer = peer_id.clone();
@@ -873,6 +896,11 @@ async fn exchange_frame(
 mod tests {
     use super::*;
 
+    use crate::agreement::SessionTerms;
+
+    const NOW: i64 = 1_793_000_000;
+    const MODEL: &str = "hf:example/model@main";
+
     /// The admission hold ends at its budget and leaves the set-up running;
     /// a set-up that ends sooner ends the hold at once.
     #[tokio::test]
@@ -892,10 +920,30 @@ mod tests {
         let quick = tokio::spawn(async {});
         assert!(wait_at_most(Duration::from_secs(5), quick).await);
     }
-    use crate::agreement::SessionTerms;
 
-    const NOW: i64 = 1_793_000_000;
-    const MODEL: &str = "hf:example/model@main";
+    /// The hold is off unless the operator sets it.
+    #[test]
+    fn the_admission_hold_is_off_by_default() {
+        assert_eq!(hook_wait(), Duration::ZERO);
+    }
+
+    /// A node keeps a session with a peer, in either role, only once one is
+    /// complete, and only with that peer's announced key.
+    #[test]
+    fn a_session_is_held_with_a_peer_once_it_is_complete() {
+        let p = pair();
+        let (requester_node, provider_node) = ("7a".repeat(32), "7b".repeat(32));
+        crate::peer_keys::announced::announce_for_test(&requester_node, &own_key(&p.requester));
+        crate::peer_keys::announced::announce_for_test(&provider_node, &own_key(&p.provider));
+        assert!(!holds_session_with(&p.requester, &provider_node));
+        p.agree(NOW);
+        assert!(holds_session_with(&p.requester, &provider_node));
+        assert!(holds_session_with(&p.provider, &requester_node));
+        assert!(
+            !holds_session_with(&p.requester, &"7c".repeat(32)),
+            "an unannounced peer"
+        );
+    }
 
     fn node(dir: &std::path::Path, name: &str) -> CapsuleState {
         CapsuleState::open(dir, name).unwrap()

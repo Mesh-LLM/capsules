@@ -48,9 +48,11 @@
 - **Service evidence agreements on hosts that name no model, and before the request (M4).** When
   the host's exchange events carry no model id, the plugin takes the provider's from the host's
   `/api/status` (only when that node serves exactly one model). Without this, a requester on
-  mesh-llm 0.78 never proposed a session. With the admission hook granted, the requester sets the
-  session up at `backend_selected`, holding the request at most `CAPSULES_AGREEMENT_HOOK_WAIT_MS`
-  (default 1500), so that exchange is covered too. See `docs/AGREEMENTS.md`.
+  mesh-llm 0.78 never proposed a session. With the admission hook granted, the requester starts the
+  set-up at `backend_selected`. With `CAPSULES_AGREEMENT_HOOK_WAIT_MS` set below the grant's
+  `deadline_ms` (off by default), it holds the request that long at most, so that exchange can be
+  under the agreement too, when the provider serves one model and the set-up finishes within the
+  hold. See `docs/AGREEMENTS.md`.
   action-state-group/evidencebook#48.
 - **Service evidence agreements on the Evidence page (M4, fourth part).** An Exchanges row shows
   the agreement's coverage label for this node's side, the ordering finding ("accepted before the
