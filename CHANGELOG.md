@@ -4,6 +4,20 @@
 
 ### Added
 
+- **Each ask is recorded (loop step 7).** Every evidence request this node sends is sealed as an
+  `evidence_request` record, holding the request exactly as sent, before it is sent; a request
+  that is not well formed, or reuses a nonce, is refused and never sent. A reply inside the
+  waiting window (the later of the request's deadline and 60 s) is sealed as `evidence_response`
+  citing the request; none by the close is sealed as `recorded_absence`. A late reply never
+  replaces an absence. A node that restarts seals the absences it owes and closes the windows
+  still open. The records are evidencebook's (`evidencebook::ask`) and never leave the node in an
+  answer. `mesh_commitment_fetch` now holds a peer's commitment that passed every check; an ask
+  records the commitment held for the peer, and a signed refusal is checked against the policy
+  it pins (`policy_check`: `MISMATCH` when the policy answers it to any asker and the refusal
+  withholds it, `MATCH` when the refusal blames the request or the policy does not answer that
+  subject, `NOT_CHECKED` with no commitment held, for `policy_declined` or `not_authorized`,
+  which honest responders also send for load, size and signature limits, or where the answer
+  depends on who asks). Mesh-LLM/capsules-plugin#56.
 - **The Exchanges tab saves a History page and a Settlement page, each one .html file that checks
   itself when it opens (Mesh-LLM/capsules-plugin#96, Steven's 10-29 ruling).** They replace the
   tab's "Save evidence file" JSON download for an outside party. The History page is what the node

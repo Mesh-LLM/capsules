@@ -427,10 +427,15 @@ pub(crate) async fn send_evidence_request(
     let wait = Duration::from_millis(requester_idle_timeout_ms());
     let asked = match asks {
         Some(capsules) if channel == crate::requester_auth::Channel::EvidenceRequest => {
+            let commitment = capsules
+                .ledger_dir()
+                .parent()
+                .and_then(|data_dir| crate::peer_commitments::pinned(data_dir, &peer_id));
             let asked = crate::ask_book::record_request(
                 capsules,
                 &request,
                 &peer_id,
+                commitment,
                 &crate::evidence_answer::now_utc(),
             )
             .map_err(|error| SendError::NotRecorded(error.to_string()))?;
@@ -509,7 +514,7 @@ pub(crate) async fn send_evidence_request(
     tokio::spawn(settle_ask(
         capsules,
         asked,
-        peer_id,
+        move |sent: &[u8], answer: &serde_json::Value| verify_announced(sent, answer, &peer_id),
         request_bytes.clone(),
         write_and_read(stream, request_bytes.clone()),
         closes_at,
@@ -552,14 +557,14 @@ fn read_answer(
 type Settled = Result<(serde_json::Value, serde_json::Value), SendError>;
 
 /// Read the reply to the recorded `asked` from `exchange` until the window
-/// closes at `closes_at`. A reply is checked under the peer's announced key
-/// and sealed as the response; none (or one that is not JSON) is sealed as
+/// closes at `closes_at`. A reply is checked by `verify` (under the peer's
+/// announced key, [`verify_announced`]) and sealed as the response; none (or one that is not JSON) is sealed as
 /// the absence once the window has closed. The caller hears through `tx`,
 /// if it is still listening.
 async fn settle_ask(
     capsules: std::sync::Arc<crate::capsule_emit::CapsuleState>,
     asked: crate::ask_book::Asked,
-    peer_id: String,
+    verify: impl FnOnce(&[u8], &serde_json::Value) -> serde_json::Value,
     sent: Vec<u8>,
     exchange: impl std::future::Future<Output = std::io::Result<Vec<u8>>>,
     closes_at: tokio::time::Instant,
@@ -576,17 +581,21 @@ async fn settle_ask(
     };
     match read {
         Ok(answer) => {
-            let verification = verify_announced(&sent, &answer, &peer_id);
-            if let Err(error) = crate::ask_book::record_response(
+            let checked = verify(&sent, &answer);
+            let verification = match crate::ask_book::record_response(
                 &capsules,
                 &asked.record_id,
                 &evidence_request::digest::request_digest(&sent),
                 &answer,
-                &verification,
+                &checked,
                 &crate::evidence_answer::now_utc(),
             ) {
-                tracing::warn!(%error, request_record = %asked.record_id, "a reply could not be recorded");
-            }
+                Ok((_, recorded)) => recorded,
+                Err(error) => {
+                    tracing::warn!(%error, request_record = %asked.record_id, "a reply could not be recorded");
+                    checked
+                }
+            };
             let _ = tx.send(Ok((answer, verification)));
         }
         Err(error) => {
@@ -1330,6 +1339,11 @@ mod tests {
         assert!(requested_adjudication("peer", &one_half).is_none());
     }
 
+    /// What checking a reply finds with no key announced for the peer.
+    fn unverified(_: &[u8], _: &serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"state": "no_announced_key"})
+    }
+
     /// A recorded ask, its window closing `window` from now, on a fresh
     /// ledger.
     fn recorded_ask(
@@ -1351,6 +1365,7 @@ mod tests {
             &capsules,
             &request,
             "peer",
+            None,
             &crate::evidence_answer::now_utc(),
         )
         .unwrap();
@@ -1390,7 +1405,7 @@ mod tests {
         settle_ask(
             capsules.clone(),
             asked,
-            "peer".into(),
+            unverified,
             sent.clone(),
             reply,
             closes_at,
@@ -1401,6 +1416,37 @@ mod tests {
             record_types(&capsules),
             ["evidence_request", "evidence_response"]
         );
+    }
+
+    #[tokio::test]
+    async fn the_caller_hears_the_verification_the_response_records() {
+        let (capsules, asked, closes_at, sent, _dir) = recorded_ask(Duration::from_secs(60));
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let reply = async { Ok(br#"{"reason":"no_such_subject"}"#.to_vec()) };
+        let signed_refusal = |_: &[u8], _: &serde_json::Value| serde_json::json!({"state": "refusal", "reason": "no_such_subject"});
+        settle_ask(
+            capsules.clone(),
+            asked,
+            signed_refusal,
+            sent,
+            reply,
+            closes_at,
+            tx,
+        )
+        .await;
+        let (_, verification) = rx.await.unwrap().expect("an answer");
+        // The ask held no commitment for the peer.
+        assert_eq!(verification["policy_check"]["status"], "NOT_CHECKED");
+        let recorded = crate::evidence_panes::read_capsule_records(capsules.ledger_dir())
+            .into_iter()
+            .filter_map(|r| {
+                r.pointer("/model_attestation/compute_attestation")?
+                    .get(crate::ask_book::BLOCK)
+                    .cloned()
+            })
+            .find(|e| e["record_type"] == "evidence_response")
+            .expect("the response record");
+        assert_eq!(recorded["statement"]["verification"], verification);
     }
 
     #[tokio::test]
@@ -1415,7 +1461,7 @@ mod tests {
         let task = tokio::spawn(settle_ask(
             capsules.clone(),
             asked,
-            "peer".into(),
+            unverified,
             sent,
             late,
             closes_at,
@@ -1439,7 +1485,7 @@ mod tests {
         let task = tokio::spawn(settle_ask(
             capsules.clone(),
             asked,
-            "peer".into(),
+            unverified,
             sent,
             ready,
             closed,

@@ -926,7 +926,7 @@ fn cites(entry: &Value, request_id: &str) -> bool {
 }
 
 /// Loop step 7, Ask. The history card ask was sealed as `evidence_request`
-/// before its answer: the request record comes first in the requester's
+/// before its answer, with the provider's commitment the requester held: the request record comes first in the requester's
 /// chain, and the response citing it verified as an artifact the provider
 /// signed for exactly the sealed request's digest, so the bytes sent were
 /// the bytes sealed. The ask nobody answered ended in a `recorded_absence`
@@ -968,6 +968,13 @@ fn each_ask_is_sealed_before_it_is_sent_and_an_unanswered_one_ends_in_absence() 
         "the answer is to the request as sealed"
     );
     assert_eq!(response["statement"]["verification"]["state"], "artifact");
+    let pinned = &request["statement"]["commitment"];
+    assert_eq!(
+        pinned["policy_digest"].as_str().map(str::len),
+        Some(64),
+        "the ask recorded the provider's commitment it held: {pinned:#}"
+    );
+    assert!(pinned["policy"]["stranger_safe"].is_array(), "{pinned:#}");
 
     let unanswered = std::env::var("E2E_UNANSWERED_PEER")
         .expect("E2E_UNANSWERED_PEER must name the peer the run asked and nobody answered for");
