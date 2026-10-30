@@ -734,6 +734,13 @@ pub struct ReceivedHalfProvenance<'a> {
     /// has no acceptance to record.
     pub sender_key_id: Option<&'a str>,
     pub accepted_via: Option<&'a crate::peer_keys::AcceptedVia>,
+    /// This node's own half of the same exchange, joined on a client nonce
+    /// that names exactly one own half and one held half
+    /// (`record_push_bridge::own_half_for`). It ties the earlier half to the
+    /// other side's: neither half can cite the other, since each is sealed
+    /// before its node can know the other's id. `None` when no own half is
+    /// sealed yet or the nonce is ambiguous -- an absent tie, never a guess.
+    pub own_half_capsule_id: Option<&'a str>,
 }
 
 /// Seal the LOCAL CITING record for a
@@ -788,6 +795,9 @@ pub fn seal_citing_record(
     }
     if let Some(key) = prov.sender_key_id {
         received_half.insert("sender_key_id".into(), json!(key));
+    }
+    if let Some(own) = prov.own_half_capsule_id {
+        received_half.insert("own_half_capsule_id".into(), json!(own));
     }
     if let Some(via) = prov.accepted_via {
         received_half.insert("accepted_via".into(), json!(via.token()));
@@ -2787,6 +2797,7 @@ mod tests {
             foreign_agent_output_digest: Some("b".repeat(64).leak()),
             sender_key_id: None,
             accepted_via: None,
+            own_half_capsule_id: None,
         }
     }
 
