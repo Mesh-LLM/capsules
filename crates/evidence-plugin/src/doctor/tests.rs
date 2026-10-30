@@ -542,3 +542,32 @@ fn a_binding_that_does_not_count_reads_unbound() {
     }
     assert_eq!(doctor_with(None).state, STATE_UNBOUND);
 }
+
+/// `join` takes one binding operation per call, refused before any write.
+#[test]
+fn join_takes_one_binding_operation_at_a_time() {
+    let args = |b: bool, c: bool, e: bool| JoinArgs {
+        controller_binding: b.then(|| json!({})),
+        controller: c.then(|| "ab".repeat(32)),
+        controller_event: e.then(|| json!({})),
+    };
+    for (b, c, e) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
+        assert!(args(b, c, e).one_binding_operation().is_ok());
+    }
+    for (b, c, e) in [
+        (true, true, false),
+        (true, false, true),
+        (false, true, true),
+        (true, true, true),
+    ] {
+        assert!(
+            args(b, c, e).one_binding_operation().is_err(),
+            "{b} {c} {e}"
+        );
+    }
+}

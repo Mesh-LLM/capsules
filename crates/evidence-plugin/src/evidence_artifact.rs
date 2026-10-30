@@ -442,6 +442,11 @@ pub struct Checked {
     pub records: Vec<u64>,
     /// The checkpoints it lists (`checkpoints`, `history_card/1`).
     pub checkpoints: usize,
+    /// The time the first of them states, which starts the stream: a
+    /// history card's key age. `None` when the answer lists none.
+    pub first_checkpoint_at: Option<String>,
+    /// The envelope's `artifact_digest`, checked against the artifact.
+    pub artifact_digest: String,
     /// The halves an `exchange_corroboration/1` answer states, each proven
     /// under the anchor. Empty for any other answer.
     pub halves: Vec<crate::exchange_corroboration::Half>,
@@ -568,7 +573,7 @@ pub fn check(
         }
         Some(Derivation::Digest(d))
             if d == crate::exchange_corroboration::DEFINITION_DIGEST
-                || d == crate::service_history::DEFINITION_DIGEST =>
+                || d == crate::service_history::definition_digest() =>
         {
             Some(d.as_str())
         }
@@ -623,7 +628,7 @@ pub fn check(
             let (served, listed) = card_chain(&art, key)?;
             (served, Vec::new(), listed)
         }
-        (Some(d), Subject::FullHistory) if d == crate::service_history::DEFINITION_DIGEST => {
+        (Some(d), Subject::FullHistory) if d == crate::service_history::definition_digest() => {
             // A Standard History is answered only at a pinned anchor.
             if !matches!(request.coverage, Coverage::ExpectedPin(_)) {
                 return fail("a Service History is answered only under an expected_pin");
@@ -643,6 +648,7 @@ pub fn check(
                 .map_err(|_| CheckError::Answer("the anchor's size is not an MMR size".into()))?;
             history = Some(
                 crate::service_history::check_artifact(
+                    crate::service_history::Definition::active(),
                     &art,
                     &times,
                     &served.digest,
@@ -714,6 +720,8 @@ pub fn check(
         anchor: served.digest,
         records,
         checkpoints: listed.len(),
+        first_checkpoint_at: listed.first().map(|first| first.cp.timestamp.clone()),
+        artifact_digest: env.artifact_digest.clone(),
         halves,
         receipts,
         history,

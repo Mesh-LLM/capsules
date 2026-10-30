@@ -203,6 +203,20 @@ impl SettlementIndex {
         }
     }
 
+    /// The exchange ids whose payer or provider book reads `settled`.
+    pub(super) fn settled_exchange_ids(&self) -> BTreeSet<String> {
+        let settled = |book: Value| book["state"] == PAYER_SETTLED;
+        let payer = self
+            .by_exchange
+            .iter()
+            .filter(|(_, records)| settled(payer_book(&records.iter().collect::<Vec<_>>())));
+        let provider = self
+            .provider_by_exchange
+            .iter()
+            .filter(|(_, records)| settled(provider_book(&records.iter().collect::<Vec<_>>())));
+        payer.chain(provider).map(|(id, _)| id.clone()).collect()
+    }
+
     /// Provider exchange ids no pane row carries.
     pub(super) fn provider_unjoined<'a>(
         &self,

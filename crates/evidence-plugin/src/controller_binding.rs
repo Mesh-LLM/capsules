@@ -30,6 +30,14 @@
 //! `bound`, naming the binding by its digest and never the other key, while
 //! it still applies, and `unbound` with the reason otherwise. Concurrent
 //! `join`s store one at a time ([`HELD_LOCK`]).
+//!
+//! **The ceremony.** The node key never leaves the plugin, so `join` makes
+//! the node's half: given the operator's Nostr key it builds the record
+//! ([`draft`]), signs it with the node key, keeps it pending in
+//! [`PENDING_FILE`], and returns the unsigned Nostr event (CB §4.1) for the
+//! operator's own signer. Given that event signed, it completes the record
+//! ([`complete`]) and stores it as above. The window is [`WINDOW_DAYS`] from
+//! the ceremony; a later binding replaces it.
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use evidence_request::time::{parse_utc, UtcTime};
@@ -216,6 +224,177 @@ pub fn binds_own(record: &Value, own_key: &str, at: UtcTime) -> Result<Applied, 
     Ok(applied)
 }
 
+/// The file in the data directory that holds a ceremony waiting for the
+/// operator's signature: the record without `sigs`, and the node's signature.
+pub const PENDING_FILE: &str = "controller-binding-pending.json";
+
+/// How long a binding the ceremony makes is in effect.
+pub const WINDOW_DAYS: i64 = 365;
+
+/// A ceremony's first half: the record binding `node` to the Nostr key
+/// `controller` from `now` for [`WINDOW_DAYS`], with a nonce of 128 random
+/// bits, signed by `node`, and the unsigned Nostr event the operator signs.
+/// Returns `(pending, event)`; `pending` is what [`complete`] takes back.
+pub fn draft(
+    node: &ed25519_dalek::SigningKey,
+    controller: &str,
+    now: &str,
+) -> Result<(Value, Value), String> {
+    if !is_key(controller)
+        || k256::schnorr::VerifyingKey::from_bytes(&hex::decode(controller).unwrap_or_default())
+            .is_err()
+    {
+        return Err(format!(
+            "{controller} is not a BIP-340 public key (64 lowercase hex)"
+        ));
+    }
+    let start = chrono::DateTime::parse_from_rfc3339(now)
+        .map_err(|e| format!("the time {now} does not parse: {e}"))?
+        .with_timezone(&chrono::Utc);
+    let end = (start + chrono::Duration::days(WINDOW_DAYS))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let mut nonce = [0u8; 16];
+    getrandom::getrandom(&mut nonce).map_err(|e| format!("no random nonce: {e}"))?;
+    if hex::encode(node.verifying_key().to_bytes()) == controller {
+        return Err("the controller key is this node's own key".into());
+    }
+    Ok(draft_with(
+        node,
+        controller,
+        &hex::encode(nonce),
+        now,
+        &end,
+        start.timestamp(),
+    ))
+}
+
+/// [`draft`] with its nonce, window and event time given.
+fn draft_with(
+    node: &ed25519_dalek::SigningKey,
+    controller: &str,
+    nonce: &str,
+    not_before: &str,
+    not_after: &str,
+    created_at: i64,
+) -> (Value, Value) {
+    use ed25519_dalek::Signer;
+    let node_key = hex::encode(node.verifying_key().to_bytes());
+    let mut pair = [
+        (node_key, KEY_TYPE_ED25519),
+        (controller.to_string(), KEY_TYPE_BIP340),
+    ];
+    pair.sort();
+    let record = serde_json::json!({
+        "binding_version": VERSION,
+        "claim": CLAIM_SAME_CONTROLLER,
+        "method": METHOD_DUAL_SIGNATURE,
+        "keys": [pair[0].0, pair[1].0],
+        "key_types": [pair[0].1, pair[1].1],
+        "issued_at": not_before,
+        "not_before": not_before,
+        "not_after": not_after,
+        "revocation": "revocation_statement/0",
+        "nonce": nonce,
+    });
+    let input = signing_input(&record).expect("a record of strings has a JCS form");
+    let event = serde_json::json!({
+        "pubkey": controller,
+        "created_at": created_at,
+        "kind": NOSTR_KIND,
+        "tags": [],
+        "content": format!("{VERSION}:{}", hex::encode(Sha256::digest(&input))),
+    });
+    let pending = serde_json::json!({
+        "record": record,
+        "node_sig": hex::encode(node.sign(&input).to_bytes()),
+    });
+    (pending, event)
+}
+
+/// A ceremony's second half: `pending` from [`draft`] completed with the
+/// operator's signed Nostr `event`, which must be the event [`draft`] asked
+/// for (its key, kind, tags and content) with a `created_at` and a `sig`.
+/// The record still has to pass [`binds_own`] before it is stored.
+pub fn complete(pending: &Value, event: &Value) -> Result<Value, String> {
+    let mut record = pending["record"].clone();
+    let input = signing_input(&record).ok_or("the pending record has no JCS form")?;
+    let keys = record["keys"].as_array().cloned().unwrap_or_default();
+    let types = record["key_types"].as_array().cloned().unwrap_or_default();
+    let controller = keys
+        .iter()
+        .zip(&types)
+        .find(|(_, t)| *t == KEY_TYPE_BIP340)
+        .map(|(k, _)| k.clone())
+        .ok_or("the pending record binds no Nostr key")?;
+    let content = format!("{VERSION}:{}", hex::encode(Sha256::digest(&input)));
+    if event["pubkey"] != controller {
+        return Err("the event is not signed by the controller key the ceremony names".into());
+    }
+    if event["kind"] != NOSTR_KIND || event["tags"] != serde_json::json!([]) {
+        return Err(format!(
+            "the event is not of kind {NOSTR_KIND} with no tags"
+        ));
+    }
+    if event["content"] != content.as_str() {
+        return Err("the event's content is not this ceremony's record".into());
+    }
+    let sig = serde_json::json!({"created_at": event["created_at"], "sig": event["sig"]});
+    record["sigs"] = Value::Array(
+        keys.iter()
+            .map(|k| {
+                if *k == controller {
+                    serde_json::json!({"key_id": k, "sig": sig})
+                } else {
+                    serde_json::json!({"key_id": k, "sig": pending["node_sig"]})
+                }
+            })
+            .collect(),
+    );
+    Ok(record)
+}
+
+/// Begin a ceremony in `data_dir`: [`draft`], kept pending in
+/// [`PENDING_FILE`] (replacing any earlier one); returns the event to sign.
+pub fn begin(
+    data_dir: &std::path::Path,
+    node: &ed25519_dalek::SigningKey,
+    controller: &str,
+    now: &str,
+) -> Result<Value, String> {
+    let (pending, event) = draft(node, controller, now)?;
+    let _held = HELD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    crate::network_join::write_atomically(&data_dir.join(PENDING_FILE), &pending)
+        .map_err(|e| format!("the ceremony could not be kept: {e}"))?;
+    Ok(event)
+}
+
+/// Finish the pending ceremony in `data_dir` with the operator's signed
+/// `event`: [`complete`], then [`store_held`]. The pending ceremony is
+/// removed once its binding is stored, and kept when the event is refused.
+pub fn finish(
+    data_dir: &std::path::Path,
+    event: &Value,
+    own_key: &str,
+    at: UtcTime,
+) -> Result<Applied, String> {
+    // One lock over reading, storing and removing, so a ceremony begun in
+    // between is neither completed by this event nor removed by it.
+    let _held = HELD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let pending: Value = std::fs::read(data_dir.join(PENDING_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .ok_or("no ceremony is pending: run join with controller first")?;
+    let record = complete(&pending, event)?;
+    let applied = write_held(data_dir, &record, own_key, at)?;
+    let _ = std::fs::remove_file(data_dir.join(PENDING_FILE));
+    Ok(applied)
+}
+
 /// Held while [`store_held`] writes: the write goes through one fixed
 /// temporary file, so two `join`s at once would interleave in it.
 static HELD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -227,10 +406,20 @@ pub fn store_held(
     own_key: &str,
     at: UtcTime,
 ) -> Result<Applied, String> {
-    let applied = binds_own(record, own_key, at)?;
     let _held = HELD_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    write_held(data_dir, record, own_key, at)
+}
+
+/// [`store_held`] with [`HELD_LOCK`] already held.
+fn write_held(
+    data_dir: &std::path::Path,
+    record: &Value,
+    own_key: &str,
+    at: UtcTime,
+) -> Result<Applied, String> {
+    let applied = binds_own(record, own_key, at)?;
     crate::network_join::write_atomically(&data_dir.join(HELD_FILE), record)
         .map_err(|e| format!("the binding could not be stored: {e}"))?;
     Ok(applied)
@@ -498,44 +687,37 @@ pub fn bind_to_nostr_for_test(
     not_before: &str,
     not_after: &str,
 ) -> Value {
-    use ed25519_dalek::Signer;
-    let node_key = hex::encode(node.verifying_key().to_bytes());
-    let nostr_key = hex::encode(nostr.verifying_key().to_bytes());
-    let mut pair = [(node_key, KEY_TYPE_ED25519), (nostr_key, KEY_TYPE_BIP340)];
-    pair.sort();
-    let mut record = serde_json::json!({
-        "binding_version": VERSION,
-        "claim": CLAIM_SAME_CONTROLLER,
-        "method": METHOD_DUAL_SIGNATURE,
-        "keys": [pair[0].0, pair[1].0],
-        "key_types": [pair[0].1, pair[1].1],
-        "issued_at": not_before,
-        "not_before": not_before,
-        "not_after": not_after,
-        "revocation": "revocation_statement/0",
-        "nonce": nonce,
-    });
-    let input = signing_input(&record).unwrap();
-    let created_at = 1_790_812_800_u64;
-    let sigs: Vec<Value> = pair
-        .iter()
-        .map(|(key, kind)| {
-            let sig = if *kind == KEY_TYPE_BIP340 {
-                let event = format!(
-                    r#"[0,"{key}",{created_at},{NOSTR_KIND},[],"{VERSION}:{}"]"#,
-                    hex::encode(Sha256::digest(&input))
-                );
-                let id = Sha256::digest(event.as_bytes());
-                let sig = nostr.sign_raw(&id, &[0; 32]).unwrap();
-                serde_json::json!({"created_at": created_at, "sig": hex::encode(sig.to_bytes())})
-            } else {
-                Value::String(hex::encode(node.sign(&input).to_bytes()))
-            };
-            serde_json::json!({"key_id": key, "sig": sig})
-        })
-        .collect();
-    record["sigs"] = Value::Array(sigs);
-    record
+    let controller = hex::encode(nostr.verifying_key().to_bytes());
+    let (pending, event) = draft_with(
+        node,
+        &controller,
+        nonce,
+        not_before,
+        not_after,
+        1_790_812_800,
+    );
+    complete(&pending, &sign_event_for_test(nostr, &event)).unwrap()
+}
+
+/// `event` signed with `nostr` as a NIP-01 signer does: its `id` over the
+/// serialized event, and a BIP-340 signature of that id. For tests and the
+/// two-node run, standing in for an operator's own signer.
+#[cfg(test)]
+pub fn sign_event_for_test(nostr: &k256::schnorr::SigningKey, event: &Value) -> Value {
+    let serial = serde_json::to_string(&serde_json::json!([
+        0,
+        event["pubkey"],
+        event["created_at"],
+        event["kind"],
+        event["tags"],
+        event["content"],
+    ]))
+    .unwrap();
+    let id = Sha256::digest(serial.as_bytes());
+    let mut signed = event.clone();
+    signed["id"] = hex::encode(id).into();
+    signed["sig"] = hex::encode(nostr.sign_raw(&id, &[0; 32]).unwrap().to_bytes()).into();
+    signed
 }
 
 #[cfg(test)]
@@ -785,5 +967,115 @@ mod tests {
         let record = bind_to_nostr_for_test(&key(1), &nostr, &"ab".repeat(16), FROM, UNTIL);
         let own = hex::encode(key(1).verifying_key().to_bytes());
         assert!(binds_own(&record, &own, at("2026-10-28T00:00:00Z")).is_ok());
+    }
+
+    /// `join` with the operator's Nostr key, then with the event the
+    /// operator signed: the node's own half and the operator's make a
+    /// binding that applies for a year, and the pending ceremony is gone.
+    #[test]
+    fn the_ceremony_binds_the_node_key_to_the_operators_nostr_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = key(1);
+        let own = hex::encode(node.verifying_key().to_bytes());
+        let nostr = k256::schnorr::SigningKey::from_bytes(&[7; 32]).unwrap();
+        let controller = hex::encode(nostr.verifying_key().to_bytes());
+        let now = "2026-10-29T12:00:00Z";
+        let event = begin(dir.path(), &node, &controller, now).unwrap();
+        assert_eq!(event["kind"], NOSTR_KIND);
+        assert!(dir.path().join(PENDING_FILE).exists());
+        assert_eq!(
+            read_held(dir.path()),
+            None,
+            "nothing is bound before the operator signs"
+        );
+
+        let applied = finish(
+            dir.path(),
+            &sign_event_for_test(&nostr, &event),
+            &own,
+            at(now),
+        )
+        .unwrap();
+        assert_eq!(applied.other(&own), Some(controller.as_str()));
+        assert!(!dir.path().join(PENDING_FILE).exists());
+        let held = read_held(dir.path()).unwrap();
+        assert_eq!(held["not_after"], "2027-10-29T12:00:00Z");
+        assert_eq!(held["nonce"].as_str().unwrap().len(), 32);
+        assert!(binds_own(&held, &own, at("2027-10-29T11:59:59Z")).is_ok());
+        assert!(binds_own(&held, &own, at("2027-10-29T12:00:00Z")).is_err());
+
+        // Two ceremonies over the same keys and time differ in their nonce.
+        let again = draft(&node, &controller, now).unwrap().0;
+        assert_ne!(again["record"]["nonce"], held["nonce"]);
+    }
+
+    /// An event that is not the one asked for, or signed by another key, is
+    /// refused, and the pending ceremony is kept for the right one.
+    #[test]
+    fn the_ceremony_refuses_any_other_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = key(1);
+        let own = hex::encode(node.verifying_key().to_bytes());
+        let nostr = k256::schnorr::SigningKey::from_bytes(&[7; 32]).unwrap();
+        let other = k256::schnorr::SigningKey::from_bytes(&[8; 32]).unwrap();
+        let controller = hex::encode(nostr.verifying_key().to_bytes());
+        let now = "2026-10-29T12:00:00Z";
+        assert!(finish(dir.path(), &Value::Null, &own, at(now))
+            .unwrap_err()
+            .contains("no ceremony is pending"));
+        let event = begin(dir.path(), &node, &controller, now).unwrap();
+
+        let mut by_other = event.clone();
+        by_other["pubkey"] = hex::encode(other.verifying_key().to_bytes()).into();
+        let mut other_content = event.clone();
+        other_content["content"] = format!("{VERSION}:{}", "0".repeat(64)).into();
+        let mut a_note = event.clone();
+        a_note["kind"] = 1.into();
+        let mut forged = sign_event_for_test(&nostr, &event);
+        forged["sig"] = sign_event_for_test(&other, &event)["sig"].clone();
+        for (why, bad, says) in [
+            (
+                "another key's event",
+                sign_event_for_test(&other, &by_other),
+                "not signed by the controller",
+            ),
+            (
+                "another record",
+                sign_event_for_test(&nostr, &other_content),
+                "not this ceremony's record",
+            ),
+            (
+                "a text note",
+                sign_event_for_test(&nostr, &a_note),
+                "kind 3374",
+            ),
+            ("a signature by another key", forged, "do not both verify"),
+        ] {
+            let err = finish(dir.path(), &bad, &own, at(now)).unwrap_err();
+            assert!(err.contains(says), "{why}: {err}");
+            assert!(dir.path().join(PENDING_FILE).exists(), "{why}: kept");
+            assert_eq!(read_held(dir.path()), None, "{why}");
+        }
+        // A ceremony begun again replaces the first: the first one's event
+        // no longer completes anything, and the second stays pending.
+        let second = begin(dir.path(), &node, &controller, now).unwrap();
+        let err = finish(
+            dir.path(),
+            &sign_event_for_test(&nostr, &event),
+            &own,
+            at(now),
+        )
+        .unwrap_err();
+        assert!(err.contains("not this ceremony's record"), "{err}");
+        assert!(finish(
+            dir.path(),
+            &sign_event_for_test(&nostr, &second),
+            &own,
+            at(now)
+        )
+        .is_ok());
+        for bad in [own.clone(), "zz".repeat(32), "ab".to_string()] {
+            assert!(draft(&node, &bad, now).is_err(), "{bad}");
+        }
     }
 }

@@ -290,7 +290,29 @@ answers under the policy the commitment signs:
 curl -s -X POST -H 'content-type: application/json' -d '{"probe": true}' $CONSOLE/api/plugins/capsules/tools/doctor
 ```
 
-3. **Publish the commitment.** This returns the signed commitment and its policy; then
+3. **Bind the node to you (optional).** Give `join` your Nostr public key (64 hex,
+the key behind your npub). It signs the node's half and returns, under
+`controller_binding_ceremony.event`, a Nostr event for you to sign with your own
+signer; the node never sees your secret key:
+
+```bash
+curl -s -X POST -H 'content-type: application/json' -d '{"controller": "<your key>"}' $CONSOLE/api/plugins/capsules/tools/join
+```
+
+Sign it, do not publish it: never send this event to a relay, which would link your
+key to the node. Then pass the signed event back:
+
+```bash
+curl -s -X POST -H 'content-type: application/json' -d '{"controller_event": <signed event>}' $CONSOLE/api/plugins/capsules/tools/join
+```
+
+`doctor` then reports `controller_binding: bound`, and the commitment names the
+binding by its digest alone, never your key. Show the binding record only to the
+parties that need it. The binding holds for a year: the plugin does not yet send or
+read revocations (Controller Binding §5), so it holds until its `not_after` or until
+you run the ceremony again.
+
+4. **Publish the commitment.** This returns the signed commitment and its policy; then
 add it to the commitment list by pull request:
 https://github.com/evidence-network/loop/blob/main/nodes/README.md
 
@@ -298,14 +320,14 @@ https://github.com/evidence-network/loop/blob/main/nodes/README.md
 curl -s -X POST -H 'content-type: application/json' -d '{}' $CONSOLE/api/plugins/capsules/tools/commitment
 ```
 
-4. **Join the list.** In the console (Configuration, Plugins, capsules), turn on
+5. **Join the list.** In the console (Configuration, Plugins, capsules), turn on
 "Join the evidence network". The statement under the switch is what you agree to. The node then
 signs one join with its plugin key, with no handle and no operator name, and sends
 it to the network's reporter node; `join` shows under `network` whether the reporter
 has it. While no reporter is named yet (`network.reporter` is null), nothing is sent.
 To leave, turn the switch off.
 
-`join` and `doctor` seal nothing and contact nobody.
+`join` and `doctor` seal nothing and contact nobody; `join` writes only a binding or a pending one.
 <!-- /join-quickstart -->
 
 ## Admit or refuse peers
@@ -317,8 +339,27 @@ your lists, and seal the decision in its book:
 - `CAPSULES_ADMISSION_DENY`: peers to refuse, in the same form. A peer on both lists is refused.
 - `CAPSULES_ADMISSION_DEFAULT`: `go` (the default) or `no`, for a peer on neither list.
 
+Each decision also records what the base policy's five rows (policy `base/1`) read about the peer,
+from its history card and this node's own book. The rows decide nothing: only your settings give a
+NO. They record:
+
+- **identity**: the card verifies under the record key the peer announced;
+- **key age**: the card's first checkpoint is at least 7 days old. That time is the peer's own
+  statement, witnessed or not, so a peer can backdate it: `pass` is not proof of age;
+- **performed and settled**: this node has at least one settled exchange with the peer;
+- **disputes**: no referee has ruled against the peer (`contradicted`) in the last 30 days, counting
+  only verdicts this node asked for or issued; `not_read` while this node holds no verdict about the
+  peer at all;
+- **corroboration**: this node holds the peer's pushed half of at least one exchange.
+
+A row that fails stays a record; to refuse such a peer, add it to your deny list. The thresholds
+are placeholders, fixed in this version.
+
 The settings are read once at start; restart mesh-llm after changing them. Nothing is fetched
-while a request waits. If a setting does not parse, the plugin keeps running and refuses every
+while a request waits: a peer's card is asked for in the background (at most once an hour per
+peer, and again daily), and the book is re-read every minute. Until then the rows read `not_read`.
+
+If a setting does not parse, the plugin keeps running and refuses every
 peer (`unreadable_policy` in the log and the records) until you fix it and restart, so a typo
 never admits a peer you meant to refuse.
 
@@ -345,8 +386,8 @@ the request anyway. The same holds while the plugin is stopped or not loaded: wi
 mesh-llm refuses every request (503) until the plugin is back; with `best_effort`, it routes to
 every peer, deny list included.
 
-Each decision is an `admission_decision` record: the verdict, which list or the default gave it,
-and the digest of the policy it read. The record never names the peer in clear, since records can
+Each decision is an `admission_decision` record: the verdict, which list or the default
+gave it, each row's result (`pass`, `fail` or `not_read`), the digest of the policy it read, and the history card it read, by a commitment like the peer's. The record never names the peer in clear, since records can
 be shared with others; it names the peer by a commitment only this node's key can open, so a peer
 cannot check a record about itself unless you open it. If the key is lost, so is the way to say
 which peer an old record names. If a decision cannot be sealed, the answer is NO and the log says

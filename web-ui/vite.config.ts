@@ -9,10 +9,12 @@ import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import type { PluginOption } from 'vite'
+import { build } from 'vite'
 import { defineConfig } from 'vitest/config'
 import { scopeToMountRoot } from './scope-css.ts'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
+const cllBrowser = path.resolve(dirname, 'node_modules/@action-state-group/cll/dist/browser.js')
 
 /**
  * The twin-bracket diff viewer (react-diff-viewer-continued) lists a lazy
@@ -38,10 +40,57 @@ function noSyntaxGrammars(): PluginOption {
   }
 }
 
+/**
+ * `import code from './x.ts?iife'` is `x.ts` bundled on its own as one
+ * self-contained script (an IIFE exposing its exports on `globalThis[name]`),
+ * as text. A saved page embeds it so it can verify its own bundle on open,
+ * offline, with the same code the tests run.
+ */
+function inlineIife(): PluginOption {
+  const suffix = '?iife'
+  return {
+    name: 'capsules:inline-iife',
+    enforce: 'pre',
+    async resolveId(source, importer, options) {
+      if (!source.endsWith(suffix)) return null
+      const resolved = await this.resolve(source.slice(0, -suffix.length), importer, { ...options, skipSelf: true })
+      return resolved ? `${resolved.id}${suffix}` : null
+    },
+    async load(id) {
+      if (!id.endsWith(suffix)) return null
+      const file = id.slice(0, -suffix.length)
+      const result = await build({
+        configFile: false,
+        logLevel: 'silent',
+        resolve: { alias: { '@cll-browser': cllBrowser } },
+        build: {
+          write: false,
+          minify: true,
+          target: 'es2022',
+          lib: { entry: file, formats: ['iife'], name: 'CapsulesSavedPage', fileName: () => 'saved-page.js' }
+        }
+      })
+      const outputs = (Array.isArray(result) ? result : [result]).flatMap((r) => ('output' in r ? r.output : []))
+      const chunk = outputs.find((o) => o.type === 'chunk')
+      if (!chunk || chunk.type !== 'chunk') throw new Error(`could not bundle ${file}`)
+      this.addWatchFile(file)
+      return `export default ${JSON.stringify(chunk.code)}`
+    }
+  }
+}
+
 export default defineConfig({
   // scopeToMountRoot runs after Tailwind's own transform: it needs the compiled CSS.
-  plugins: [noSyntaxGrammars(), react(), tailwindcss(), scopeToMountRoot()],
-  resolve: { alias: { '@': path.resolve(dirname, './src') } },
+  plugins: [noSyntaxGrammars(), inlineIife(), react(), tailwindcss(), scopeToMountRoot()],
+  resolve: {
+    alias: {
+      '@': path.resolve(dirname, './src'),
+      // The cll package's `browser` condition, named directly: the saved History
+      // page bundles the same file (saved-pages.ts), and a test under node
+      // must not pick the package's node build.
+      '@cll-browser': cllBrowser
+    }
+  },
   define: { 'process.env.NODE_ENV': JSON.stringify('production') },
   build: {
     outDir: path.resolve(dirname, '../bundle'),

@@ -18,14 +18,42 @@
   subject, `NOT_CHECKED` with no commitment held, for `policy_declined` or `not_authorized`,
   which honest responders also send for load, size and signature limits, or where the answer
   depends on who asks). Mesh-LLM/capsules-plugin#56.
+- **The Exchanges tab saves a History page and a Settlement page, each one .html file that checks
+  itself when it opens (Mesh-LLM/capsules-plugin#96, Steven's 10-29 ruling).** They replace the
+  tab's "Save evidence file" JSON download for an outside party. The History page is what the node
+  answers a stranger who asks for its history (`history_card/1`, new route `history-page`), so it
+  carries no more than the node's disclosure policy sends to that party. It embeds the reply byte for
+  byte, checks it on open with `@action-state-group/cll`'s browser build (the artifact is the bytes
+  its digest names, every checkpoint is signed by the key that answered, each consistency proof
+  holds, the log starts at its beginning, the last checkpoint is the anchor), shows nothing from a
+  reply that does not check, shows the key id the checkpoints were checked under, and lists what it
+  could not check: witness receipts, the signature on the reply, that the key is the node's, and
+  which request it answers. "Save the JSON" returns the embedded bytes unchanged. The
+  Settlement page says it holds no evidence from the node, with the dashboard's own note, until the settlement terms pack exists
+  (action-state-group/evidencebook-skills#71). The per-exchange receipt page, the Service History
+  form when `share_standard_history` is on, and the 9b wording are not in this change. The CSV and
+  the integrity, peers, twin-bracket and "Your records" JSON exports are unchanged. No release.
 - **The node key bound to its operator (loop step 12).** `join` takes an optional
   `controller_binding`: a Controller Binding record (AAC `spec/controller-binding-v0.md`) that binds
   this node's key to its operator's, which may be the operator's Nostr key (`bip340`, signed with a
   Nostr event). `join` stores it only when it binds this node's key and applies, and refuses it
-  otherwise. `doctor` reports `controller_binding: bound` with the binding digest, or `unbound` with
+  otherwise. `join` also runs the ceremony itself: given the operator's Nostr key (`controller`),
+  it signs the node's half and returns the Nostr event the operator signs with their own signer;
+  given that event back (`controller_event`), it stores the binding, in effect for a year. The
+  join quickstart in `INSTALL.md` gains this step. `doctor` reports `controller_binding: bound` with the binding digest, or `unbound` with
   the reason. The commitment names the binding by its digest alone (`controller_binding.digest`),
   never the operator's key, and the binding stays optional (Steven's ruling). Verification of the
   `bip340` key type uses `k256`. Mesh-LLM/capsules-plugin#54, #97.
+- **The Service History checks against the period policy of the definition it is handed, and the
+  #315 vectors run.** `period_alignment`, `period_anchor` and `period_floor` read the epoch, length
+  and floor from the definition's `period_policy` (checked as `definition_form`) instead of fixed
+  weekly values; this node's own definition, its digests and its answers are unchanged. A test runs
+  the 19 Standard-level cases of the `inference-service-history-v0` vectors
+  (action-state-group/agent-action-capsule#315 at f8c946ed), whose policy is daily from
+  2026-10-01; the 8 Detailed-level cases are listed by id, not run. The new test-only cargo feature
+  `test-period-policy` overrides the epoch and length from the environment, for the two-node e2e,
+  which now runs a Service History across a period boundary on two nodes and compares the embedded
+  card with the direct one (action-state-group/evidencebook#46).
 - **The Service History (`service_history/1`), a Standard History under the inference-service
   history profile.** A requester asks for it by the digest of
   `derivations/service-history-1.json` (`cbc96d80…`), for `full_history`, pinned to a checkpoint
@@ -41,6 +69,18 @@
   action-state-group/agent-action-capsule#315 at f8c946ed and the period policy Steven ruled under
   action-state-group/evidencebook#46; `served_summary/1` is unchanged. Ported from
   Mesh-LLM/mesh-llm#2506 (Steven's M2). Mesh-LLM/capsules-plugin#39.
+- **Service evidence agreements (M4, first part).** With `CAPSULES_AGREEMENT_SPEND_CAP_MSAT` set,
+  a requester proposes a session-scoped agreement to a provider on its first exchange with it for
+  a model, beside the exchange and never holding it up, on the new private mesh channel
+  `x-capsules-agreement/1`. The agreement is the interop
+  profile's acceptance record (§11.1). The provider checks the session's Evidence Contract
+  (`x-capsules/paid-session@1`), model policy and terms against their digests and accepts. The
+  requester signs the §11.1.4 receipt and sends it back. Both sides keep the records, the
+  receipt and the documents byte-exact under `agreements/` in the ledger directory. The spend
+  cap is an agent-origin assertion, never a spend authorization. With no cap set, nothing
+  changes. Citing the agreement in halves and legs, and the coverage labels, follow.
+  `evidence-request` is taken at agent-action-capsule's merge of #454 (feature `acceptance`)
+  until a release carries it. See `docs/AGREEMENTS.md`. action-state-group/evidencebook#48.
 - **`settlement_check` and the Lightning adapter declaration (loop step 6).** The new read-only tool
   checks the Lightning settlement records this node holds for a paid exchange, under
   `adapters/lightning-v0.md`. Each check (object held, invoice join, amount, finality, preimage,

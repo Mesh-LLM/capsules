@@ -104,7 +104,9 @@ jobs:
       - name: Build the plugin and the scenario checks
         working-directory: crates/evidence-plugin
         run: |
-          cargo build --locked --bin capsules
+          # test-period-policy: the Service History step runs two-minute
+          # periods instead of weekly ones. No release build enables it.
+          cargo build --locked --features test-period-policy --bin capsules
           cargo test --locked --bin capsules --no-run
 
       - name: Two nodes, three exchanges, then the scenario checks

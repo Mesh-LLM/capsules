@@ -11,6 +11,11 @@ name = "capsules"
 path = "src/main.rs"
 
 [features]
+# Test-only: the Service History period epoch and length are read from
+# CAPSULES_TEST_PERIOD_EPOCH and CAPSULES_TEST_PERIOD_LENGTH_S, so the
+# two-node e2e reaches a period boundary in minutes. The override is another
+# definition, with its own digests. The release build never enables it.
+test-period-policy = []
 # Deliberately-broken variant: never denies a blocked model (fail-open bug).
 # Built and run against the same interop test to prove the test actually
 # distinguishes correct behavior from this specific regression.
@@ -147,7 +152,7 @@ cll = { package = "checkpointed-local-log", version = "0.3.1" }
 # check of Checkpointed Local Log material (`cll`) and witness receipts
 # (`receipt`). The artifact is built by evidencebook (below).
 # Pinned exactly: a new release may change what verifies.
-evidence-request = { version = "=0.2.0", features = ["cll", "receipt"] }
+evidence-request = { version = "=0.2.0", features = ["cll", "receipt", "acceptance"] }
 # The "asked of you" log (`evidence_answer::log_received`) is evidencebook's
 # `received` and the `served_summary/1` fold is its `served_summary`
 # (evidencebook#35); which directory the log may write, how a ledger line is
@@ -173,6 +178,9 @@ scitt-cose-receipt = "0.1"
 # `bip340` key type signs a Nostr event with BIP-340 Schnorr over secp256k1
 # (AAC Controller Binding §4.1). Same RustCrypto line as p256.
 k256 = { version = "0.13", default-features = false, features = ["schnorr", "std"] }
+# A controller binding's nonce (CB §9.3) and a service evidence agreement's
+# session id (`agreement`): 128 random bits each. Already in the tree.
+getrandom = "0.2"
 
 [dev-dependencies]
 # The record-push parity run reads its own golden answers, which hold a record
@@ -219,3 +227,9 @@ opt-level = 3
 # carries it; then this goes and the requirement above moves to that release.
 [patch.crates-io]
 mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "a39211e78f3dd73cf9a94b08417c0da17e5fa5d9" }
+# The interop profile's acceptance records (`acceptance` feature,
+# agent-action-capsule #454) are on its main but in no published
+# evidence-request yet. Taken from that merge commit until a release carries
+# it; the patch replaces the crate for evidencebook too, so the graph keeps
+# one evidence-request (`cargo tree -d` shows none twice).
+evidence-request = { git = "https://github.com/action-state-group/agent-action-capsule", rev = "a8f7ac7f9d4b76d96796885e5eac795211c28180" }
