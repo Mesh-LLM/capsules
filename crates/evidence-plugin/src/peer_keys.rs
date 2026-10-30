@@ -116,6 +116,15 @@ pub mod announced {
             .insert(peer.to_string(), key.to_string());
     }
 
+    /// The host's console API base: [`ENV_CONSOLE_URL`], or
+    /// [`DEFAULT_CONSOLE_URL`].
+    pub fn console_url() -> String {
+        crate::settings::var(ENV_CONSOLE_URL)
+            .ok()
+            .filter(|url| !url.is_empty())
+            .unwrap_or_else(|| DEFAULT_CONSOLE_URL.to_string())
+    }
+
     fn is_key(key: &str) -> bool {
         key.len() == 64 && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
     }
@@ -166,11 +175,7 @@ pub mod announced {
             tracing::info!("the host announces no plugin keys; CAPSULES_PEER_KEYS alone applies");
             return;
         }
-        let base = crate::settings::var(ENV_CONSOLE_URL)
-            .ok()
-            .filter(|url| !url.is_empty())
-            .unwrap_or_else(|| DEFAULT_CONSOLE_URL.to_string());
-        let url = format!("{}{ROUTE}", base.trim_end_matches('/'));
+        let url = format!("{}{ROUTE}", console_url().trim_end_matches('/'));
         tokio::spawn(async move {
             let client = match reqwest::Client::builder().timeout(TIMEOUT).build() {
                 Ok(client) => client,

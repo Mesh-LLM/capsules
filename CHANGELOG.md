@@ -45,6 +45,13 @@
   the saved page checks the history card inside (its digest, the checkpoint signatures, the chain
   and the anchor) and shows the node's own per-week counts as it states them, saying the counts
   were not checked. Otherwise the page holds the card, as before. Mesh-LLM/capsules-plugin#96.
+- **Service evidence agreements on hosts that name no model, and before the request (M4).** When
+  the host's exchange events carry no model id, the plugin takes the provider's from the host's
+  `/api/status` (only when that node serves exactly one model). Without this, a requester on
+  mesh-llm 0.78 never proposed a session. With the admission hook granted, the requester sets the
+  session up at `backend_selected`, holding the request at most `CAPSULES_AGREEMENT_HOOK_WAIT_MS`
+  (default 1500), so that exchange is covered too. See `docs/AGREEMENTS.md`.
+  action-state-group/evidencebook#48.
 - **Service evidence agreements on the Evidence page (M4, fourth part).** An Exchanges row shows
   the agreement's coverage label for this node's side, the ordering finding ("accepted before the
   exchange", or "agreement present; ordering not established" for an exchange in the receipt's
