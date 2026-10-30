@@ -54,7 +54,8 @@ host's `GET /api/status`, on the console it already reads announced keys
 from: its own `serving_models` on the provider, the provider's on the
 requester. A node serving exactly one model gives that model. A provider
 serving several, or a status that lists the provider twice or not at all,
-gives none, and no session is proposed or cited for that exchange. The
+gives none: the requester proposes no session for that exchange, and the
+provider cites one only by its weights digest (below). The
 status is read only where a session can be proposed or cited, and not
 again for 30 seconds after a read fails.
 

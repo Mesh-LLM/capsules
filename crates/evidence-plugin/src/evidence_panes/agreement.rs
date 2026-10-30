@@ -1237,7 +1237,12 @@ mod tests {
         provider
             .settlement_legs()
             .decide_served_citation("p-ex", || {
-                crate::agreement_bridge::served_citation(&provider, &requester_node, MODEL, now)
+                crate::agreement_bridge::served_citation(
+                    &provider,
+                    &requester_node,
+                    &[MODEL.into()],
+                    now,
+                )
             });
         let request = "a".repeat(64);
         provider

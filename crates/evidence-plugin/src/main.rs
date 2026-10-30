@@ -557,10 +557,12 @@ async fn settlement_legs_on_exchange(
                 capsules
                     .settlement_legs()
                     .decide_served_citation(exchange_id, || {
-                        let now = chrono::Utc::now().timestamp();
-                        models.iter().find_map(|model| {
-                            agreement_bridge::served_citation(capsules, requester, model, now)
-                        })
+                        agreement_bridge::served_citation(
+                            capsules,
+                            requester,
+                            &models,
+                            chrono::Utc::now().timestamp(),
+                        )
                     });
             }
         }

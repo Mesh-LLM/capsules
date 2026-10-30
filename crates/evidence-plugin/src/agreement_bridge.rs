@@ -516,18 +516,31 @@ pub fn delivered_citation(
 
 /// The acceptance a provider's exchange cites (R5, R6, R12): its session
 /// with the requester at `requester_peer` (the host's `requested_by_node_id`)
-/// for `model`, holding `now`, when it holds exactly one such session. The
-/// provider decides this once, at the
-/// exchange's terminal event; its served half and its payee leg both use the
-/// decision, so a session that appears later never reaches them.
+/// for the first of `models` it holds exactly one such session for, holding
+/// `now`. `models` are the names the served exchange may be known by, in the
+/// order they are tried (main.rs `served_models`). The provider decides this
+/// once, at the exchange's terminal event; its served half and its payee leg
+/// both use the decision, so a session that appears later never reaches them.
 pub fn served_citation(
     capsules: &CapsuleState,
     requester_peer: &str,
-    model: &str,
+    models: &[String],
     now: i64,
 ) -> Option<String> {
     let registry = crate::peer_keys::registry();
-    served_citation_in(capsules, requester_peer, model, registry.as_deref(), now)
+    served_citation_for_in(capsules, requester_peer, models, registry.as_deref(), now)
+}
+
+fn served_citation_for_in(
+    capsules: &CapsuleState,
+    requester_peer: &str,
+    models: &[String],
+    registry: Option<&str>,
+    now: i64,
+) -> Option<String> {
+    models
+        .iter()
+        .find_map(|model| served_citation_in(capsules, requester_peer, model, registry, now))
 }
 
 fn served_citation_in(
@@ -1346,27 +1359,48 @@ mod tests {
     /// A provider serving two local GGUFs, with a session for each, cites
     /// the one for the weights its served exchange states, though the event
     /// names no model and the status names no single one (evidencebook#48).
+    /// The names are tried in order: the digest's first, then the status's
+    /// when the digest's gives no session or several.
     #[test]
-    fn a_provider_serving_several_models_cites_by_the_weights_digest() {
+    fn a_provider_cites_by_the_weights_digest_then_by_the_status() {
         let p = pair();
-        let (a, b) = ("aa".repeat(32), "bb".repeat(32));
-        let model = |d: &str| crate::host_status::local_gguf_ref(d).unwrap();
-        let (_, for_a, _) = p.agree_for(&model(&a), NOW);
-        let (_, for_b, _) = p.agree_for(&model(&b), NOW);
+        let model = |d: &str| crate::host_status::local_gguf_ref(&d.repeat(32)).unwrap();
+        let (_, for_a, _) = p.agree_for(&model("aa"), NOW);
+        let (_, for_b, _) = p.agree_for(&model("bb"), NOW);
+        let (_, for_hf, _) = p.agree_for("hf:org/model@main", NOW);
+        p.agree_for(&model("ee"), NOW);
+        p.agree_for(&model("ee"), NOW);
         let requester_peer = "cc".repeat(32);
         let registry = json!({ requester_peer.clone(): own_key(&p.requester) }).to_string();
-        let cites = |digest: &str| {
-            served_citation_in(
+        let cites = |models: &[String]| {
+            served_citation_for_in(
                 &p.provider,
                 &requester_peer,
-                &model(digest),
+                models,
                 Some(&registry),
                 NOW + 10,
             )
         };
-        assert_eq!(cites(&b), Some(for_b.acceptance_digest));
-        assert_eq!(cites(&a), Some(for_a.acceptance_digest));
-        assert_eq!(cites(&"dd".repeat(32)), None, "weights no session names");
+        let status = "hf:org/model@main".to_string();
+        assert_eq!(cites(&[model("bb")]), Some(for_b.acceptance_digest.clone()));
+        assert_eq!(cites(&[model("aa")]), Some(for_a.acceptance_digest));
+        assert_eq!(
+            cites(&[model("bb"), status.clone()]),
+            Some(for_b.acceptance_digest),
+            "the digest's first"
+        );
+        assert_eq!(
+            cites(&[model("dd"), status.clone()]),
+            Some(for_hf.acceptance_digest.clone()),
+            "no session for the digest: the status's"
+        );
+        assert_eq!(
+            cites(&[model("ee"), status]),
+            Some(for_hf.acceptance_digest),
+            "two for the digest: the status's"
+        );
+        assert_eq!(cites(&[model("dd")]), None, "weights no session names");
+        assert_eq!(cites(&[]), None);
     }
 
     #[test]
