@@ -30,7 +30,7 @@ fn document(
         Err(std::env::VarError::NotPresent) => (None, false),
         Err(std::env::VarError::NotUnicode(_)) => (None, true),
     };
-    let off = not_unicode || crate::share_policy::record_at_completion_is_off_for(raw);
+    let off = crate::share_policy::record_at_completion_is_off_from(read.clone());
     let mut doc = json!({
         "v": 1,
         KEY: if off { "off" } else { "counterparty" },
@@ -50,11 +50,27 @@ fn document(
 }
 
 fn current() -> Value {
+    // One read of the live console value: the source is derived from it, not
+    // read again, so the two cannot come from different config files.
+    let read = crate::settings::var(crate::share_policy::ENV_RECORD_AT_COMPLETION);
+    let source = source_of(
+        crate::settings::set_in_env(crate::share_policy::ENV_RECORD_AT_COMPLETION),
+        read.is_ok(),
+    );
     document(
-        crate::settings::var(crate::share_policy::ENV_RECORD_AT_COMPLETION),
-        crate::settings::origin(crate::share_policy::ENV_RECORD_AT_COMPLETION),
+        read,
+        source,
         &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     )
+}
+
+/// Where a value that was read came from: the environment wins over the console.
+fn source_of(in_env: bool, read_ok: bool) -> Option<&'static str> {
+    match (in_env, read_ok) {
+        (true, _) => Some("env"),
+        (false, true) => Some("console"),
+        (false, false) => None,
+    }
 }
 
 /// The document minus its timestamp: what changing means.
@@ -149,6 +165,24 @@ mod tests {
     }
 
     #[test]
+    fn a_non_unicode_value_is_off_as_on_the_push_path() {
+        let read = Err(VarError::NotUnicode(std::ffi::OsString::from("x")));
+        assert!(crate::share_policy::record_at_completion_is_off_from(
+            read.clone()
+        ));
+        let d = document(read, Some("env"), "T");
+        assert_eq!(d[KEY], "off");
+        assert_eq!(d["raw_value"], "<not valid unicode>");
+    }
+
+    #[test]
+    fn source_follows_the_one_read() {
+        assert_eq!(source_of(true, true), Some("env"));
+        assert_eq!(source_of(false, true), Some("console"));
+        assert_eq!(source_of(false, false), None);
+    }
+
+    #[test]
     fn agrees_with_the_push_path_resolver() {
         for raw in [
             None,
@@ -161,10 +195,10 @@ mod tests {
             let read = raw
                 .map(|r| Ok(r.to_string()))
                 .unwrap_or(Err(VarError::NotPresent));
-            let d = document(read, None, "T");
+            let d = document(read.clone(), None, "T");
             assert_eq!(
                 d[KEY] == "off",
-                crate::share_policy::record_at_completion_is_off_for(raw),
+                crate::share_policy::record_at_completion_is_off_from(read),
                 "{raw:?}"
             );
         }
