@@ -316,7 +316,7 @@ pub fn with_route(
             .binding_id("evidence_deal_receipt_bundle")
             .description(
                 "The receipt bundle for the payer's deal of one paid exchange, for the \
-                 viewer to render.",
+                 viewer to render. Cuts a signed checkpoint when none covers the deal yet.",
             )
             .input::<ReceiptArgs>()
             .handle(move |args, _context| {
@@ -536,6 +536,9 @@ mod tests {
             .expect("the baseline's nonce is kept in the journal");
         assert!(!text.contains(&nonce), "the intent's nonce is not carried");
         assert!(!text.contains(PEER), "the raw peer id is not carried");
+        // Decided, not accidental: the report says which model was asked
+        // (Sherlock2, #145), so the owner's file names it.
+        assert!(text.contains("model-x"), "the report names the model");
         assert!(
             !text.contains(&hex64('d')),
             "the request digest (the intent's text) is not carried"
