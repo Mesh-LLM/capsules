@@ -4,6 +4,21 @@
 
 ### Added
 
+- **A paid exchange is sealed as an `x-deal-v0` deal (payer side).** For an exchange with at
+  least one invoice issued, the node seals a `baseline` (what was asked: the request digest and
+  model, committed under a nonce the node keeps; the serving peer by fingerprint only; paid over
+  Lightning, not refundable; no price, since an invoice's msat has no unit in the profile), then an
+  `outcome` and a `close`, then an in-log `deal_report` for the counterparty. `completed` once
+  every invoice is paid and the response received; `open` when no settlement came within 15
+  minutes of the first invoice or the node restarted first (the record is not final, never
+  "pending"). A free exchange gets no deal. The Capsules are built by `capsule_emit::produce`
+  (bytes identical to Go's) from `evidencebook::deal`, each linked to its exchange in
+  `deal-links.jsonl` before it is sealed; the payload each commits is journaled in
+  `deal-payloads.jsonl`, and a step counts as sealed only if its Capsule is in the ledger, so a
+  restart neither repeats a step nor loses one. The provider seals no deal (its receipt is
+  "your receipt only", Mesh-LLM/capsules-plugin#134). `check_profile.py` accepts the built chains
+  (`EVIDENCEBOOK_DEAL_PROFILE_DIR` runs it in the tests). Takes `evidencebook` (feature `deal`)
+  from a git rev until its release; not mergeable before then. Mesh-LLM/capsules-plugin#96.
 - **Counterparties receive and check the operator binding (loop step 12).** A node holding a
   controller binding of its key to its operator's Nostr key carries it whole in the bundles it
   pushes to an exchange's counterparty, in the existing `controller_binding` member, and never in
@@ -168,6 +183,10 @@
   acknowledged and what it has not yet. Mesh-LLM/capsules-plugin#53.
 
 ### Changed
+
+- **`capsule-emit` 0.0.9.** It adds `produce`, the Go-identical Capsule build the deal records are
+  sealed with, and drops `structure`: the Class 1 check of a received half (record push, the
+  referee, an agreement half) now runs through `agent_action_capsule::verify::verify`.
 
 - **Evidence answers, the served summary and the received log come from the `evidencebook` crate
   (0.0.9).** The plugin's own copies are deleted. evidencebook builds and signs every artifact

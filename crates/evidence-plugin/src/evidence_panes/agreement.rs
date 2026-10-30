@@ -479,7 +479,7 @@ fn read_served_half(octets: &[u8]) -> Option<ExecutionRecord> {
 /// The key `half` verifies under, when it passes its Class 1 checks and its
 /// producer envelope verifies.
 fn verified_issuer(half: &Value) -> Option<String> {
-    if !capsule_emit_lib::structure::check_structure(half).ok() {
+    if !agent_action_capsule::verify::verify(half, None).ok {
         return None;
     }
     capsule_emit_lib::cose::verify_producer_envelope(half).ok()

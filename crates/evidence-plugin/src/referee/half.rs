@@ -67,7 +67,7 @@ pub fn model_hash(record: &Value) -> Option<&str> {
 /// recomputes).
 pub fn record_checks(record: &Value) -> bool {
     record.get("capsule_id").and_then(Value::as_str).is_some()
-        && capsule_emit_lib::structure::check_structure(record).ok()
+        && agent_action_capsule::verify::verify(record, None).ok
 }
 
 /// The key that signed `record`'s producer envelope, when it verifies.

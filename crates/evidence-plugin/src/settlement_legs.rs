@@ -181,6 +181,7 @@ struct Inner {
 /// A payer's delivered leg that is due: the terms leg and the agreement it
 /// cites, and the delivered content's digest.
 struct Delivered {
+    exchange_id: String,
     terms_ref: String,
     digest: String,
     acceptance: Option<String>,
@@ -198,6 +199,10 @@ fn msat(value: u64) -> Value {
 
 fn ln(hash: &str) -> Value {
     json!({"type": "ln.payment_hash", "value": hash})
+}
+
+fn unix_now() -> i64 {
+    chrono::Utc::now().timestamp()
 }
 
 fn now() -> String {
@@ -372,6 +377,13 @@ impl Legs {
         let Some(sealed) = seal(capsules, "terms", leg) else {
             return Vec::new();
         };
+        capsules.deals().on_invoice(
+            capsules,
+            &exchange_id,
+            &sealed.capsule_id,
+            event.amount_msat,
+            unix_now(),
+        );
         let (push, delivered) = {
             let mut inner = self.inner();
             inner.own_terms.insert(
@@ -425,11 +437,19 @@ impl Legs {
         if let Some(fee) = event.fee_msat {
             pairs.push(("routing_fee", msat(fee)));
         }
-        seal(
+        if let Some(sealed) = seal(
             capsules,
             "payer_observed",
             built("payer_observed", "payer", pairs),
-        );
+        ) {
+            capsules.deals().on_paid(
+                capsules,
+                &event.exchange_id,
+                &sealed.capsule_id,
+                event.amount_msat,
+                unix_now(),
+            );
+        }
     }
 
     fn payee_observed(
@@ -660,6 +680,7 @@ impl Legs {
             tracing::debug!(%exchange_id, "no terms leg for this exchange; no delivered leg");
         }
         Some(Delivered {
+            exchange_id: exchange_id.to_string(),
             terms_ref: terms?,
             digest,
             acceptance,
@@ -668,6 +689,7 @@ impl Legs {
 
     fn seal_payer_delivered(&self, capsules: &CapsuleState, due: Delivered) {
         let Delivered {
+            exchange_id,
             terms_ref,
             digest,
             acceptance,
@@ -684,7 +706,11 @@ impl Legs {
                 ),
             ],
         );
-        seal_with(capsules, "delivered", leg, citation_blocks(acceptance));
+        if let Some(sealed) = seal_with(capsules, "delivered", leg, citation_blocks(acceptance)) {
+            capsules
+                .deals()
+                .on_delivered(capsules, &exchange_id, &sealed.capsule_id, unix_now());
+        }
     }
 
     /// Provider: a peer's pushed record was received and verified. It is held
@@ -909,6 +935,84 @@ mod tests {
 
     fn dirs() -> (tempfile::TempDir, tempfile::TempDir) {
         (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap())
+    }
+
+    /// The payer's deal follows the legs the settlement trail seals: the
+    /// events a live run sees, with the exchange's own record arriving after
+    /// the invoices, end in a baseline, a `completed` outcome, a close and a
+    /// report that cites those very legs.
+    #[test]
+    fn the_payers_legs_drive_the_payers_deal() {
+        let (a, b) = dirs();
+        let pair = Pair::open(a.path(), b.path());
+        for (phase, seg, hash) in [
+            (Phase::InputInvoiceIssued, 0, INPUT),
+            (Phase::OutputInvoiceIssued, 1, OUTPUT),
+        ] {
+            pair.payer_event(phase, seg, hash, &[]);
+        }
+        for (phase, seg, hash) in [
+            (Phase::InputSettlementObserved, 0, INPUT),
+            (Phase::OutputSettlementObserved, 1, OUTPUT),
+        ] {
+            pair.payer_event(phase, seg, hash, &[("fee_msat", 0)]);
+        }
+        let sealed = crate::deal_flow::SealedExchange {
+            capsule_id: &"e".repeat(64),
+            peer: PROVIDER_PEER,
+            request_digest: &"d".repeat(64),
+            model: "model-x",
+        };
+        pair.payer
+            .deals()
+            .on_exchange(&pair.payer, "ex", &sealed, unix_now());
+        pair.payer_accounted();
+        pair.payer.settlement_legs().on_exchange(
+            &pair.payer,
+            "ex",
+            Some(PROVIDER_PEER),
+            Some(RESPONSE),
+        );
+        let capsules: Vec<Value> = std::fs::read_to_string(a.path().join("ledger/capsules.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let report_id = capsules
+            .iter()
+            .find(|c| c["action_id"] == "capsulectl-deal-report")
+            .expect("a report")["capsule_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let journal = std::fs::read_to_string(a.path().join("ledger/deal-payloads.jsonl")).unwrap();
+        let line: Value = journal
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .find(|l| l["capsule_id"] == report_id.as_str())
+            .unwrap();
+        assert_eq!(line["payload"]["report"]["lifecycle"]["state"], "closed");
+        let leg_ids: Vec<&str> = capsules
+            .iter()
+            .filter(|c| c.get("settlement").is_some())
+            .map(|c| c["capsule_id"].as_str().unwrap())
+            .collect();
+        let cited: Vec<&str> = line["payload"]["report"]["did"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|d| d["steps"].as_array().unwrap())
+            .filter_map(Value::as_str)
+            .collect();
+        for leg in &leg_ids {
+            assert!(cited.contains(leg), "the report cites {leg}");
+        }
+        let outcome = journal
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .find(|l| l["record_type"] == "outcome")
+            .unwrap();
+        assert_eq!(outcome["payload"]["body"]["outcome"], "completed");
     }
 
     #[test]

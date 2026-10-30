@@ -641,7 +641,7 @@ fn record_id(half: &Value) -> Option<&str> {
     // The checks refuse a malformed id and any profile but format 4 with
     // JCS, and under that profile they recompute the id: passing them means
     // `carried` is the record's own id.
-    (is_lower_hex(carried, 64) && capsule_emit_lib::structure::check_structure(half).ok())
+    (is_lower_hex(carried, 64) && agent_action_capsule::verify::verify(half, None).ok)
         .then_some(carried)
 }
 
