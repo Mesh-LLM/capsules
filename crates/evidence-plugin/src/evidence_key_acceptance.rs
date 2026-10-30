@@ -106,6 +106,7 @@ fn cite(receiver: &Node, sender: &str, half: &Value, accepted: &Accepted) -> Val
         foreign_agent_output_digest: None,
         sender_key_id: half["key_id"].as_str(),
         accepted_via: Some(&accepted.via),
+        own_half_capsule_id: None,
     };
     receiver
         .state

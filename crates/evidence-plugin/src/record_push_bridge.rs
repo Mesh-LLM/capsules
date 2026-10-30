@@ -570,6 +570,7 @@ async fn seal_citing_record(
         .and_then(|v| v.as_str())
         .map(str::to_string);
     let accepted_via = accepted_key.map(|a| a.via.clone());
+    let own_half = own_half_tie(capsules, &foreign, via).await;
     let capsules = capsules.clone();
 
     let sealed = tokio::task::spawn_blocking(move || {
@@ -589,6 +590,7 @@ async fn seal_citing_record(
             foreign_agent_output_digest: foreign_output.as_deref(),
             sender_key_id: sender_key_id.as_deref(),
             accepted_via: accepted_via.as_ref(),
+            own_half_capsule_id: own_half.as_deref(),
         };
         capsules
             .emit_citing_record(&prov)
@@ -609,6 +611,97 @@ async fn seal_citing_record(
         }
     }
     Ok(())
+}
+
+/// How long a pushed half waits for this node's own half of the same
+/// exchange to seal. Each side pushes within moments of sealing, so the
+/// other side's half can arrive first; the citing record is sealed before
+/// the ack, so the wait stays well inside the pusher's reply timeout
+/// (`CAPSULES_MESH_REQUEST_TIMEOUT_MS`, 8 s by default).
+const OWN_HALF_WAIT: Duration = Duration::from_secs(2);
+const OWN_HALF_POLL: Duration = Duration::from_millis(50);
+
+/// Whether this node's own half of `foreign`'s exchange can be named.
+#[derive(Debug, PartialEq, Eq)]
+enum OwnHalf {
+    /// Exactly one own half and no other held half bind the nonce.
+    Tied(String),
+    /// No own half binds it yet.
+    NotYet,
+    /// No usable nonce, or more than one own or held half binds it: a
+    /// client-set nonce can repeat, and a wrong pair is worse than none.
+    Untied,
+}
+
+/// This node's own half of `foreign`'s exchange, for the citing record's
+/// `own_half_capsule_id`. A pushed half waits up to [`OWN_HALF_WAIT`] for
+/// the own half to seal; an asked one never waits (its exchange is over).
+async fn own_half_tie(
+    capsules: &Arc<CapsuleState>,
+    foreign: &serde_json::Value,
+    via: &str,
+) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + OWN_HALF_WAIT;
+    loop {
+        let (capsules, foreign) = (capsules.clone(), foreign.clone());
+        let found = tokio::task::spawn_blocking(move || own_half(&capsules, &foreign))
+            .await
+            .unwrap_or(OwnHalf::Untied);
+        match found {
+            OwnHalf::Tied(id) => return Some(id),
+            OwnHalf::NotYet if via == "push" && tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(OWN_HALF_POLL).await;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// One look for `foreign`'s own half: the own records binding its client
+/// nonce (`evidence_log`'s nonce index, which only exchange halves enter),
+/// then, once exactly one does, the other held halves binding it.
+fn own_half(capsules: &CapsuleState, foreign: &serde_json::Value) -> OwnHalf {
+    let (Some(nonce), Some(foreign_id)) = (
+        crate::evidence_log::client_nonce_digest(foreign),
+        foreign.get("capsule_id").and_then(|v| v.as_str()),
+    ) else {
+        return OwnHalf::Untied;
+    };
+    let own = crate::evidence_log::with_index(
+        capsules.ledger_dir(),
+        &crate::commitment::key_id(capsules.signing_key()),
+        |index| {
+            index
+                .by_client_nonce(&nonce)
+                .iter()
+                .filter_map(|&leaf| index.leaves.get(usize::try_from(leaf).ok()?))
+                .map(|leaf| leaf.capsule_id.clone())
+                .collect::<Vec<_>>()
+        },
+    );
+    match own.as_deref() {
+        Ok([]) => OwnHalf::NotYet,
+        Ok([one]) if !held_half_shares_nonce(capsules.ledger_dir(), &nonce, foreign_id) => {
+            OwnHalf::Tied(one.clone())
+        }
+        _ => OwnHalf::Untied,
+    }
+}
+
+/// Whether a held half other than `foreign_id` binds the client nonce whose
+/// digest is `nonce`.
+fn held_half_shares_nonce(ledger_dir: &std::path::Path, nonce: &str, foreign_id: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(
+        ledger_dir.join(crate::record_push_receive::RECEIVED_CAPSULES_FILENAME),
+    ) else {
+        return false;
+    };
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .any(|held| {
+            held.get("capsule_id").and_then(|v| v.as_str()) != Some(foreign_id)
+                && crate::evidence_log::client_nonce_digest(&held).as_deref() == Some(nonce)
+        })
 }
 
 /// Hold a record this node asked `peer_id` for (`mesh_evidence_request`)
@@ -1061,6 +1154,159 @@ pub(crate) mod tests {
         assert_eq!(citing.len(), 1, "cited once: {citing:?}");
         assert_eq!(citing[0]["cited_capsule_id"], id);
         assert_eq!(citing[0]["via"], "ask");
+    }
+
+    /// One exchange half sealed by `state` under `nonce`.
+    fn half(state: &CapsuleState, nonce: &str, exchange_id: &str) -> serde_json::Value {
+        state
+            .emit_for_exchange(&crate::capsule_emit::ExchangeRecord {
+                model: "m",
+                client_nonce: Some(nonce),
+                request_bytes: br#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#,
+                response_bytes:
+                    br#"{"id":"x","choices":[{"message":{"role":"assistant","content":"y"}}]}"#,
+                latency_ms: 1.0,
+                exchange_id: Some(exchange_id),
+                requesting_party: Some("my-node"),
+                host_provenance: None,
+            })
+            .unwrap()
+            .capsule
+    }
+
+    /// The `received_half` blocks of `state`'s citing records, oldest first.
+    fn received_halves(state: &CapsuleState) -> Vec<serde_json::Value> {
+        std::fs::read_to_string(state.ledger_dir().join("capsules.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| {
+                serde_json::from_str::<serde_json::Value>(l)
+                    .unwrap()
+                    .pointer("/model_attestation/compute_attestation/received_half")
+                    .cloned()
+            })
+            .collect()
+    }
+
+    /// Two nodes for one test: `theirs` seals the halves pushed or asked
+    /// for, and `peer` is announced with its key so `mine` holds them.
+    fn two_nodes(
+        peer: &str,
+    ) -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        CapsuleState,
+        Arc<CapsuleState>,
+    ) {
+        let theirs_dir = tempfile::tempdir().unwrap();
+        let mine_dir = tempfile::tempdir().unwrap();
+        let theirs = CapsuleState::open(theirs_dir.path(), "their-node").unwrap();
+        let mine = Arc::new(CapsuleState::open(mine_dir.path(), "my-node").unwrap());
+        crate::peer_keys::announced::announce_for_test(
+            peer,
+            &crate::commitment::key_id(theirs.signing_key()),
+        );
+        (theirs_dir, mine_dir, theirs, mine)
+    }
+
+    /// The citing record names this node's own half of the exchange, found by
+    /// the client nonce both halves bind (capsules-plugin#130), and the
+    /// member is part of the record's recomputed `capsule_id`.
+    #[tokio::test]
+    async fn a_citing_record_names_the_own_half_of_the_same_exchange() {
+        let peer = "peer-own-half-tied";
+        let (_t, _m, theirs, mine) = two_nodes(peer);
+        let own = half(&mine, "nonce-tied", "e-mine");
+        let other = half(&mine, "nonce-elsewhere", "e-other");
+        let foreign = half(&theirs, "nonce-tied", "e-theirs");
+        let bytes = serde_json::to_vec(&foreign).unwrap();
+        assert!(hold_asked_record(&mine, peer, &bytes).await.unwrap());
+
+        let cited = received_halves(&mine);
+        assert_eq!(cited.len(), 1, "{cited:?}");
+        assert_eq!(cited[0]["cited_capsule_id"], foreign["capsule_id"]);
+        assert_eq!(cited[0]["own_half_capsule_id"], own["capsule_id"]);
+        assert_ne!(cited[0]["own_half_capsule_id"], other["capsule_id"]);
+        let record = std::fs::read_to_string(mine.ledger_dir().join("capsules.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .next_back()
+            .unwrap();
+        assert_eq!(
+            record["capsule_id"].as_str().unwrap(),
+            crate::producer::jcs::compute_capsule_id(&record).unwrap()
+        );
+    }
+
+    /// No own half under the nonce: the half is still held and cited, with
+    /// no `own_half_capsule_id` (an asked half never waits).
+    #[tokio::test]
+    async fn a_half_with_no_own_half_is_cited_untied() {
+        let peer = "peer-own-half-none";
+        let (_t, _m, theirs, mine) = two_nodes(peer);
+        half(&mine, "nonce-mine-only", "e-mine");
+        let foreign = half(&theirs, "nonce-theirs-only", "e-theirs");
+        let bytes = serde_json::to_vec(&foreign).unwrap();
+        assert!(hold_asked_record(&mine, peer, &bytes).await.unwrap());
+        let cited = received_halves(&mine);
+        assert_eq!(cited.len(), 1);
+        assert!(cited[0].get("own_half_capsule_id").is_none(), "{cited:?}");
+    }
+
+    /// A client-set nonce can repeat. Two own halves under it: no tie, since
+    /// a wrong pair is worse than none.
+    #[tokio::test]
+    async fn two_own_halves_under_one_nonce_tie_nothing() {
+        let peer = "peer-own-half-two-own";
+        let (_t, _m, theirs, mine) = two_nodes(peer);
+        half(&mine, "nonce-reused", "e-mine-1");
+        half(&mine, "nonce-reused", "e-mine-2");
+        let foreign = half(&theirs, "nonce-reused", "e-theirs");
+        let bytes = serde_json::to_vec(&foreign).unwrap();
+        assert!(hold_asked_record(&mine, peer, &bytes).await.unwrap());
+        let cited = received_halves(&mine);
+        assert_eq!(cited.len(), 1);
+        assert!(cited[0].get("own_half_capsule_id").is_none(), "{cited:?}");
+    }
+
+    /// Two held halves under one nonce: the second ties nothing, even though
+    /// one own half binds it.
+    #[tokio::test]
+    async fn a_second_held_half_under_the_nonce_ties_nothing() {
+        let peer = "peer-own-half-two-held";
+        let (_t, _m, theirs, mine) = two_nodes(peer);
+        let own = half(&mine, "nonce-shared", "e-mine");
+        let first = half(&theirs, "nonce-shared", "e-theirs-1");
+        let second = half(&theirs, "nonce-shared", "e-theirs-2");
+        for foreign in [&first, &second] {
+            let bytes = serde_json::to_vec(foreign).unwrap();
+            assert!(hold_asked_record(&mine, peer, &bytes).await.unwrap());
+        }
+        let cited = received_halves(&mine);
+        assert_eq!(cited.len(), 2, "{cited:?}");
+        assert_eq!(cited[0]["own_half_capsule_id"], own["capsule_id"]);
+        assert!(cited[1].get("own_half_capsule_id").is_none(), "{cited:?}");
+    }
+
+    /// The other side pushed first: the pushed half waits for this node's
+    /// own half to seal, then the citing record names it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_pushed_half_that_arrives_first_is_tied_when_the_own_half_seals() {
+        let peer = "peer-own-half-late";
+        let (_t, _m, theirs, mine) = two_nodes(peer);
+        let foreign = half(&theirs, "nonce-late", "e-theirs");
+        let bytes = serde_json::to_vec(&foreign).unwrap();
+        let receiving = {
+            let mine = mine.clone();
+            tokio::spawn(async move { seal_citing_record(&mine, peer, &bytes, "push", None).await })
+        };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let own = half(&mine, "nonce-late", "e-mine");
+        receiving.await.unwrap().unwrap();
+        let cited = received_halves(&mine);
+        assert_eq!(cited.len(), 1, "{cited:?}");
+        assert_eq!(cited[0]["own_half_capsule_id"], own["capsule_id"]);
     }
 
     /// After an ask, the held record is read back from disk like any other:

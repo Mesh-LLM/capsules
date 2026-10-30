@@ -2182,6 +2182,7 @@ pub(crate) mod tests {
             foreign_agent_output_digest: None,
             sender_key_id: None,
             accepted_via: None,
+            own_half_capsule_id: None,
         };
         let citing = state
             .emit_citing_record(&prov)
@@ -2267,6 +2268,7 @@ pub(crate) mod tests {
             foreign_agent_output_digest: None,
             sender_key_id: None,
             accepted_via: None,
+            own_half_capsule_id: None,
         };
         let half_citation = state.emit_citing_record(&prov).unwrap().unwrap();
         let citation = InclusionCitation {
