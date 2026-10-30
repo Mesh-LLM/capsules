@@ -1944,10 +1944,31 @@ pub(crate) mod tests {
         .unwrap();
     }
 
-    /// A link written after the node started is read on the next query, and a
-    /// link to an exchange not yet indexed names nobody until it is.
+    fn append_jsonl(path: &Path, lines: &[Value]) {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        for line in lines {
+            writeln!(file, "{line}").unwrap();
+        }
+    }
+
+    fn serves(dir: &Path, record: u64, node_id: &str) -> bool {
+        let key_id = hex::encode(key().verifying_key().to_bytes());
+        let who = vec![node_id.to_string()];
+        evidence_log::with_index(dir, &key_id, |index| {
+            may_serve_all(index, &[record], &who, "counterparties")
+        })
+        .unwrap()
+    }
+
+    /// The node writes a deal capsule's link, then the capsule. Both appearing
+    /// after the node started, the next query names the capsule.
     #[test]
-    fn a_deal_link_written_later_is_read_by_the_next_query() {
+    fn a_deal_link_then_its_capsule_written_later_name_the_counterparty() {
         let hex = |c: char| c.to_string().repeat(64);
         let exchange = served(
             "node-a",
@@ -1957,25 +1978,101 @@ pub(crate) mod tests {
             json!({"nonce": "n-9"}),
         );
         let exchange_id = exchange["capsule_id"].as_str().unwrap().to_string();
-        let dir = node(&[exchange, json!({"capsule_id": hex('1')})]);
-        let key_id = hex::encode(key().verifying_key().to_bytes());
-        let who = vec!["node-a".to_string()];
-        let unlinked = evidence_log::with_index(dir.path(), &key_id, |index| {
-            may_serve_all(index, &[1], &who, "counterparties")
-        })
-        .unwrap();
-        assert!(!unlinked);
-        write_jsonl(
+        let dir = node(&[exchange]);
+        assert!(serves(dir.path(), 0, "node-a"));
+        append_jsonl(
             &dir.path().join(evidence_log::DEAL_LINKS_FILE),
             &[json!({"capsule_id": hex('1'), "exchange_capsule_id": exchange_id})],
         );
-        let linked = evidence_log::with_index(dir.path(), &key_id, |index| {
-            may_serve_all(index, &[1], &who, "counterparties")
-        })
-        .unwrap();
-        // The deal capsule was indexed before its link existed, so it stays
-        // unnamed: the node writes the link before it seals the capsule.
-        assert!(!linked);
+        append_jsonl(
+            &dir.path().join(evidence_log::CAPSULES_FILE),
+            &[json!({"capsule_id": hex('1'), "deal_id": "deal-0123456789abcdef"})],
+        );
+        assert!(serves(dir.path(), 1, "node-a"));
+        assert!(!serves(dir.path(), 1, "node-b"));
+    }
+
+    /// A capsule indexed before its link stays unnamed (fail closed) until
+    /// the links file is rewritten, which rebuilds the index.
+    #[test]
+    fn a_deal_capsule_indexed_before_its_link_is_named_after_a_rebuild() {
+        let hex = |c: char| c.to_string().repeat(64);
+        let exchange = served(
+            "node-a",
+            "model-x",
+            "confirmed",
+            "10.000",
+            json!({"nonce": "n-9"}),
+        );
+        let exchange_id = exchange["capsule_id"].as_str().unwrap().to_string();
+        let dir = node(&[
+            exchange,
+            json!({"capsule_id": hex('1'), "deal_id": "deal-0123456789abcdef"}),
+        ]);
+        let links = dir.path().join(evidence_log::DEAL_LINKS_FILE);
+        write_jsonl(
+            &links,
+            &[json!({"capsule_id": hex('9'), "exchange_capsule_id": exchange_id.clone()})],
+        );
+        assert!(!serves(dir.path(), 1, "node-a"));
+        append_jsonl(
+            &links,
+            &[json!({"capsule_id": hex('1'), "exchange_capsule_id": exchange_id.clone()})],
+        );
+        assert!(!serves(dir.path(), 1, "node-a"));
+        write_jsonl(
+            &links,
+            &[json!({"capsule_id": hex('1'), "exchange_capsule_id": exchange_id})],
+        );
+        assert!(serves(dir.path(), 1, "node-a"));
+        assert!(!serves(dir.path(), 1, "node-b"));
+    }
+
+    /// A link names a counterparty for a deal capsule only, never over what a
+    /// record names itself, and the first link of a capsule stands.
+    #[test]
+    fn a_deal_link_is_for_deal_capsules_and_the_first_one_stands() {
+        let hex = |c: char| c.to_string().repeat(64);
+        let by_a = served(
+            "node-a",
+            "model-x",
+            "confirmed",
+            "10.000",
+            json!({"nonce": "n-1"}),
+        );
+        let by_b = served(
+            "node-b",
+            "model-x",
+            "confirmed",
+            "11.000",
+            json!({"nonce": "n-2"}),
+        );
+        let (id_a, id_b) = (
+            by_a["capsule_id"].as_str().unwrap().to_string(),
+            by_b["capsule_id"].as_str().unwrap().to_string(),
+        );
+        let dir = node(&[
+            by_a,
+            by_b,
+            json!({"capsule_id": hex('1'), "deal_id": "deal-0123456789abcdef"}),
+            json!({"capsule_id": hex('2')}),
+        ]);
+        write_jsonl(
+            &dir.path().join(evidence_log::DEAL_LINKS_FILE),
+            &[
+                json!({"capsule_id": hex('1'), "exchange_capsule_id": id_a}),
+                json!({"capsule_id": hex('1'), "exchange_capsule_id": id_b}),
+                json!({"capsule_id": hex('2'), "exchange_capsule_id": id_a}),
+                json!({"capsule_id": id_b, "exchange_capsule_id": id_a}),
+            ],
+        );
+        assert!(serves(dir.path(), 2, "node-a"));
+        assert!(!serves(dir.path(), 2, "node-b"));
+        // Not a deal capsule: the link names nobody. A record that names its
+        // own counterparty keeps it.
+        assert!(!serves(dir.path(), 3, "node-a"));
+        assert!(serves(dir.path(), 1, "node-b"));
+        assert!(!serves(dir.path(), 1, "node-a"));
     }
 
     /// `share_standard_history` on restores what every node did before:

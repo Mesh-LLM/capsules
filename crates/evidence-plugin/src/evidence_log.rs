@@ -133,6 +133,13 @@ pub struct Leaf {
     pub facts: LeafFacts,
 }
 
+/// A deal capsule: one of a deal's steps (`deal_id`) or its report. A link
+/// names a counterparty for these and for no other record.
+fn is_deal_capsule(record: &Value) -> bool {
+    record.get("deal_id").is_some()
+        || record.get("action_id").and_then(Value::as_str) == Some("capsulectl-deal-report")
+}
+
 /// One line of [`DEAL_LINKS_FILE`]: the deal capsule and the exchange record
 /// it is of, both full capsule ids.
 fn parse_deal_link(line: &[u8]) -> Option<(String, String)> {
@@ -275,15 +282,32 @@ impl LedgerIndex {
         }
     }
 
-    /// Bring the index up to date with both files.
+    /// Bring the index up to date with the capsules, the deal links and the
+    /// checkpoints.
     pub fn refresh(&mut self) -> std::io::Result<()> {
-        // Links first: a deal capsule's link is written before the capsule.
+        // The capsules to index are read first and the links second: the node
+        // writes a deal capsule's link before the capsule, so a capsule seen
+        // here has its link on disk by the time the links are read.
+        let mut pending: Vec<(u64, Vec<u8>)> = Vec::new();
+        let start = self.capsules.clone();
+        if self.capsules_stopped.is_none() {
+            let path = self.ledger_dir.join(CAPSULES_FILE);
+            let continues = start.read_new(&path, |offset, line| {
+                pending.push((offset, line.to_vec()));
+                true
+            })?;
+            if !continues {
+                *self = Self::new(&self.ledger_dir, &self.node_key_id);
+                return self.refresh();
+            }
+        }
         let links = self.deal_links.clone();
         let mut links_tail = links.clone();
         let continues =
             links.read_new(&self.ledger_dir.join(DEAL_LINKS_FILE), |offset, line| {
                 if let Some((capsule, exchange)) = parse_deal_link(trim_newline(line)) {
-                    self.deal_exchange.insert(capsule, exchange);
+                    // The first link of a capsule stands.
+                    self.deal_exchange.entry(capsule).or_insert(exchange);
                 }
                 links_tail.advance(offset, line);
                 true
@@ -293,25 +317,16 @@ impl LedgerIndex {
             return self.refresh();
         }
         self.deal_links = links_tail;
-        if self.capsules_stopped.is_none() {
-            let path = self.ledger_dir.join(CAPSULES_FILE);
-            let start = self.capsules.clone();
-            let mut tail = start.clone();
-            let continues = start.read_new(&path, |offset, line| {
-                if let Err(why) = self.index_line(offset, line) {
-                    tracing::warn!(line_at = offset, %why, "evidence index stops at a ledger line it cannot fold");
-                    self.capsules_stopped = Some(why);
-                    return false;
-                }
-                tail.advance(offset, line);
-                true
-            })?;
-            if !continues {
-                *self = Self::new(&self.ledger_dir, &self.node_key_id);
-                return self.refresh();
+        let mut tail = start;
+        for (offset, line) in pending {
+            if let Err(why) = self.index_line(offset, &line) {
+                tracing::warn!(line_at = offset, %why, "evidence index stops at a ledger line it cannot fold");
+                self.capsules_stopped = Some(why);
+                break;
             }
-            self.capsules = tail;
+            tail.advance(offset, &line);
         }
+        self.capsules = tail;
         let path = self.ledger_dir.join(CHECKPOINTS_FILE);
         if !self.take_checkpoints(&path)? {
             self.checkpoints = Tail::default();
@@ -359,8 +374,12 @@ impl LedgerIndex {
                 self.citations.entry(half).or_default().push(index);
             }
         }
-        let counterparty = crate::evidence_panes::full_counterparty_node_id(&record)
-            .or_else(|| self.deal_counterparty(&capsule_id));
+        let counterparty =
+            crate::evidence_panes::full_counterparty_node_id(&record).or_else(|| {
+                is_deal_capsule(&record)
+                    .then(|| self.deal_counterparty(&capsule_id))
+                    .flatten()
+            });
         self.leaves.push(Leaf {
             capsule_id,
             offset,
