@@ -462,6 +462,16 @@ impl Legs {
         let (Some(credited), Some(fee)) = (event.credited_msat, event.fee_msat) else {
             return;
         };
+        // The leg names no exchange. The payment is noted for this one before
+        // the leg is sealed, so a crash between the two (or a replay that finds
+        // the leg already sealed) leaves the note, and the provider's receipt
+        // finds the leg by its payment hash.
+        if let Err(error) =
+            crate::provider_receipt::note_payment(capsules.ledger_dir(), &event.exchange_id, hash)
+        {
+            tracing::warn!(%error, "payment not noted for its exchange; the leg is not sealed");
+            return;
+        }
         let leg = built(
             "payee_observed",
             "payee",
@@ -784,7 +794,7 @@ impl Legs {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::settlement_channel::{host_shaped_event, parse_and_check};
     use serde_json::Value;
@@ -794,7 +804,7 @@ mod tests {
     const OUTPUT: &str = "59c0c4d2859c994004ad65ce13831b9cdaf688828d6c9f08cdb06f1bda9f15dd";
     const RESPONSE: &str = "33e3aff1f39db84ca6bc2e4a8d19703c57566b215e2fa5282dcfefc983bf4ebf";
     const PROVIDER_PEER: &str = "284a8bb62c0491b1a27f57425ce585626f7dc9a1495de4519a869a8c11d9f478";
-    const WALLET: &[(&str, u64)] = &[("credited_msat", 995), ("fee_msat", 5)];
+    pub(crate) const WALLET: &[(&str, u64)] = &[("credited_msat", 995), ("fee_msat", 5)];
 
     /// A host-shaped event, with role and the wallet's numbers as given.
     fn event(
@@ -902,7 +912,11 @@ mod tests {
     /// invoices, then each wallet's settlement and the payer's accounted
     /// bill, then the payer's exchange event naming the provider (when the
     /// terms legs are pushed).
-    fn two_nodes(a: &Path, b: &Path, provider_wallet: &[(&str, u64)]) -> (Vec<Value>, Vec<Value>) {
+    pub(crate) fn two_nodes(
+        a: &Path,
+        b: &Path,
+        provider_wallet: &[(&str, u64)],
+    ) -> (Vec<Value>, Vec<Value>) {
         let pair = Pair::open(a, b);
         for (phase, seg, hash) in [
             (Phase::InputInvoiceIssued, 0, INPUT),
@@ -933,7 +947,7 @@ mod tests {
         (legs_of(a), legs_of(b))
     }
 
-    fn dirs() -> (tempfile::TempDir, tempfile::TempDir) {
+    pub(crate) fn dirs() -> (tempfile::TempDir, tempfile::TempDir) {
         (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap())
     }
 
@@ -1013,6 +1027,26 @@ mod tests {
             .find(|l| l["record_type"] == "outcome")
             .unwrap();
         assert_eq!(outcome["payload"]["body"]["outcome"], "completed");
+    }
+
+    /// The provider notes a payment for its exchange before it seals the leg;
+    /// when the note cannot be written no leg is sealed, so the ledger and the
+    /// provider's receipt never disagree about which payments were received.
+    #[test]
+    fn a_payment_that_cannot_be_noted_seals_no_leg() {
+        let (a, b) = dirs();
+        // A directory where the notes file goes: appending to it fails.
+        std::fs::create_dir_all(
+            b.path()
+                .join("ledger")
+                .join(crate::provider_receipt::PROVIDER_LINKS_FILE),
+        )
+        .unwrap();
+        let (_payer, provider) = two_nodes(a.path(), b.path(), WALLET);
+        assert!(
+            kinds(&provider).is_empty(),
+            "no payee_observed leg was sealed"
+        );
     }
 
     #[test]

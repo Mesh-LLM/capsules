@@ -49,6 +49,7 @@ mod peer_keys;
 mod peer_root_ledger;
 #[allow(dead_code)]
 mod producer;
+mod provider_receipt;
 mod record_push_bridge;
 #[cfg(test)]
 mod record_push_parity;
@@ -1718,6 +1719,11 @@ async fn main() -> anyhow::Result<()> {
         self_peer.clone(),
     );
     let plugin = deal_receipt::with_route(
+        plugin,
+        capsules_for_routing_choice.clone(),
+        checkpoints.clone(),
+    );
+    let plugin = provider_receipt::with_route(
         plugin,
         capsules_for_routing_choice.clone(),
         checkpoints.clone(),

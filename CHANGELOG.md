@@ -22,6 +22,18 @@
 
 ### Added
 
+- **`provider-receipt-bundle`: the provider's own receipt for a paid exchange it served.** A local
+  route, given the host's exchange id, returns an `evidence-bundle/v2` of the exchange record the
+  node served and the `payee_observed` legs it sealed for it (what it received, in the amount's own
+  unit), proven against the earliest checkpoint that covers them. It is not a deal: the typed
+  seller deal the profile asks of a seller needs an offer, an acceptance and an authority the node
+  does not make, so none is sealed. Owner-only and producer-selected (`capsulectl verify` reads it
+  INCOMPLETE, `selection_not_checkable`, as for the payer's), with no payload disclosed: the
+  digests stay, the inference content is not in it. A leg names no exchange, so the node now notes
+  the payment's hash for its exchange in `provider-links.jsonl` before it seals the leg, and the
+  receipt finds the legs by that hash; a payment sealed before this change has no note and is not
+  found. capsule-viewer renders the bundle as the provider's own
+  half. Steven's ruling on Mesh-LLM/capsules-plugin#146; Mesh-LLM/capsules-plugin#134.
 - **`deal-receipt-bundle`: the payer's deal as an Evidence Bundle.** A local route, given an exchange
   record's capsule id, returns an `evidence-bundle/v2` of this node's `x-deal-v0` records for it
   (baseline, outcome, close, report) with their payloads disclosed and
