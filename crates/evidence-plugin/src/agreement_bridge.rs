@@ -74,7 +74,7 @@ fn requester_timeout() -> Duration {
     env_millis("CAPSULES_AGREEMENT_TIMEOUT_MS", 8_000)
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
@@ -521,6 +521,58 @@ fn served_citation_in(
         [only] => Some(only.acceptance_digest.clone()),
         _ => None,
     }
+}
+
+/// A complete session this node keeps, with what reading its coverage needs:
+/// the parties, the window, the terms and models, and the octets of its
+/// proposal, its accepted record and its receipt as kept.
+pub(crate) struct SessionView {
+    pub acceptance_digest: String,
+    pub proposer: String,
+    pub acceptor: String,
+    pub start: i64,
+    pub end: i64,
+    pub models: Vec<String>,
+    pub terms: agreement::Terms,
+    pub proposed: Vec<u8>,
+    pub accepted: Vec<u8>,
+    pub receipt: Vec<u8>,
+}
+
+/// Every complete session kept under `ledger_dir`, the latest-starting first.
+pub(crate) fn session_views(ledger_dir: &std::path::Path) -> Vec<SessionView> {
+    let store = Store::open(ledger_dir);
+    let mut views: Vec<SessionView> = complete_sessions(&store)
+        .iter()
+        .filter_map(|c| {
+            let accepted = store.get(Kind::Record, &c.digest)?;
+            let proposed =
+                text(&c.record, "proposal_digest").and_then(|d| store.get(Kind::Record, d))?;
+            let receipt = receipt_for(&store, &c.digest)?;
+            let terms = c
+                .record
+                .get("session")
+                .and_then(|s| s.get("terms"))
+                .and_then(Value::as_str)
+                .and_then(|d| store.get(Kind::Document, d))
+                .and_then(|o| parse(&o))
+                .and_then(|t| agreement::read_terms(&t))?;
+            Some(SessionView {
+                acceptance_digest: c.digest.clone(),
+                proposer: text(&c.record, "proposer")?.to_string(),
+                acceptor: text(&c.record, "acceptor")?.to_string(),
+                start: c.start,
+                end: c.end,
+                models: c.models.clone(),
+                terms,
+                proposed,
+                accepted,
+                receipt,
+            })
+        })
+        .collect();
+    views.sort_by_key(|v| std::cmp::Reverse(v.start));
+    views
 }
 
 /// The proposer of the complete session `acceptance_digest`, if this node

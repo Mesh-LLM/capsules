@@ -118,6 +118,54 @@ A change to its content is a new version (`@2`); `@1` never changes. Payment
 is not a requirement: the cap and the count say which exchanges a session
 covers, and an exchange over the cap is "not covered", never a failure.
 
+## Coverage on the Evidence page
+
+Each Exchanges row whose own half this node sealed gets `agreement`, computed
+by this node alone for its own side (`side`: `requester` or `provider`). The
+other side keeps its own figures on its own node, and the two can differ: the
+requester counts every exchange it asked for, so its count can be higher than
+the provider's. A node that keeps no complete session adds nothing.
+
+`coverage` is the first of these that applies:
+
+| Label | Meaning |
+|---|---|
+| `set_up_after` | Not covered: the half cites nothing, and the first session with this counterparty started after it. |
+| `outside_window` | Not covered: the half cites a session whose window does not hold the half's time. |
+| `over_count` | Not covered: more citing exchanges than the terms' `max_exchanges` came before it. |
+| `over_cap` | Not covered: the observed spend, through this exchange, exceeds the spend cap. |
+| `cap_not_evaluable` | A payment of this or an earlier exchange under the session has no observation held, and the known sum does not exceed the cap. |
+| `not_cited` | A session with this counterparty holds the half's time, but the half cites none. |
+| `covered` | Inside the window, the count and the cap. |
+| `no_agreement` | No session with this counterparty bears on the half, or the half does not name a counterparty this node knows. |
+
+None of these is a failed exchange.
+
+- **Count and cap** run per session in this node's own log order. The count
+  is the half's position among this side's halves citing the session. The cap
+  sums, over every payment of every citing exchange, this side's own
+  observation: the payer's `payer_observed.amount` without the routing fee, or
+  the provider's `payee_observed.received`. An exchange's payments are the
+  invoices this node's own payment lifecycle records name under the exchange's
+  id, joined to a leg by its `payment_ref`, so a leg that cites nothing still
+  counts. `spend` gives the observed sum, whether it is only a lower bound, the
+  cap and its basis: the cap is the requester's own assertion
+  (`agent_origin_assertion`).
+- **`finding`** is the interop profile's finding (§11.1.8) over the
+  provider's served half, read as the provider's execution record: its issuer
+  is the key its producer envelope verifies under, its action time is its own
+  `timestamp`, and its citation is its `acceptance` member. The requester has
+  it only once it holds the provider's half. Every committed time is to the
+  minute, so an exchange in the same minute as the receipt reads "accepted,
+  the execution cites it" (`accepted_execution_cites`) rather than "accepted
+  before".
+- **`requirements`** gives each requirement of the contract a result: `R-prior`
+  is `met` on `accepted_before_action`, `not_met` on `accepted_after_action`,
+  and `not_evaluable` otherwise, with the accepted record and the receipt it
+  relies on as evidence; `R-served` is `met` when the served half is held and
+  verifies; `R-model-stated` is `met` when the model that half states is one
+  the session's policy names, as stated, not verified.
+
 ## What is kept
 
 Under the ledger directory, `agreements/`:

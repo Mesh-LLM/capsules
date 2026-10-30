@@ -203,6 +203,35 @@ impl SettlementIndex {
         }
     }
 
+    /// The payment hashes of the invoices this node's own lifecycle records
+    /// name under `exchange_id`: as the payer, or as the provider with
+    /// `provider`. Empty for an exchange with no invoice, or no id.
+    pub(super) fn invoice_hashes(
+        &self,
+        exchange_id: Option<&str>,
+        provider: bool,
+    ) -> BTreeSet<String> {
+        let index = if provider {
+            &self.provider_by_exchange
+        } else {
+            &self.by_exchange
+        };
+        exchange_id
+            .and_then(|id| index.get(id))
+            .into_iter()
+            .flatten()
+            .filter_map(settlement_block)
+            .filter(|b| {
+                b.get("phase")
+                    .and_then(Value::as_str)
+                    .is_some_and(|p| p.ends_with("_invoice_issued"))
+            })
+            .filter_map(|b| b.get("payment_hash").and_then(Value::as_str))
+            .filter(|h| !h.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
     /// The exchange ids whose payer or provider book reads `settled`.
     pub(super) fn settled_exchange_ids(&self) -> BTreeSet<String> {
         let settled = |book: Value| book["state"] == PAYER_SETTLED;
