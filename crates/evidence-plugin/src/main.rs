@@ -14,6 +14,7 @@ mod controller_binding;
 #[cfg(test)]
 mod controller_binding_e2e_setup;
 mod data_dir;
+mod deal_flow;
 mod deal_records;
 mod decision;
 mod doctor;
@@ -431,6 +432,9 @@ async fn settlement_legs_on_lifecycle(
 ) {
     let (capsules, event) = (capsules.clone(), event.clone());
     let pushes = tokio::task::spawn_blocking(move || {
+        capsules
+            .deals()
+            .tick(&*capsules, chrono::Utc::now().timestamp());
         let legs = capsules.settlement_legs();
         let mut pushes = legs.retry();
         pushes.extend(legs.on_lifecycle(&capsules, &event));
@@ -544,6 +548,50 @@ async fn settlement_legs_on_exchange(
             }
         }
     }
+}
+
+/// The payer's deal ([`deal_flow`]) learns the exchange's own record is
+/// sealed: its id, the serving peer, the request digest and the model. A free
+/// exchange has no invoice and gets no deal.
+async fn deal_on_exchange(
+    capsules: &Arc<CapsuleState>,
+    envelope: &OpenAiExchangeEnvelope,
+    capsule: &serde_json::Value,
+) {
+    if envelope.dispatch_path != lifecycle_channel::DispatchPath::RemoteMesh {
+        return;
+    }
+    let (Some(exchange_id), Some(peer), Some(capsule_id), Some(digest), Some(model)) = (
+        envelope.exchange_id.clone(),
+        push_counterparty(envelope).map(str::to_string),
+        capsule
+            .get("capsule_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        capsule
+            .pointer("/effect/request_digest")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        envelope
+            .serving_provenance
+            .as_ref()
+            .and_then(|p| p.model_canonical_ref.clone()),
+    ) else {
+        return;
+    };
+    let capsules = capsules.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        capsules.deals().on_exchange(
+            &*capsules,
+            &exchange_id,
+            &capsule_id,
+            &peer,
+            &digest,
+            &model,
+            chrono::Utc::now().timestamp(),
+        );
+    })
+    .await;
 }
 
 /// Push payer terms legs; one not sent (pushing off, own peer id unknown, or
@@ -1433,6 +1481,11 @@ async fn main() -> anyhow::Result<()> {
     )?;
     tracing::info!(log_id = %log_id, "checkpoint log id");
     let capsules = Arc::new(CapsuleState::open(&data_dir, PLUGIN_ID)?);
+    // A deal with a baseline and no close is closed `open`: its legs were
+    // held in memory, which this restart lost.
+    capsules
+        .deals()
+        .recover(&*capsules, chrono::Utc::now().timestamp());
     let evidence_pub_key_pem = capsules.public_key_pem();
     let own_public_key = capsules.public_key();
     let own_signing_key = capsules.signing_key().clone();
@@ -1583,6 +1636,7 @@ async fn main() -> anyhow::Result<()> {
                     )
                     .await
                     {
+                        deal_on_exchange(&capsules, &envelope, &capsule_json).await;
                         // Seam A1: push this node's own just-sealed capsule
                         // to the counterparty at completion, when one is
                         // knowable and pushing is configured on. See

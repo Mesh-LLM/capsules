@@ -404,6 +404,8 @@ pub struct CapsuleState {
     torn_write_cut_at: Option<u64>,
     /// Settlement-records legs waiting on the other side (in memory only).
     settlement_legs: crate::settlement_legs::Legs,
+    /// The payer's `x-deal-v0` deals for paid exchanges.
+    deals: crate::deal_flow::Deals,
     /// See [`CapsuleState::observed_not_sealed`].
     observed_not_sealed: std::sync::atomic::AtomicU64,
     /// Where a TDX quote for a record comes from (`producer::tee_attest`).
@@ -502,6 +504,7 @@ impl CapsuleState {
         let sequence_counters = SequenceCounterStore::open(data_dir.join("sequence_counters.json"));
         let learned_self_node_id =
             LearnedSelfNodeId::open(data_dir.join("learned_self_node_id.json"));
+        let deals = crate::deal_flow::Deals::new(&ledger_dir, data_dir);
         Ok(Self {
             keys,
             ledger: Mutex::new(ledger),
@@ -510,6 +513,7 @@ impl CapsuleState {
             sequence_counters: Mutex::new(sequence_counters),
             learned_self_node_id: Mutex::new(learned_self_node_id),
             settlement_legs: crate::settlement_legs::Legs::default(),
+            deals,
             observed_not_sealed: std::sync::atomic::AtomicU64::new(0),
             torn_write_cut_at: report.truncated_torn_write_at,
             quote_source: Box::new(crate::producer::tee_attest::ConfigfsTsm::default()),
@@ -557,6 +561,11 @@ impl CapsuleState {
             .lines()
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect()
+    }
+
+    /// This node's deals ([`crate::deal_flow`]).
+    pub fn deals(&self) -> &crate::deal_flow::Deals {
+        &self.deals
     }
 
     /// This node's settlement-records state ([`crate::settlement_legs`]).
@@ -2045,6 +2054,42 @@ impl CapsuleState {
             capsule_id,
             capsule,
         }))
+    }
+}
+
+/// The ledger seals a deal's Capsules ([`crate::deal_flow`]): under the one
+/// writer lock, on the head, with the producer envelope and the detached
+/// statement every local record carries.
+impl crate::deal_flow::Sealer for CapsuleState {
+    fn seal(
+        &self,
+        build: &dyn Fn(Option<&str>) -> Result<capsule_emit_lib::produce::BuiltPayload, crate::deal_records::Error>,
+        before: &dyn Fn(&str) -> std::io::Result<()>,
+    ) -> anyhow::Result<String> {
+        let mut ledger = self
+            .ledger
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let built = build(ledger.chain_head())?;
+        let mut capsule = Value::Object(built.value);
+        crate::producer::capsule::attach_producer_envelope(&mut capsule, &self.keys.signing_key)?;
+        before(&built.capsule_id)?;
+        let payload = crate::producer::capsule::payload_bytes(&capsule);
+        let statement = build_signed_statement(
+            &SignedStatementInput {
+                payload: &payload,
+                issuer: &self.node_id,
+                subject: &built.capsule_id,
+                content_type: &CAPSULE_CONTENT_TYPE,
+            },
+            &self.keys.signing_key,
+        );
+        ledger.append(&capsule, &statement)?;
+        Ok(built.capsule_id)
+    }
+
+    fn holds(&self, capsule_id: &str) -> bool {
+        matches!(self.lookup(capsule_id), Ok(Some(_)))
     }
 }
 

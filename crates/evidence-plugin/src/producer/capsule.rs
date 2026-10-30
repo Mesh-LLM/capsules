@@ -991,7 +991,7 @@ fn seal_local_citation(
 }
 
 /// The producer identity every mesh local record carries in its header.
-const LOCAL_RECORD_OPERATOR: &str = "capsule-emit-mesh-poc-rust";
+pub(crate) const LOCAL_RECORD_OPERATOR: &str = "capsule-emit-mesh-poc-rust";
 /// The producer this plugin names in every record it seals: its own name and
 /// version.
 pub(crate) const LOCAL_RECORD_DEVELOPER: &str =
