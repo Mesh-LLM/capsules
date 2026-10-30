@@ -170,8 +170,6 @@ evidencebook = "0.0.9"
 ureq = { version = "2", features = ["json"] }
 # O_NOFOLLOW for the lock files (`data_dir`). Already in the tree.
 libc = "0.2"
-# A session id's random bits (`agreement`). Already in the tree.
-getrandom = "0.2"
 # A witness's receipt for a checkpoint is checked offline before the page
 # counts it (`witness_status`). 0.1.0 is yanked, so this resolves to 0.1.1 or
 # later.
@@ -180,7 +178,8 @@ scitt-cose-receipt = "0.1"
 # `bip340` key type signs a Nostr event with BIP-340 Schnorr over secp256k1
 # (AAC Controller Binding §4.1). Same RustCrypto line as p256.
 k256 = { version = "0.13", default-features = false, features = ["schnorr", "std"] }
-# A controller binding's nonce: 128 random bits (CB §9.3). Already in the tree.
+# A controller binding's nonce (CB §9.3) and a service evidence agreement's
+# session id (`agreement`): 128 random bits each. Already in the tree.
 getrandom = "0.2"
 
 [dev-dependencies]

@@ -362,8 +362,12 @@ pub fn card_request() -> Value {
 }
 
 async fn ask_card(context: &mut mesh_llm_plugin::PluginContext<'_>, peer: &str) -> CardOutcome {
-    let Ok((sent, answer)) =
-        crate::mesh_evidence_bridge::send_evidence_request(context, peer, &card_request()).await
+    // No book of asks (`None`): this is the behavior the call had before
+    // #110 added that argument; whether an admission card ask belongs in
+    // the book is for #116's owner.
+    let Ok(crate::mesh_evidence_bridge::Answered { sent, answer, .. }) =
+        crate::mesh_evidence_bridge::send_evidence_request(context, peer, &card_request(), None)
+            .await
     else {
         return CardOutcome::NotRead;
     };
