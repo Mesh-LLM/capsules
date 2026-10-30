@@ -539,6 +539,9 @@ fn requirements(
 mod tests {
     use super::*;
 
+    mod exit_gate;
+    mod t9;
+
     const ME: &str = "aa";
     const PEER_KEY: &str = "bb";
     const PEER_NODE: &str = "node-b";
@@ -820,6 +823,97 @@ mod tests {
         );
         assert_eq!(rows[1]["acceptance_digest"], json!("d1"));
         assert!(rows[0].get("finding").is_none());
+    }
+
+    /// An exchange's payments are every invoice its lifecycle records name
+    /// (a deposit and a final invoice both count), and a payment observed
+    /// twice counts once: a later leg for the same payment, such as one
+    /// superseding an earlier observation, replaces it.
+    #[test]
+    fn every_invoice_of_an_exchange_counts_and_a_payment_counts_once() {
+        let s = session("d1", T0, None, 10_000);
+        let halves = [served("h1", T0 + 60, "e1", Some("d1"))];
+        let invoices = [invoice("e1", "deposit"), invoice("e1", "final")];
+        let spend = |legs: &[Value]| {
+            attached(&halves, std::slice::from_ref(&s), &invoices, legs)[0]["spend"].clone()
+        };
+        let both = spend(&[
+            payee_leg("deposit", 600, None),
+            payee_leg("final", 400, None),
+        ]);
+        assert_eq!(both["observed_msat"], json!(1_000), "{both}");
+        assert_eq!(both["lower_bound"], json!(false));
+        let duplicate = spend(&[
+            payee_leg("deposit", 600, None),
+            payee_leg("deposit", 600, None),
+            payee_leg("final", 400, None),
+        ]);
+        assert_eq!(
+            duplicate["observed_msat"],
+            json!(1_000),
+            "a duplicate counts once"
+        );
+        let superseded = spend(&[
+            payee_leg("deposit", 600, None),
+            payee_leg("final", 400, None),
+            payee_leg("deposit", 550, None),
+        ]);
+        assert_eq!(
+            superseded["observed_msat"],
+            json!(950),
+            "the later observation stands"
+        );
+        let missing = spend(&[payee_leg("final", 400, None)]);
+        assert_eq!(missing["observed_msat"], json!(400));
+        assert_eq!(
+            missing["lower_bound"],
+            json!(true),
+            "the deposit is not held"
+        );
+    }
+
+    /// A side holding none of its own observations (the payer's legs are on
+    /// the payer's node only) has only a lower bound, never "within cap",
+    /// and the payee's legs held here are not read as the payer's.
+    #[test]
+    fn a_side_without_its_own_observations_cannot_evaluate_the_cap() {
+        let s = proposed_session("d1", T0, None, 1_000);
+        let halves = [requested("r1", T0 + 60, "e1", Some("d1"))];
+        let invoices = [invoice_by("payer", "e1", "p1")];
+        let rows = attached(&halves, &[s], &invoices, &[payee_leg("p1", 500, None)]);
+        assert_eq!(
+            rows[0]["coverage"],
+            json!("cap_not_evaluable"),
+            "{:#}",
+            rows[0]
+        );
+        assert_eq!(rows[0]["spend"]["lower_bound"], json!(true));
+    }
+
+    /// The two sides count on their own records and can disagree: the
+    /// requester counts an exchange the provider never served, so its third
+    /// exchange is over a count of two while the provider's second is not.
+    #[test]
+    fn the_two_sides_count_their_own_exchanges_and_can_disagree() {
+        let requester_side = proposed_session("d1", T0, Some(2), 10_000);
+        let asked = [
+            requested("r1", T0 + 60, "e1", Some("d1")),
+            requested("r2", T0 + 120, "e2", Some("d1")),
+            requested("r3", T0 + 180, "e3", Some("d1")),
+        ];
+        let rows = attached(&asked, &[requester_side], &[], &[]);
+        assert_eq!(rows[2]["coverage"], json!("over_count"));
+        assert_eq!(rows[2]["count"]["position"], json!(3));
+
+        // The provider served the first and the third only.
+        let provider_side = session("d1", T0, Some(2), 10_000);
+        let served_halves = [
+            served("h1", T0 + 60, "p1", Some("d1")),
+            served("h3", T0 + 180, "p3", Some("d1")),
+        ];
+        let rows = attached(&served_halves, &[provider_side], &[], &[]);
+        assert_eq!(rows[1]["count"]["position"], json!(2));
+        assert_ne!(rows[1]["coverage"], json!("over_count"), "{:#}", rows[1]);
     }
 
     /// A settlement leg citing a session is never counted as an exchange.
