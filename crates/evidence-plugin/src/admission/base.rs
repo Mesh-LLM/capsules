@@ -362,11 +362,15 @@ pub fn card_request() -> Value {
 }
 
 async fn ask_card(context: &mut mesh_llm_plugin::PluginContext<'_>, peer: &str) -> CardOutcome {
-    let Ok((sent, answer)) =
-        crate::mesh_evidence_bridge::send_evidence_request(context, peer, &card_request()).await
+    // Not put in the book of asks (`None`): the rows re-read the card on
+    // every refresh, and this read is the rows' own, not a recorded ask.
+    let Ok(answered) =
+        crate::mesh_evidence_bridge::send_evidence_request(context, peer, &card_request(), None)
+            .await
     else {
         return CardOutcome::NotRead;
     };
+    let (sent, answer) = (answered.sent, answered.answer);
     let registry = crate::peer_keys::registry();
     read_card(
         &sent,
