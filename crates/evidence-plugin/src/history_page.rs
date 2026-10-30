@@ -10,6 +10,13 @@
 //! The reply is not logged as a request made of this node, because nobody
 //! made one.
 //!
+//! With `share_standard_history` on, a stranger may also be given the Service
+//! History, so the page carries that instead: the same request the card gets,
+//! plus the derivation of the Service History pinned to the latest checkpoint
+//! at a period boundary. The page says which form it holds. A node with the
+//! switch on but no boundary checkpoint yet gives the card, and says so in
+//! `form`.
+//!
 //! The route answers `{form, outcome, reply, node_key_id}`. `reply` is the
 //! reply's wire bytes as text, unchanged, which the page embeds as it got
 //! them. `outcome` is `answered` or `refused`; a node that cannot sign an
@@ -25,8 +32,12 @@ use crate::capsule_emit::CapsuleState;
 use crate::evidence_answer::{self, Outcome};
 use crate::evidence_routes::NoArgs;
 
-/// The form of answer the page carries.
+/// The form of answer the page carries when the node shares only its card.
 pub const FORM_HISTORY_CARD: &str = "history_card/1";
+
+/// The form it carries when `share_standard_history` is on: the Service
+/// History, which embeds the card byte for byte.
+pub const FORM_SERVICE_HISTORY: &str = "service_history/1";
 
 /// This node's answer to a stranger asking for its history card.
 pub fn served(capsules: &CapsuleState, node_id: Option<&str>) -> Result<Value, String> {
@@ -34,14 +45,63 @@ pub fn served(capsules: &CapsuleState, node_id: Option<&str>) -> Result<Value, S
     crate::commitment::with_responder(capsules, &now, node_id, |responder, _| serve(responder))
 }
 
+/// The anchor of the latest checkpoint whose time is a period boundary (ISH
+/// §6.1 items 2 and 5): the only anchor a Service History is answered for.
+fn latest_boundary_anchor(responder: &evidence_answer::Responder<'_>) -> Option<String> {
+    crate::evidence_log::with_index(
+        responder.ledger_dir,
+        &crate::commitment::key_id(responder.signing_key),
+        |index| {
+            index
+                .chain
+                .iter()
+                .rev()
+                .find(|c| {
+                    !crate::service_history::Definition::active()
+                        .declines_anchor(&c.record.timestamp)
+                })
+                .map(|c| c.anchor_digest())
+        },
+    )
+    .ok()
+    .flatten()
+}
+
 /// [`served`], from the responder it would use.
-fn serve(responder: &evidence_answer::Responder<'_>) -> Result<Value, String> {
+pub(crate) fn serve(responder: &evidence_answer::Responder<'_>) -> Result<Value, String> {
+    if responder.share_standard_history {
+        if let Some(pin) = latest_boundary_anchor(responder) {
+            let request = serde_json::to_vec(&json!({
+                "profile": evidence_request::envelope::PROFILE,
+                "subject": {"full_history": null},
+                "coverage": {"expected_pin": pin},
+                "derivation": crate::service_history::definition_digest(),
+            }))
+            .expect("a JSON value serializes");
+            return outcome_json(
+                FORM_SERVICE_HISTORY,
+                evidence_answer::answer(&request, responder),
+                responder,
+            );
+        }
+    }
     let request = crate::doctor::probe_requests()
         .into_iter()
         .find(|(name, _)| *name == crate::doctor::PROBE_HISTORY_CARD)
         .map(|(_, bytes)| bytes)
         .expect("doctor asks for the history card");
-    let outcome = evidence_answer::answer(&request, responder);
+    outcome_json(
+        FORM_HISTORY_CARD,
+        evidence_answer::answer(&request, responder),
+        responder,
+    )
+}
+
+fn outcome_json(
+    form: &str,
+    outcome: Outcome,
+    responder: &evidence_answer::Responder<'_>,
+) -> Result<Value, String> {
     let (label, bytes) = match &outcome {
         Outcome::Answered { .. } => ("answered", outcome.wire_bytes()),
         Outcome::Refused { .. } => ("refused", outcome.wire_bytes()),
@@ -51,7 +111,7 @@ fn serve(responder: &evidence_answer::Responder<'_>) -> Result<Value, String> {
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .ok_or_else(|| "the answer could not be written".to_string())?;
     Ok(json!({
-        "form": FORM_HISTORY_CARD,
+        "form": form,
         "outcome": label,
         "reply": reply,
         "node_key_id": crate::commitment::key_id(responder.signing_key),
