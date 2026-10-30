@@ -4,7 +4,12 @@
 // over. This is a per-viewer convenience, not a record: the node holds no
 // copy, every read and write is wrapped (storage can be blocked or absent),
 // and the page works the same without it.
+//
+// Each entry keeps its witness standing. An entry stored before the standing
+// was kept has none, and is restored as `not_recorded`: never as witnessed,
+// and never as checked against no witness, since neither was recorded.
 import type { HistoryOutcome } from '@/features/capsules/lib/ask-for-history'
+import type { WitnessStanding } from '@/features/capsules/lib/ask-for-record'
 
 export const HISTORY_MEMORY_KEY = 'capsules.evidence.verified-history.v1'
 
@@ -20,6 +25,12 @@ function isVerifiedHistory(value: unknown): value is VerifiedHistory {
   )
 }
 
+const STANDINGS: readonly WitnessStanding[] = ['witnessed', 'unwitnessed', 'no_witness', 'not_recorded']
+
+function storedStanding(value: unknown): WitnessStanding {
+  return STANDINGS.find((s) => s === value) ?? 'not_recorded'
+}
+
 /** Peer id -> its last verified history. Anything unreadable is skipped. */
 export function loadVerifiedHistories(): Map<string, VerifiedHistory> {
   const out = new Map<string, VerifiedHistory>()
@@ -27,7 +38,12 @@ export function loadVerifiedHistories(): Map<string, VerifiedHistory> {
     const parsed: unknown = JSON.parse(window.localStorage.getItem(HISTORY_MEMORY_KEY) ?? '{}')
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return out
     for (const [peerId, entry] of Object.entries(parsed)) {
-      if (isVerifiedHistory(entry)) out.set(peerId, { kind: 'verified', at: entry.at, checkpoints: entry.checkpoints })
+      if (isVerifiedHistory(entry)) out.set(peerId, {
+          kind: 'verified',
+          at: entry.at,
+          checkpoints: entry.checkpoints,
+          witness: storedStanding((entry as Record<string, unknown>).witness)
+        })
     }
   } catch {
     // No storage, or nothing readable in it: nothing remembered.

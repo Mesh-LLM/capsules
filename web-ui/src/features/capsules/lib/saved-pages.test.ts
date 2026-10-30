@@ -50,8 +50,14 @@ describe('the History page, opened offline', () => {
     expect(Buffer.from(embedded(html)).equals(Buffer.from(served, 'utf8'))).toBe(true)
 
     const { dom, requested, text } = await open(html)
-    expect(text).toContain('the history card matches its digest, and every checkpoint is signed by key')
+    expect(text).toContain('Checked against the node’s own key when this page opened: the history card matches its digest, and every checkpoint is signed by key')
+    // Never the pass style: this page checks no witness receipt.
+    expect(dom.window.document.querySelector('p.ok')).toBeNull()
+    expect(dom.window.document.querySelector('p.warn')?.textContent).toContain('No witness receipt is checked here')
     expect(text).toContain('compare that key with the node’s published commitment')
+    // evidencebook#209: a chain that checks only against its holder's key
+    // says so on the line that says it was checked.
+    expect(text).toContain('No witness receipt is checked here, so this could be a private copy of the node’s log')
     expect(text).not.toContain('unchanged')
     expect(text).toContain('Not checked: That this key is the node’s')
     expect(text).toMatch(/Checked: All \d+ checkpoints verify/)

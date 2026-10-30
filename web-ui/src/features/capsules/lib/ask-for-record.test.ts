@@ -80,6 +80,18 @@ function signedRefusal(reason: string, { secret = PEER_SECRET, requestDigest = S
 
 /** The tool's reply: the peer's answer, and what the plugin's verification
  *  found (by default, what a verified answer of that shape reads as). */
+/** A reply whose verification reports `witnessed` witness receipts verified. */
+function witnessedAnswer(body: Record<string, unknown>, witnessed: number) {
+  return answer(body, ANNOUNCED, { state: 'artifact', records: artifactLeafIndices(body), witnessed })
+}
+
+/** A reply note that isn't witnessed never reads as verified (evidencebook#209). */
+function expectNeverVerified(note: ReturnType<typeof askReplyNote>) {
+  expect(note?.verified).toBe(false)
+  expect(note?.text).not.toContain('✓')
+  expect(note?.text).not.toMatch(/checks out|verified/i)
+}
+
 function answer(
   body: Record<string, unknown>,
   announcedKeyId: string | null = ANNOUNCED,
@@ -392,15 +404,59 @@ describe('judgeAskReply', () => {
     const refusal = await judgeAskReply(answer(signedRefusal('no_such_subject')), null, ASKED_AT)
     expect(askReplyNote(refusal)?.verified).toBe(true)
     const theirs = { ...fixtureHalfBody({ capsuleId: 'theirs-1' }), signature: 'aa', key_id: 'bb' }
-    const record = await judgeAskReply(answer(artifact([theirs])), FIXTURE_REQUEST_DIGEST, ASKED_AT, trustingJudges)
+    const record = await judgeAskReply(witnessedAnswer(artifact([theirs]), 1), FIXTURE_REQUEST_DIGEST, ASKED_AT, trustingJudges)
     expect(askReplyNote(record)).toMatchObject({ verified: true })
     expect(askReplyNote({ kind: 'asking', at: ASKED_AT })).toBeNull()
+  })
+
+  it('a record a witness this node trusts vouches for is verified, and says the witness holds their checkpoint', async () => {
+    const theirs = { ...fixtureHalfBody({ capsuleId: 'theirs-1' }), signature: 'aa', key_id: 'bb' }
+    const record = await judgeAskReply(witnessedAnswer(artifact([theirs]), 2), FIXTURE_REQUEST_DIGEST, ASKED_AT, trustingJudges)
+    expect(record).toMatchObject({ kind: 'record', witness: 'witnessed' })
+    expect(askReplyNote(record)).toEqual({
+      verified: true,
+      witness: 'witnessed',
+      text: 'Their reply is verified: the record is in their log, under a checkpoint signed with the key this node has for them, and a witness this node trusts holds their checkpoint'
+    })
+  })
+
+  it('a record no configured witness vouches for checks against their own signatures only, never "verified"', async () => {
+    const theirs = { ...fixtureHalfBody({ capsuleId: 'theirs-1' }), signature: 'aa', key_id: 'bb' }
+    const record = await judgeAskReply(witnessedAnswer(artifact([theirs]), 0), FIXTURE_REQUEST_DIGEST, ASKED_AT, trustingJudges)
+    expect(record).toMatchObject({ kind: 'record', witness: 'unwitnessed' })
+    const note = askReplyNote(record)
+    expect(note).toEqual({
+      verified: false,
+      witness: 'unwitnessed',
+      text: 'Their record checks against their own signatures only: it is in their log, under a checkpoint signed with the key this node has for them, but no witness this node trusts has vouched for that log, so it could be a private copy'
+    })
+    expectNeverVerified(note)
+    // The row may still close: the witness clause is on the reply line only.
+    expect(stateAfterAsk(waitingRow(), record, ourRequestedRecord() as never).kind).toBe(
+      stateAfterAsk(waitingRow(), { ...record, witness: 'witnessed' } as never, ourRequestedRecord() as never).kind
+    )
+  })
+
+  it('a record checked with no witness configured says there was none to check it against', async () => {
+    const theirs = { ...fixtureHalfBody({ capsuleId: 'theirs-1' }), signature: 'aa', key_id: 'bb' }
+    const record = await judgeAskReply(answer(artifact([theirs])), FIXTURE_REQUEST_DIGEST, ASKED_AT, trustingJudges)
+    expect(record).toMatchObject({ kind: 'record', witness: 'no_witness' })
+    const note = askReplyNote(record)
+    expect(note).toEqual({
+      verified: false,
+      witness: 'no_witness',
+      text: 'Their record checks against their own signatures only: it is in their log, under a checkpoint signed with the key this node has for them. This node has no witness configured to check it against, so it could be a private copy'
+    })
+    expectNeverVerified(note)
+    // An outcome that carries no standing reads the same, never as witnessed.
+    const { witness: _dropped, ...unstated } = record as Extract<typeof record, { kind: 'record' }>
+    expect(askReplyNote(unstated)).toEqual(note)
   })
 
   it('says a record is verified only when its id recomputes and its signature holds', async () => {
     const theirs = { ...fixtureHalfBody({ capsuleId: 'theirs-1' }), signature: 'aa', key_id: 'bb' }
     const judged = (judges: AskJudges) =>
-      judgeAskReply(answer(artifact([theirs])), FIXTURE_REQUEST_DIGEST, ASKED_AT, judges)
+      judgeAskReply(witnessedAnswer(artifact([theirs]), 1), FIXTURE_REQUEST_DIGEST, ASKED_AT, judges)
     expect(askReplyNote(await judged(trustingJudges))?.verified).toBe(true)
     expect(askReplyNote(await judged({ ...trustingJudges, producerSignatureVerifies: () => false }))).toEqual({
       verified: false,

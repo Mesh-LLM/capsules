@@ -64,7 +64,12 @@ function paneRow(opts: { pushed?: PeerRecomputeState; outcome?: string; outcomeD
   return { exchange_key: `digest:${FIXTURE_REQUEST_DIGEST}`, mine: { state: 'present', record: ours() }, theirs } as unknown as PaneCRow
 }
 
-const asked = (evidence: PeerRecomputeState, at = T1): AskOutcome => ({ kind: 'record', at, evidence })
+// A witnessed reply unless a case says otherwise (`askReplyNote`).
+const asked = (
+  evidence: PeerRecomputeState,
+  at = T1,
+  witness: 'witnessed' | 'unwitnessed' | 'no_witness' = 'witnessed'
+): AskOutcome => ({ kind: 'record', at, evidence, witness })
 const refused = (at = T1): AskOutcome => ({ kind: 'refused', at, reason: 'not_authorized' })
 const noRecord = (at = T1): AskOutcome => ({ kind: 'no_record', at })
 const failed = (at = T2): AskOutcome => ({ kind: 'no_reply', at, detail: 'HTTP 502' })
@@ -160,6 +165,20 @@ const CASES: Case[] = [
     state: 'closed',
     source: 'asked',
     askNote: { verified: true, text: /^Their reply is verified: the record is in their log/ }
+  },
+  {
+    name: 'an asked confirming record no witness vouches for is still Confirmed, but its note never says verified',
+    ask: asks(asked(record('agrees'), T1, 'unwitnessed')),
+    state: 'closed',
+    source: 'asked',
+    askNote: { verified: false, text: /^Their record checks against their own signatures only: .*could be a private copy$/ }
+  },
+  {
+    name: 'an asked confirming record with no witness configured is still Confirmed, its note says there was none',
+    ask: asks(asked(record('agrees'), T1, 'no_witness')),
+    state: 'closed',
+    source: 'asked',
+    askNote: { verified: false, text: /This node has no witness configured to check it against/ }
   },
   // A verdict wins over a failed ask, and the attempt stays visible.
   {
