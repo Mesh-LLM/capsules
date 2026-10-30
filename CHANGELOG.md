@@ -30,6 +30,16 @@
   the reason. The commitment names the binding by its digest alone (`controller_binding.digest`),
   never the operator's key, and the binding stays optional (Steven's ruling). Verification of the
   `bip340` key type uses `k256`. Mesh-LLM/capsules-plugin#54, #97.
+- **The Service History checks against the period policy of the definition it is handed, and the
+  #315 vectors run.** `period_alignment`, `period_anchor` and `period_floor` read the epoch, length
+  and floor from the definition's `period_policy` (checked as `definition_form`) instead of fixed
+  weekly values; this node's own definition, its digests and its answers are unchanged. A test runs
+  the 19 Standard-level cases of the `inference-service-history-v0` vectors
+  (action-state-group/agent-action-capsule#315 at f8c946ed), whose policy is daily from
+  2026-10-01; the 8 Detailed-level cases are listed by id, not run. The new test-only cargo feature
+  `test-period-policy` overrides the epoch and length from the environment, for the two-node e2e,
+  which now runs a Service History across a period boundary on two nodes and compares the embedded
+  card with the direct one (action-state-group/evidencebook#46).
 - **The Service History (`service_history/1`), a Standard History under the inference-service
   history profile.** A requester asks for it by the digest of
   `derivations/service-history-1.json` (`cbc96d80…`), for `full_history`, pinned to a checkpoint

@@ -11,6 +11,11 @@ name = "capsules"
 path = "src/main.rs"
 
 [features]
+# Test-only: the Service History period epoch and length are read from
+# CAPSULES_TEST_PERIOD_EPOCH and CAPSULES_TEST_PERIOD_LENGTH_S, so the
+# two-node e2e reaches a period boundary in minutes. The override is another
+# definition, with its own digests. The release build never enables it.
+test-period-policy = []
 # Deliberately-broken variant: never denies a blocked model (fail-open bug).
 # Built and run against the same interop test to prove the test actually
 # distinguishes correct behavior from this specific regression.
