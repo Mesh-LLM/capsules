@@ -4,6 +4,21 @@
 
 ### Added
 
+- **A paid exchange is sealed as an `x-deal-v0` deal (payer side).** For an exchange with at
+  least one invoice issued, the node seals a `baseline` (what was asked: the request digest and
+  model, committed under a nonce the node keeps; the serving peer by fingerprint only; paid over
+  Lightning, not refundable; no price, since an invoice's msat has no unit in the profile), then an
+  `outcome` and a `close`, then an in-log `deal_report` for the counterparty. `completed` once
+  every invoice is paid and the response received; `open` when no settlement came within 15
+  minutes of the first invoice or the node restarted first (the record is not final, never
+  "pending"). A free exchange gets no deal. The Capsules are built by `capsule_emit::produce`
+  (bytes identical to Go's) from `evidencebook::deal`, each linked to its exchange in
+  `deal-links.jsonl` before it is sealed; the payload each commits is journaled in
+  `deal-payloads.jsonl`, and a step counts as sealed only if its Capsule is in the ledger, so a
+  restart neither repeats a step nor loses one. The provider seals no deal (its receipt is
+  "your receipt only", Mesh-LLM/capsules-plugin#134). `check_profile.py` accepts the built chains
+  (`EVIDENCEBOOK_DEAL_PROFILE_DIR` runs it in the tests). Takes `evidencebook` and `capsule-emit`
+  from git revs until their releases; not mergeable before then. Mesh-LLM/capsules-plugin#96.
 - **A deal capsule goes to the counterparty of the exchange it is of.** A step or a report of an
   `x-deal-v0` deal names no counterparty itself, so under `share_history_segments=counterparties`
   it would have gone to nobody. The node now writes `deal-links.jsonl` in the ledger directory,

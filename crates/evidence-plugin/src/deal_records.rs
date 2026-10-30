@@ -350,6 +350,42 @@ mod tests {
         assert_ne!(chain(true)[1].digest, chain(false)[1].digest);
     }
 
+    /// Real node ids go through the name rule (casefold, punctuation to
+    /// spaces): they stay distinct and non-empty, so two peers never share a
+    /// fingerprint and a peer never fingerprints to nothing.
+    #[test]
+    fn node_ids_fingerprint_distinctly_through_the_name_rule() {
+        let d = deal();
+        let ids = [
+            PEER,
+            "9c1f0a2be45d7388a6b0c1d2e3f40516273849a5b6c7d8e9f00112233445566b",
+            "node-a_1",
+            "node-a_2",
+            "node-a-1",
+            "NODE-A_1",
+        ];
+        let mut seen = std::collections::BTreeMap::new();
+        for id in ids {
+            for kind in ["payee", "profile_id"] {
+                let fp = deal::fingerprint(&d.key, kind, id).unwrap();
+                assert_eq!(fp.len(), 64);
+                if let Some(other) = seen.insert((kind, fp), id) {
+                    // The rule folds case and punctuation: only ids that
+                    // differ by those alone may meet.
+                    assert_eq!(
+                        other.to_lowercase().replace('_', "-"),
+                        id.to_lowercase().replace('_', "-")
+                    );
+                }
+            }
+        }
+        // A baseline builds for each of them.
+        for id in ids {
+            d.baseline(&at(1_790_000_000), id, &"ab".repeat(32), "t", "model-x")
+                .unwrap();
+        }
+    }
+
     #[test]
     fn a_step_is_sealed_in_a_capsule_that_commits_its_payload() {
         let d = deal();

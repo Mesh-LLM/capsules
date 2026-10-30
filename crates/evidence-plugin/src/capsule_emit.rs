@@ -2063,7 +2063,12 @@ impl CapsuleState {
 impl crate::deal_flow::Sealer for CapsuleState {
     fn seal(
         &self,
-        build: &dyn Fn(Option<&str>) -> Result<capsule_emit_lib::produce::BuiltPayload, crate::deal_records::Error>,
+        build: &dyn Fn(
+            Option<&str>,
+        ) -> Result<
+            capsule_emit_lib::produce::BuiltPayload,
+            crate::deal_records::Error,
+        >,
         before: &dyn Fn(&str) -> std::io::Result<()>,
     ) -> anyhow::Result<String> {
         let mut ledger = self

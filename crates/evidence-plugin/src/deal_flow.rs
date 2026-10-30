@@ -54,6 +54,15 @@ const SECRET_FILE: &str = "deal-store-secret";
 /// One line per sealed Capsule: the payload it commits, in the order sealed.
 pub const PAYLOADS_FILE: &str = "deal-payloads.jsonl";
 
+/// What the exchange's own sealed record says: its id, the serving peer, and
+/// what was asked (the request digest) of which model.
+pub struct SealedExchange<'a> {
+    pub capsule_id: &'a str,
+    pub peer: &'a str,
+    pub request_digest: &'a str,
+    pub model: &'a str,
+}
+
 /// What seals a deal's Capsules: the node's ledger.
 pub trait Sealer {
     /// Seal the Capsule `build` makes on the ledger's head. `before` runs with
@@ -166,29 +175,32 @@ impl Deals {
         });
     }
 
-    /// The exchange's own record is sealed: its id, the serving `peer`, and
-    /// what was asked (the request digest) of which model.
+    /// The exchange's own record is sealed.
     pub fn on_exchange(
         &self,
         sealer: &dyn Sealer,
         exchange_id: &str,
-        exchange_capsule_id: &str,
-        peer: &str,
-        request_digest: &str,
-        model: &str,
+        sealed: &SealedExchange,
         now: i64,
     ) {
         self.update(sealer, exchange_id, now, false, |e| {
-            e.exchange_capsule_id = Some(exchange_capsule_id.to_string());
-            e.peer = Some(peer.to_string());
-            e.request_digest = Some(request_digest.to_string());
-            e.model = Some(model.to_string());
+            e.exchange_capsule_id = Some(sealed.capsule_id.to_string());
+            e.peer = Some(sealed.peer.to_string());
+            e.request_digest = Some(sealed.request_digest.to_string());
+            e.model = Some(sealed.model.to_string());
         });
     }
 
     /// This node sealed the payer's `payer_observed` leg `leg` (`amount_msat`
     /// paid) for the exchange.
-    pub fn on_paid(&self, sealer: &dyn Sealer, exchange_id: &str, leg: &str, amount_msat: u64, now: i64) {
+    pub fn on_paid(
+        &self,
+        sealer: &dyn Sealer,
+        exchange_id: &str,
+        leg: &str,
+        amount_msat: u64,
+        now: i64,
+    ) {
         self.update(sealer, exchange_id, now, false, |e| {
             if !e.paid_legs.iter().any(|l| l == leg) {
                 e.paid_legs.push(leg.to_string());
@@ -231,24 +243,6 @@ impl Deals {
         self.save(&inner);
     }
 
-    /// The sealed steps of the deal of `exchange_id`, and its report, when
-    /// there are any.
-    pub fn capsules_of(&self, sealer: &dyn Sealer, exchange_id: &str) -> Vec<String> {
-        let mut inner = self.lock();
-        self.load(&mut inner, sealer);
-        inner
-            .entries
-            .get(exchange_id)
-            .map(|e| {
-                e.steps
-                    .iter()
-                    .map(|s| s.capsule_id.clone())
-                    .chain(e.report.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     fn update(
         &self,
         sealer: &dyn Sealer,
@@ -288,7 +282,14 @@ impl Deals {
 
     /// Seal what is due for `exchange_id`, in order, stopping at the first
     /// step that cannot be sealed (tried again at the next event).
-    fn advance(&self, inner: &mut Inner, sealer: &dyn Sealer, exchange_id: &str, now: i64, restarted: bool) {
+    fn advance(
+        &self,
+        inner: &mut Inner,
+        sealer: &dyn Sealer,
+        exchange_id: &str,
+        now: i64,
+        restarted: bool,
+    ) {
         let Some(secret) = inner.secret else {
             return;
         };
@@ -310,7 +311,7 @@ impl Deals {
             local_values: vec![peer.clone(), asked.clone()],
             deal_id: deal_id.clone(),
         };
-        let mut seal = |entry: &mut Entry, enc: Encoded, seq: i64, completed: bool| -> bool {
+        let seal = |entry: &mut Entry, enc: Encoded, seq: i64, completed: bool| -> bool {
             match self.seal_step(sealer, &deal_id, &exchange, seq, &enc, now) {
                 Some(capsule_id) => {
                     entry.steps.push(Sealed {
@@ -330,7 +331,8 @@ impl Deals {
             if entry.terms_legs.is_empty() {
                 return;
             }
-            let Ok(enc) = d.baseline(&records::at(now), &peer, &entry.nonce, &asked, &model)
+            let Ok(enc) = d
+                .baseline(&records::at(now), &peer, &entry.nonce, &asked, &model)
                 .inspect_err(|error| tracing::warn!(%error, "deal baseline not built"))
             else {
                 return;
@@ -352,7 +354,8 @@ impl Deals {
                 prev: baseline.clone(),
                 baseline: baseline.clone(),
             };
-            let Ok(enc) = d.outcome(&records::at(now), &after, settled)
+            let Ok(enc) = d
+                .outcome(&records::at(now), &after, settled)
                 .inspect_err(|error| tracing::warn!(%error, "deal outcome not built"))
             else {
                 return;
@@ -372,7 +375,8 @@ impl Deals {
                 prev: outcome.digest.clone(),
                 baseline,
             };
-            let Ok(enc) = d.close(&records::at(now), &after, closes_settled)
+            let Ok(enc) = d
+                .close(&records::at(now), &after, closes_settled)
                 .inspect_err(|error| tracing::warn!(%error, "deal close not built"))
             else {
                 return;
@@ -528,8 +532,8 @@ impl Deals {
             ) else {
                 continue;
             };
-            let completed = v.pointer("/payload/body/outcome").and_then(Value::as_str)
-                == Some("completed");
+            let completed =
+                v.pointer("/payload/body/outcome").and_then(Value::as_str) == Some("completed");
             if entry.step(&record_type).is_none() {
                 entry.steps.push(Sealed {
                     record_type,
@@ -582,7 +586,10 @@ fn random_hex() -> Option<String> {
 /// reveals no raw identifier.
 fn read_or_make_secret(path: &Path) -> Option<[u8; 32]> {
     if let Ok(text) = std::fs::read_to_string(path) {
-        if let Some(secret) = hex::decode(text.trim()).ok().and_then(|b| b.try_into().ok()) {
+        if let Some(secret) = hex::decode(text.trim())
+            .ok()
+            .and_then(|b| b.try_into().ok())
+        {
             return Some(secret);
         }
         tracing::warn!("deal store secret unreadable; the deal is not sealed");
@@ -624,7 +631,12 @@ fn append_line(path: &Path, line: &Value) -> std::io::Result<()> {
 /// (capsule-viewer `receipt/model.py`). Money lines are msat text. A close
 /// `open` says what this node saw: payment seen with no delivery, or no
 /// payment seen, never "not delivered".
-fn report_body(entry: &Entry, exchange_capsule_id: &str, settled: bool, now: i64) -> serde_json::Map<String, Value> {
+fn report_body(
+    entry: &Entry,
+    exchange_capsule_id: &str,
+    settled: bool,
+    now: i64,
+) -> serde_json::Map<String, Value> {
     let model = entry.model.as_deref().unwrap_or("a model");
     let mut did = vec![json!({
         "text": format!("Asked a mesh node for {model}."),
@@ -646,7 +658,10 @@ fn report_body(entry: &Entry, exchange_capsule_id: &str, settled: bool, now: i64
         did.push(json!({"text": "Received the response.", "steps": [leg]}));
     }
     let (state, text) = if settled {
-        ("closed", "Every invoice was paid and the response was received.")
+        (
+            "closed",
+            "Every invoice was paid and the response was received.",
+        )
     } else if entry.paid_legs.is_empty() {
         ("open", "Payment not seen.")
     } else if entry.delivered_leg.is_none() {
@@ -661,7 +676,10 @@ fn report_body(entry: &Entry, exchange_capsule_id: &str, settled: bool, now: i64
         .collect();
     let mut body = serde_json::Map::new();
     body.insert("audience".into(), json!(deal::AUDIENCE_COUNTERPARTY));
-    body.insert("scope".into(), json!("This node's own record of the exchange."));
+    body.insert(
+        "scope".into(),
+        json!("This node's own record of the exchange."),
+    );
     body.insert("did".into(), Value::Array(did));
     body.insert("told".into(), json!([]));
     body.insert(
@@ -670,4 +688,238 @@ fn report_body(entry: &Entry, exchange_capsule_id: &str, settled: bool, now: i64
     );
     body.insert("steps".into(), Value::Array(steps));
     body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capsule_emit::CapsuleState;
+
+    const PEER: &str = "9c1f0a2be45d7388a6b0c1d2e3f40516273849a5b6c7d8e9f00112233445566a";
+    const EXCHANGE: &str = "host-exchange-1";
+
+    fn hex64(c: char) -> String {
+        c.to_string().repeat(64)
+    }
+
+    fn sealed_exchange() -> SealedExchange<'static> {
+        SealedExchange {
+            capsule_id: Box::leak(hex64('e').into_boxed_str()),
+            peer: PEER,
+            request_digest: Box::leak(hex64('d').into_boxed_str()),
+            model: "model-x",
+        }
+    }
+
+    fn open(dir: &Path) -> CapsuleState {
+        CapsuleState::open(dir, "deal-test").unwrap()
+    }
+
+    fn ledger(dir: &Path) -> PathBuf {
+        dir.join("ledger")
+    }
+
+    fn lines(path: &Path) -> Vec<Value> {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    /// The deal capsules in the ledger, in order.
+    fn deal_capsules(dir: &Path) -> Vec<Value> {
+        lines(&ledger(dir).join("capsules.jsonl"))
+            .into_iter()
+            .filter(|c| c.get("deal_id").is_some() || c["action_id"] == deal::REPORT_ACTION_ID)
+            .collect()
+    }
+
+    fn payload(dir: &Path, capsule_id: &str) -> Value {
+        lines(&ledger(dir).join(PAYLOADS_FILE))
+            .into_iter()
+            .find(|l| l["capsule_id"] == capsule_id)
+            .map(|l| l["payload"].clone())
+            .unwrap()
+    }
+
+    fn paid_exchange(state: &CapsuleState, now: i64) {
+        let deals = state.deals();
+        deals.on_invoice(state, EXCHANGE, &hex64('a'), 1000, now);
+        deals.on_exchange(state, EXCHANGE, &sealed_exchange(), now + 1);
+    }
+
+    #[test]
+    fn a_paid_and_delivered_exchange_seals_baseline_outcome_close_and_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = open(dir.path());
+        paid_exchange(&state, 1_790_000_000);
+        // Invoiced and asked: the baseline, nothing more.
+        let types = |dir: &Path| -> Vec<String> {
+            deal_capsules(dir)
+                .iter()
+                .map(|c| c["action_id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(types(dir.path()).len(), 1);
+        let deals = state.deals();
+        deals.on_paid(&state, EXCHANGE, &hex64('b'), 1000, 1_790_000_030);
+        assert_eq!(types(dir.path()).len(), 1, "not delivered yet");
+        deals.on_delivered(&state, EXCHANGE, &hex64('c'), 1_790_000_040);
+
+        let capsules = deal_capsules(dir.path());
+        assert_eq!(capsules.len(), 4);
+        let kinds: Vec<_> = capsules
+            .iter()
+            .map(|c| {
+                payload(dir.path(), c["capsule_id"].as_str().unwrap())
+                    .pointer("/x-deal-v0/record_type")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "report".into())
+            })
+            .collect();
+        assert_eq!(kinds, ["baseline", "outcome", "close", "report"]);
+        let outcome = payload(dir.path(), capsules[1]["capsule_id"].as_str().unwrap());
+        assert_eq!(outcome["body"]["outcome"], "completed");
+        let report = payload(dir.path(), capsules[3]["capsule_id"].as_str().unwrap());
+        assert_eq!(report["report"]["lifecycle"]["state"], "closed");
+        assert_eq!(report["audience"], "counterparty");
+        // The raw peer id is in no record.
+        let journal = std::fs::read_to_string(ledger(dir.path()).join(PAYLOADS_FILE)).unwrap();
+        assert!(!journal.contains(PEER));
+        // Each deal capsule is chained on the ledger and linked to the exchange.
+        let links = lines(&ledger(dir.path()).join(crate::evidence_log::DEAL_LINKS_FILE));
+        assert_eq!(links.len(), 4);
+        for c in &capsules {
+            assert!(links
+                .iter()
+                .any(|l| l["capsule_id"] == c["capsule_id"]
+                    && l["exchange_capsule_id"] == hex64('e')));
+        }
+    }
+
+    #[test]
+    fn an_invoice_never_settled_closes_open_when_the_time_has_passed() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = open(dir.path());
+        let t = 1_790_000_000;
+        paid_exchange(&state, t);
+        state.deals().tick(&state, t + OPEN_AFTER - 1);
+        assert_eq!(deal_capsules(dir.path()).len(), 1, "still waiting");
+        state.deals().tick(&state, t + OPEN_AFTER);
+        let capsules = deal_capsules(dir.path());
+        assert_eq!(capsules.len(), 4);
+        let outcome = payload(dir.path(), capsules[1]["capsule_id"].as_str().unwrap());
+        assert_eq!(outcome["body"]["outcome"], "open");
+        let close = payload(dir.path(), capsules[2]["capsule_id"].as_str().unwrap());
+        assert_eq!(close["body"]["outcome"], "open");
+        let report = payload(dir.path(), capsules[3]["capsule_id"].as_str().unwrap());
+        assert_eq!(report["report"]["lifecycle"]["state"], "open");
+        assert_eq!(report["report"]["lifecycle"]["text"], "Payment not seen.");
+        // A tick again seals nothing more.
+        state.deals().tick(&state, t + 10 * OPEN_AFTER);
+        assert_eq!(deal_capsules(dir.path()).len(), 4);
+    }
+
+    #[test]
+    fn a_free_exchange_gets_no_deal() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = open(dir.path());
+        let deals = state.deals();
+        deals.on_exchange(&state, EXCHANGE, &sealed_exchange(), 1_790_000_000);
+        deals.on_delivered(&state, EXCHANGE, &hex64('c'), 1_790_000_010);
+        deals.tick(&state, 1_790_000_000 + 10 * OPEN_AFTER);
+        assert!(deal_capsules(dir.path()).is_empty());
+        assert!(!ledger(dir.path()).join(PAYLOADS_FILE).exists());
+    }
+
+    #[test]
+    fn a_restart_closes_a_baselined_deal_open_and_does_not_repeat_the_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let state = open(dir.path());
+            paid_exchange(&state, 1_790_000_000);
+            assert_eq!(deal_capsules(dir.path()).len(), 1);
+        }
+        let state = open(dir.path());
+        state.deals().recover(&state, 1_790_000_100);
+        let capsules = deal_capsules(dir.path());
+        assert_eq!(
+            capsules.len(),
+            4,
+            "baseline, outcome open, close open, report"
+        );
+        let outcome = payload(dir.path(), capsules[1]["capsule_id"].as_str().unwrap());
+        assert_eq!(outcome["body"]["outcome"], "open");
+        // And another restart changes nothing.
+        let state = open(dir.path());
+        state.deals().recover(&state, 1_790_000_200);
+        assert_eq!(deal_capsules(dir.path()).len(), 4);
+    }
+
+    /// The Capsule was appended and journaled, then the node died before the
+    /// state was saved: the next start finds the step again from the journal
+    /// and the ledger instead of sealing a second baseline.
+    #[test]
+    fn a_crash_between_the_append_and_the_state_is_found_again_from_the_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let state = open(dir.path());
+            paid_exchange(&state, 1_790_000_000);
+        }
+        let path = ledger(dir.path()).join(STATE_FILE);
+        let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        saved[EXCHANGE]["steps"] = json!([]);
+        std::fs::write(&path, saved.to_string()).unwrap();
+        let state = open(dir.path());
+        state.deals().recover(&state, 1_790_000_100);
+        let capsules = deal_capsules(dir.path());
+        assert_eq!(
+            capsules.len(),
+            4,
+            "one baseline, then outcome, close and report"
+        );
+        let baselines = capsules
+            .iter()
+            .filter(|c| c["action_id"].as_str().is_some_and(|a| a.ends_with("/1")))
+            .count();
+        assert_eq!(baselines, 1);
+    }
+
+    #[test]
+    fn the_built_chain_passes_the_reference_checker() {
+        let Some(profile) = std::env::var_os("EVIDENCEBOOK_DEAL_PROFILE_DIR") else {
+            eprintln!("EVIDENCEBOOK_DEAL_PROFILE_DIR not set; check_profile.py not run");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let state = open(dir.path());
+        paid_exchange(&state, 1_790_000_000);
+        state
+            .deals()
+            .on_paid(&state, EXCHANGE, &hex64('b'), 1000, 1_790_000_030);
+        state
+            .deals()
+            .on_delivered(&state, EXCHANGE, &hex64('c'), 1_790_000_040);
+        let chain: Vec<String> = deal_capsules(dir.path())
+            .iter()
+            .filter(|c| c.get("deal_id").is_some())
+            .map(|c| payload(dir.path(), c["capsule_id"].as_str().unwrap()).to_string())
+            .collect();
+        let path = dir.path().join("chain.json");
+        std::fs::write(&path, format!("[{}]", chain.join(","))).unwrap();
+        let out = std::process::Command::new("python3")
+            .arg("-I")
+            .arg(Path::new(&profile).join("check_profile.py"))
+            .arg(&path)
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success() && !text.contains("FAIL"), "{text}");
+    }
 }

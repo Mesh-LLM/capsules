@@ -584,10 +584,12 @@ async fn deal_on_exchange(
         capsules.deals().on_exchange(
             &*capsules,
             &exchange_id,
-            &capsule_id,
-            &peer,
-            &digest,
-            &model,
+            &deal_flow::SealedExchange {
+                capsule_id: &capsule_id,
+                peer: &peer,
+                request_digest: &digest,
+                model: &model,
+            },
             chrono::Utc::now().timestamp(),
         );
     })
