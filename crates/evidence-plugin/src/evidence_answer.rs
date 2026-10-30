@@ -1873,6 +1873,111 @@ pub(crate) mod tests {
         .unwrap();
     }
 
+    /// A deal's steps and its report name no counterparty themselves. The
+    /// share gate takes it from the exchange record they are linked to
+    /// (`deal-links.jsonl`), so under `counterparties` they go to that
+    /// exchange's counterparty and to no one else, and a deal capsule with no
+    /// link goes to nobody (Mesh-LLM/capsules-plugin#96).
+    #[test]
+    fn a_deal_capsule_goes_to_the_counterparty_of_the_exchange_it_is_of() {
+        let hex = |c: char| c.to_string().repeat(64);
+        let exchange = served(
+            "node-a",
+            "model-x",
+            "confirmed",
+            "10.000",
+            json!({"nonce": "n-9"}),
+        );
+        let exchange_id = exchange["capsule_id"].as_str().unwrap().to_string();
+        let ledger = vec![
+            exchange,
+            json!({"capsule_id": hex('1'), "deal_id": "deal-0123456789abcdef"}),
+            json!({"capsule_id": hex('2'), "action_id": "capsulectl-deal-report"}),
+            json!({"capsule_id": hex('3'), "deal_id": "deal-0123456789abcdef"}),
+        ];
+        let dir = node(&ledger);
+        write_jsonl(
+            &dir.path().join(evidence_log::DEAL_LINKS_FILE),
+            &[
+                json!({"capsule_id": hex('1'), "exchange_capsule_id": exchange_id}),
+                json!({"capsule_id": hex('2'), "exchange_capsule_id": exchange_id}),
+                json!({"capsule_id": "not a capsule id", "exchange_capsule_id": exchange_id}),
+            ],
+        );
+        let key_id = hex::encode(key().verifying_key().to_bytes());
+        evidence_log::with_index(dir.path(), &key_id, |index| {
+            let who = |id: &str| vec![id.to_string()];
+            let (step, report, unlinked) = ([1u64], [2u64], [3u64]);
+            for records in [&step[..], &report[..], &[1, 2][..]] {
+                assert!(may_serve_all(
+                    index,
+                    records,
+                    &who("node-a"),
+                    "counterparties"
+                ));
+                assert!(!may_serve_all(
+                    index,
+                    records,
+                    &who("node-b"),
+                    "counterparties"
+                ));
+                assert!(may_serve_all(index, records, &who("node-b"), "peers"));
+                assert!(!may_serve_all(index, records, &who("node-a"), "off"));
+                assert!(!may_serve_all(index, records, &[], "peers"));
+            }
+            // No link: the capsule names nobody, so `counterparties` serves it to no one.
+            assert!(!may_serve_all(
+                index,
+                &unlinked,
+                &who("node-a"),
+                "counterparties"
+            ));
+            assert!(!may_serve_all(
+                index,
+                &unlinked,
+                &who("node-b"),
+                "counterparties"
+            ));
+            Ok::<_, std::io::Error>(())
+        })
+        .unwrap()
+        .unwrap();
+    }
+
+    /// A link written after the node started is read on the next query, and a
+    /// link to an exchange not yet indexed names nobody until it is.
+    #[test]
+    fn a_deal_link_written_later_is_read_by_the_next_query() {
+        let hex = |c: char| c.to_string().repeat(64);
+        let exchange = served(
+            "node-a",
+            "model-x",
+            "confirmed",
+            "10.000",
+            json!({"nonce": "n-9"}),
+        );
+        let exchange_id = exchange["capsule_id"].as_str().unwrap().to_string();
+        let dir = node(&[exchange, json!({"capsule_id": hex('1')})]);
+        let key_id = hex::encode(key().verifying_key().to_bytes());
+        let who = vec!["node-a".to_string()];
+        let unlinked = evidence_log::with_index(dir.path(), &key_id, |index| {
+            may_serve_all(index, &[1], &who, "counterparties")
+        })
+        .unwrap();
+        assert!(!unlinked);
+        write_jsonl(
+            &dir.path().join(evidence_log::DEAL_LINKS_FILE),
+            &[json!({"capsule_id": hex('1'), "exchange_capsule_id": exchange_id})],
+        );
+        let linked = evidence_log::with_index(dir.path(), &key_id, |index| {
+            may_serve_all(index, &[1], &who, "counterparties")
+        })
+        .unwrap();
+        // The deal capsule was indexed before its link existed, so it stays
+        // unnamed: the node writes the link before it seals the capsule.
+        assert!(!linked);
+    }
+
     /// `share_standard_history` on restores what every node did before:
     /// Standard History to anyone, signed or not, named or not.
     #[test]

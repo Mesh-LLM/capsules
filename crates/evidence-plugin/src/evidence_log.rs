@@ -66,6 +66,12 @@ use evidencebook::served_summary::{
 
 pub const CAPSULES_FILE: &str = "capsules.jsonl";
 pub const CHECKPOINTS_FILE: &str = "checkpoints.jsonl";
+/// Which exchange record each deal capsule (a step or a report of an
+/// `x-deal-v0` deal) is of: one `{"capsule_id", "exchange_capsule_id"}` line
+/// per capsule, written by the node before it seals the capsule. A deal
+/// capsule names no counterparty itself, so the share gate takes the one of
+/// the exchange record it is of (Mesh-LLM/capsules-plugin#96).
+pub const DEAL_LINKS_FILE: &str = "deal-links.jsonl";
 
 /// The longest correlation identifier indexed. A longer value in a record is
 /// not an identifier anyone asks by; not indexing it bounds the index.
@@ -125,6 +131,20 @@ pub struct Leaf {
     /// this node, whoever asks.
     pub never_leaves: bool,
     pub facts: LeafFacts,
+}
+
+/// One line of [`DEAL_LINKS_FILE`]: the deal capsule and the exchange record
+/// it is of, both full capsule ids.
+fn parse_deal_link(line: &[u8]) -> Option<(String, String)> {
+    let value: Value = serde_json::from_slice(line).ok()?;
+    let id = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|id| is_digest(id))
+            .map(str::to_string)
+    };
+    Some((id("capsule_id")?, id("exchange_capsule_id")?))
 }
 
 /// A position in an append-only file: how much has been read, and the last
@@ -213,6 +233,10 @@ pub struct LedgerIndex {
     node_key_id: String,
     capsules: Tail,
     checkpoints: Tail,
+    deal_links: Tail,
+    /// Deal capsule id to the id of the exchange record it is of
+    /// ([`DEAL_LINKS_FILE`]).
+    deal_exchange: HashMap<String, String>,
     pub leaves: Vec<Leaf>,
     nodes: MemoryNodeStore,
     by_id: HashMap<String, u64>,
@@ -237,6 +261,8 @@ impl LedgerIndex {
             node_key_id: node_key_id.to_string(),
             capsules: Tail::default(),
             checkpoints: Tail::default(),
+            deal_links: Tail::default(),
+            deal_exchange: HashMap::new(),
             leaves: Vec::new(),
             nodes: MemoryNodeStore::new(),
             by_id: HashMap::new(),
@@ -251,6 +277,22 @@ impl LedgerIndex {
 
     /// Bring the index up to date with both files.
     pub fn refresh(&mut self) -> std::io::Result<()> {
+        // Links first: a deal capsule's link is written before the capsule.
+        let links = self.deal_links.clone();
+        let mut links_tail = links.clone();
+        let continues =
+            links.read_new(&self.ledger_dir.join(DEAL_LINKS_FILE), |offset, line| {
+                if let Some((capsule, exchange)) = parse_deal_link(trim_newline(line)) {
+                    self.deal_exchange.insert(capsule, exchange);
+                }
+                links_tail.advance(offset, line);
+                true
+            })?;
+        if !continues {
+            *self = Self::new(&self.ledger_dir, &self.node_key_id);
+            return self.refresh();
+        }
+        self.deal_links = links_tail;
         if self.capsules_stopped.is_none() {
             let path = self.ledger_dir.join(CAPSULES_FILE);
             let start = self.capsules.clone();
@@ -278,6 +320,15 @@ impl LedgerIndex {
             self.take_checkpoints(&path)?;
         }
         Ok(())
+    }
+
+    /// The counterparty of the exchange record a deal capsule is of, if the
+    /// capsule is linked to one that is already indexed (an exchange record
+    /// is sealed before its deal).
+    fn deal_counterparty(&self, capsule_id: &str) -> Option<String> {
+        let exchange = self.deal_exchange.get(capsule_id)?;
+        let at = *self.by_id.get(exchange)?;
+        self.leaves.get(at as usize)?.counterparty.clone()
     }
 
     fn index_line(&mut self, offset: u64, line: &[u8]) -> Result<(), String> {
@@ -308,12 +359,14 @@ impl LedgerIndex {
                 self.citations.entry(half).or_default().push(index);
             }
         }
+        let counterparty = crate::evidence_panes::full_counterparty_node_id(&record)
+            .or_else(|| self.deal_counterparty(&capsule_id));
         self.leaves.push(Leaf {
             capsule_id,
             offset,
             len: body.len() as u64,
             padding,
-            counterparty: crate::evidence_panes::full_counterparty_node_id(&record),
+            counterparty,
             never_leaves: crate::evidence_panes::is_local_routing_choice(&record)
                 || crate::ask_book::is_ask_record(&record)
                 || record
