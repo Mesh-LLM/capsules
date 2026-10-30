@@ -87,12 +87,40 @@ describe('askForRecord', () => {
       const reply = await askForRecord(PEER, BY_NONCE)
       return reply.kind === 'answer' ? reply.verification : null
     }
-    expect(await verificationOf({ state: 'artifact', records: [1], checkpoints: 2, witnessed: 1, receipts: [] })).toEqual({
+    const ANCHOR = 'a'.repeat(64)
+    const OLDER = 'b'.repeat(64)
+    const receipt = (checkpoint: string, status: string) => ({ checkpoint, ts_url: 'https://w.test', status })
+    expect(
+      await verificationOf({
+        state: 'artifact',
+        records: [1],
+        checkpoints: 2,
+        anchor: ANCHOR,
+        witnessed: 1,
+        receipts: [receipt(ANCHOR, 'verified')]
+      })
+    ).toEqual({ state: 'artifact', records: [1], checkpoints: 2, witnessed: 1 })
+    // evidencebook#209: a receipt on an older checkpoint leaves the anchor,
+    // and every checkpoint after the witnessed one, possibly a private
+    // extension, so it does not count. Nor does an anchor receipt that only
+    // has no key, or a count with no receipts to back it.
+    expect(
+      await verificationOf({
+        state: 'artifact',
+        records: [1],
+        anchor: ANCHOR,
+        witnessed: 1,
+        receipts: [receipt(OLDER, 'verified'), receipt(ANCHOR, 'no_key')]
+      })
+    ).toEqual({ state: 'artifact', records: [1], witnessed: 0 })
+    expect(await verificationOf({ state: 'artifact', records: [1], anchor: ANCHOR, witnessed: 1, receipts: [] })).toEqual({
       state: 'artifact',
       records: [1],
-      checkpoints: 2,
-      witnessed: 1
+      witnessed: 0
     })
+    expect(
+      await verificationOf({ state: 'artifact', records: [1], witnessed: 1, receipts: [receipt(ANCHOR, 'verified')] })
+    ).toEqual({ state: 'artifact', records: [1], witnessed: 0 })
     expect(await verificationOf({ state: 'artifact', records: [1], witnessed: 0 })).toEqual({ state: 'artifact', records: [1], witnessed: 0 })
     expect(await verificationOf({ state: 'artifact', records: [1] })).toEqual({ state: 'artifact', records: [1] })
     // Anything but a whole, non-negative count is no witness result.

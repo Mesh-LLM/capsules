@@ -83,7 +83,7 @@ describe('judgeHistoryReply', () => {
       text: 'Their history checked against their own signatures · 4 checkpoints',
       checkedLine: `checked ${formatExchangeTimestamp(ASKED_AT)}`,
       detail:
-        'Their history checked against their own signatures when it was checked: 4 checkpoints of their log, each signed with the key this node has for them and each extending the one before. Its witness standing was not recorded.'
+        'Checked against their own signatures: 4 checkpoints of their log, each signed with the key this node has for them and each extending the one before. Its witness standing was not recorded, so it could be a private copy; ask again to check it.'
     })
     expectNeverVerified(note)
   })

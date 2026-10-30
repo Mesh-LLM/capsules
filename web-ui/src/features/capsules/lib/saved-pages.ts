@@ -57,7 +57,7 @@ const RUNTIME = `
     setTimeout(function(){URL.revokeObjectURL(url)},0)});
   var kind=document.body.getAttribute('data-kind');
   function show(verdict){
-    var status=el('p',verdict.verified?'ok':'bad',verdict.verified?'Checked when this page opened: the '+(verdict.form==='service_history'?'history card inside the Service History':'history card')+' matches its digest, and every checkpoint is signed by key '+verdict.keyId+' and extends the one before. No witness receipt is checked here, so this could be a private copy of the node\\u2019s log. To know this is the node\\u2019s, compare that key with the node\\u2019s published commitment.':verdict.kind==='refused'?'The node declined to answer.':'This page could not check its answer, so it shows none of it.');
+    var status=el('p',verdict.verified?'warn':'bad',verdict.verified?'Checked against the node\\u2019s own key when this page opened: the '+(verdict.form==='service_history'?'history card inside the Service History':'history card')+' matches its digest, and every checkpoint is signed by key '+verdict.keyId+' and extends the one before. No witness receipt is checked here, so this could be a private copy of the node\\u2019s log. To know this is the node\\u2019s, compare that key with the node\\u2019s published commitment.':verdict.kind==='refused'?'The node declined to answer.':'This page could not check its answer, so it shows none of it.');
     out.appendChild(status);
     if(verdict.kind==='refused'&&verdict.reason)out.appendChild(el('p','muted','Its reason: '+verdict.reason));
     var h=el('h2',null,'What was checked');out.appendChild(h);

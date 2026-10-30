@@ -139,7 +139,7 @@ export function historyNote(
             witness,
             text: `Their history checked against their own signatures${count}`,
             checkedLine,
-            detail: `Their history checked against their own signatures when it was checked: ${listed}${ofTheirLog}. Its witness standing was not recorded.`
+            detail: `Checked against their own signatures: ${listed}${ofTheirLog}. Its witness standing was not recorded, so it could be a private copy; ask again to check it.`
           }
       }
     }

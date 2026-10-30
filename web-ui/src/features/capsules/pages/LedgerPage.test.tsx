@@ -2147,7 +2147,7 @@ describe('LedgerPageContent — the plain-verdict pass on Exchanges', () => {
     expect(line).toHaveAttribute('data-history-reply-verified', 'false')
     expect(line).toHaveAttribute('data-history-witness', 'not_recorded')
     expect(screen.getByRole('button', { name: 'About their history' })).toHaveAccessibleDescription(
-      expect.stringContaining('Its witness standing was not recorded.')
+      expect.stringContaining('Its witness standing was not recorded, so it could be a private copy')
     )
     expect(screen.queryByText(/✓ Their history checks out/)).not.toBeInTheDocument()
   })

@@ -24,9 +24,10 @@ export const INTEROP_PROFILE = 'evidence-interop/0'
  *  a refusal signed with the announced key for our request; an artifact that
  *  verifies (the served records, by leaf index); a reply that proves nothing;
  *  or no announced key to check it under. `unknown` for anything else.
- *  An artifact's `witnessed` is how many of its witness receipts verified
- *  under a witness key the operator configured; it is absent when no witness
- *  key is configured, so there was nothing to check them against. */
+ *  An artifact's `witnessed` is how many of its witness receipts verified,
+ *  under a witness key the operator configured, for the answer's anchor
+ *  checkpoint (`anchorWitnessed`); it is absent when no witness key is
+ *  configured, so there was nothing to check them against. */
 export type EvidenceVerification =
   | { state: 'refusal'; reason: string }
   | { state: 'artifact'; records: number[]; checkpoints?: number; witnessed?: number }
@@ -102,6 +103,21 @@ function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
 }
 
+/** How many of the tool's receipts verified for the anchor checkpoint. The
+ *  tool's own `witnessed` counts a receipt on any checkpoint the answer
+ *  carries, but a receipt on an older checkpoint leaves every later one, the
+ *  anchor included, possibly a private extension (evidencebook#209). So only
+ *  `receipts` entries that verified and name the anchor count; with no
+ *  readable anchor or receipts, none do. */
+export function anchorWitnessed(v: Record<string, unknown>): number {
+  const anchor = typeof v.anchor === 'string' ? v.anchor : null
+  if (anchor === null || !Array.isArray(v.receipts)) return 0
+  return v.receipts.filter((r) => {
+    const entry = record(r)
+    return entry?.status === 'verified' && entry.checkpoint === anchor
+  }).length
+}
+
 function parseVerification(value: unknown): EvidenceVerification {
   const v = record(value)
   switch (v?.state) {
@@ -113,7 +129,7 @@ function parseVerification(value: unknown): EvidenceVerification {
             state: 'artifact',
             records: v.records as number[],
             ...(Number.isInteger(v.checkpoints) ? { checkpoints: v.checkpoints as number } : {}),
-            ...(Number.isInteger(v.witnessed) && (v.witnessed as number) >= 0 ? { witnessed: v.witnessed as number } : {})
+            ...(Number.isInteger(v.witnessed) && (v.witnessed as number) >= 0 ? { witnessed: anchorWitnessed(v) } : {})
           }
         : { state: 'unknown' }
     case 'not_evidence':
