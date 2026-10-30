@@ -1914,7 +1914,8 @@ pub(crate) mod tests {
                 assert!(!may_serve_all(index, &report, &who("node-a"), policy));
                 assert!(!may_serve_all(index, &[1, 2], &who("node-a"), policy));
             }
-            for records in [&step[..]] {
+            {
+                let records = &step[..];
                 assert!(may_serve_all(
                     index,
                     records,
