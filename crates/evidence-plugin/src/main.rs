@@ -448,6 +448,23 @@ async fn settlement_legs_on_lifecycle(
     }
 }
 
+/// The model an exchange's agreement decisions use: the one its event
+/// names; otherwise, at its terminal event and only when `wanted` holds,
+/// the one `lookup` gives (the host's status). `wanted` and `lookup` run
+/// only when needed.
+async fn agreement_model(
+    stated: Option<String>,
+    terminal: bool,
+    wanted: impl std::future::Future<Output = bool>,
+    lookup: impl std::future::Future<Output = Option<String>>,
+) -> Option<String> {
+    match stated {
+        Some(model) => Some(model),
+        None if terminal && wanted.await => lookup.await,
+        None => None,
+    }
+}
+
 /// [`agreement_bridge::holds_session_with`], off the async runtime.
 async fn keeps_session_with(capsules: &Arc<CapsuleState>, peer_id: String) -> bool {
     let capsules = capsules.clone();
@@ -480,14 +497,13 @@ async fn settlement_legs_on_exchange(
             .serving_provenance
             .as_ref()
             .and_then(|p| p.requested_by_node_id.clone());
-        let model = match (model, requester_id) {
-            (None, Some(requester))
-                if terminal && keeps_session_with(capsules, requester.clone()).await =>
-            {
-                host_status::own_model_now().await
+        let wanted = async {
+            match requester_id {
+                Some(requester) => keeps_session_with(capsules, requester).await,
+                None => false,
             }
-            (model, _) => model,
         };
+        let model = agreement_model(model, terminal, wanted, host_status::own_model_now()).await;
         // Provider: the agreement this served exchange cites, decided at its
         // terminal event, before the served half is sealed below; the payee
         // leg uses the same decision (R12).
@@ -526,15 +542,15 @@ async fn settlement_legs_on_exchange(
     let digest = envelope.response_digest.clone();
     // A host that names no model: the provider's, from this host's status.
     // Read only when a session may be proposed or cited.
-    let model = match (model, &peer) {
-        (None, Some(peer))
-            if terminal
-                && (agreement::SessionTerms::from_settings().is_some()
-                    || keeps_session_with(capsules, peer.clone()).await) =>
-        {
-            host_status::peer_model_now(peer).await
+    let model = match &peer {
+        Some(peer) => {
+            let wanted = async {
+                agreement::SessionTerms::from_settings().is_some()
+                    || keeps_session_with(capsules, peer.clone()).await
+            };
+            agreement_model(model, terminal, wanted, host_status::peer_model_now(peer)).await
         }
-        (model, _) => model,
+        None => model,
     };
     let capsules = capsules.clone();
     let citation_model = model.clone();
@@ -2491,5 +2507,45 @@ mod exchange_text_wiring_tests {
         let log =
             std::fs::read_to_string(dir.path().join("lifecycle-events.jsonl")).unwrap_or_default();
         assert!(!log.contains("SECRET"), "{log}");
+    }
+}
+
+#[cfg(test)]
+mod agreement_model_tests {
+    use super::*;
+
+    async fn never<T>() -> T {
+        panic!("not needed, so never run")
+    }
+
+    /// The model the event names is used as is: the status is not read.
+    #[tokio::test]
+    async fn a_model_the_event_names_is_used_without_a_status_read() {
+        let model = agreement_model(Some("m".into()), true, never(), never()).await;
+        assert_eq!(model.as_deref(), Some("m"));
+    }
+
+    /// With none named, the status is read only at the terminal event and
+    /// only when a session can be proposed or cited; its model is then the
+    /// one the citation and the set-up use, and none stays none.
+    #[tokio::test]
+    async fn the_status_is_read_only_at_the_end_and_only_when_wanted() {
+        assert_eq!(agreement_model(None, false, never(), never()).await, None);
+        assert_eq!(
+            agreement_model(None, true, async { false }, never()).await,
+            None
+        );
+        let looked_up = async { Some("local-gguf/sha256-74a4".to_string()) };
+        assert_eq!(
+            agreement_model(None, true, async { true }, looked_up)
+                .await
+                .as_deref(),
+            Some("local-gguf/sha256-74a4")
+        );
+        assert_eq!(
+            agreement_model(None, true, async { true }, async { None }).await,
+            None,
+            "a provider serving several models: no model"
+        );
     }
 }
