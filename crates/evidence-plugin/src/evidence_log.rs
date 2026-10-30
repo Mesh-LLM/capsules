@@ -133,6 +133,27 @@ pub struct Leaf {
     pub facts: LeafFacts,
 }
 
+/// Test seam: a writer that acts between `refresh`'s read of the capsules
+/// and its read of the links.
+#[cfg(test)]
+pub(crate) mod tests_between_reads {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static WRITER: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    }
+
+    pub(crate) fn set(writer: impl FnOnce() + 'static) {
+        WRITER.with(|w| *w.borrow_mut() = Some(Box::new(writer)));
+    }
+
+    pub(super) fn run() {
+        if let Some(writer) = WRITER.with(|w| w.borrow_mut().take()) {
+            writer();
+        }
+    }
+}
+
 /// A deal capsule: one of a deal's steps (`deal_id`) or its report. A link
 /// names a counterparty for these and for no other record.
 fn is_deal_capsule(record: &Value) -> bool {
@@ -301,6 +322,8 @@ impl LedgerIndex {
                 return self.refresh();
             }
         }
+        #[cfg(test)]
+        tests_between_reads::run();
         let links = self.deal_links.clone();
         let mut links_tail = links.clone();
         let continues =

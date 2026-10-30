@@ -2051,15 +2051,26 @@ pub(crate) mod tests {
             by_a["capsule_id"].as_str().unwrap().to_string(),
             by_b["capsule_id"].as_str().unwrap().to_string(),
         );
+        let mut deal_served_by_b = served(
+            "node-b",
+            "model-x",
+            "confirmed",
+            "12.000",
+            json!({"nonce": "n-3"}),
+        );
+        deal_served_by_b["deal_id"] = json!("deal-0123456789abcdef");
+        let deal_b_id = deal_served_by_b["capsule_id"].as_str().unwrap().to_string();
         let dir = node(&[
             by_a,
             by_b,
             json!({"capsule_id": hex('1'), "deal_id": "deal-0123456789abcdef"}),
             json!({"capsule_id": hex('2')}),
+            deal_served_by_b,
         ]);
         write_jsonl(
             &dir.path().join(evidence_log::DEAL_LINKS_FILE),
             &[
+                json!({"capsule_id": deal_b_id, "exchange_capsule_id": id_a}),
                 json!({"capsule_id": hex('1'), "exchange_capsule_id": id_a}),
                 json!({"capsule_id": hex('1'), "exchange_capsule_id": id_b}),
                 json!({"capsule_id": hex('2'), "exchange_capsule_id": id_a}),
@@ -2073,6 +2084,46 @@ pub(crate) mod tests {
         assert!(!serves(dir.path(), 3, "node-a"));
         assert!(serves(dir.path(), 1, "node-b"));
         assert!(!serves(dir.path(), 1, "node-a"));
+        // A deal-marked record that names its own counterparty keeps it
+        // against a link to another exchange.
+        assert!(serves(dir.path(), 4, "node-b"));
+        assert!(!serves(dir.path(), 4, "node-a"));
+    }
+
+    /// The writer appends a capsule's link and then the capsule between the
+    /// refresh's read of the capsules and its read of the links. The capsule
+    /// is not in this refresh, and the next one names it.
+    #[test]
+    fn a_deal_capsule_written_while_the_index_refreshes_is_named() {
+        let hex = |c: char| c.to_string().repeat(64);
+        let exchange = served(
+            "node-a",
+            "model-x",
+            "confirmed",
+            "10.000",
+            json!({"nonce": "n-9"}),
+        );
+        let exchange_id = exchange["capsule_id"].as_str().unwrap().to_string();
+        let dir = node(&[exchange]);
+        let key_id = hex::encode(key().verifying_key().to_bytes());
+        let (links, capsules) = (
+            dir.path().join(evidence_log::DEAL_LINKS_FILE),
+            dir.path().join(evidence_log::CAPSULES_FILE),
+        );
+        evidence_log::with_index(dir.path(), &key_id, |_| ()).unwrap();
+        evidence_log::tests_between_reads::set(move || {
+            append_jsonl(
+                &links,
+                &[json!({"capsule_id": hex('1'), "exchange_capsule_id": exchange_id})],
+            );
+            append_jsonl(
+                &capsules,
+                &[json!({"capsule_id": hex('1'), "deal_id": "deal-0123456789abcdef"})],
+            );
+        });
+        evidence_log::with_index(dir.path(), &key_id, |_| ()).unwrap();
+        assert!(serves(dir.path(), 1, "node-a"));
+        assert!(!serves(dir.path(), 1, "node-b"));
     }
 
     /// `share_standard_history` on restores what every node did before:
