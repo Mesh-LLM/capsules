@@ -1025,8 +1025,9 @@ pub(crate) fn seal_local_record(
 ///
 /// `blocks` go in the leg's `model_attestation.compute_attestation`, as a
 /// half's `x-mesh-poc-v1` block does (a service evidence agreement's
-/// citation, `agreement`). With none, the leg is sealed exactly as
-/// capsule-emit's `seal_leg` seals it.
+/// citation, `agreement`). This is capsule-emit 0.0.8's `seal_leg` (the
+/// member's structure check, then `seal_local_record_with_members`) with the
+/// blocks it leaves empty; with none, a leg is the one `seal_leg` seals.
 pub fn seal_settlement_leg(
     action_id: String,
     member: Value,
@@ -1041,16 +1042,6 @@ pub fn seal_settlement_leg(
         provider: LOCAL_RECORD_PROVIDER,
         model_id: SETTLEMENT_LEG_MODEL_ID,
     };
-    if blocks.is_empty() {
-        return capsule_emit_lib::settlement::seal_leg(
-            &header,
-            action_id,
-            member,
-            references,
-            chain,
-            signing_key,
-        );
-    }
     let codes = capsule_emit_lib::settlement::structure_failures(&member);
     if !codes.is_empty() {
         return Err(capsule_emit_lib::settlement::SettlementError { codes }.into());
@@ -2149,15 +2140,6 @@ mod tests {
         assert_ne!(seal(&input).unwrap()["capsule_id"], baseline_id.as_str());
     }
 
-    // =======================================================================
-    // twin_bracket_id -- forwarded verbatim from the terminal envelope,
-    // never minted or defaulted here (see [`ServingProvenance::twin_bracket_id`]).
-    // =======================================================================
-
-    /// Positive vector: when the envelope carried a `twin_bracket_id`, the
-    /// sealed record carries it verbatim under `serving_provenance`.
-    /// MUTANT: drop the forward (stop copying the field into `ServingProvenance`
-    /// before calling `seal`) and this assertion goes red.
     /// A half under a service evidence agreement cites it as an EL `cites`
     /// link in `x-mesh-poc-v1.acceptance`, committed into `capsule_id`; a
     /// half under none has no such member at all.
@@ -2234,6 +2216,15 @@ mod tests {
         .is_err());
     }
 
+    // =======================================================================
+    // twin_bracket_id -- forwarded verbatim from the terminal envelope,
+    // never minted or defaulted here (see [`ServingProvenance::twin_bracket_id`]).
+    // =======================================================================
+
+    /// Positive vector: when the envelope carried a `twin_bracket_id`, the
+    /// sealed record carries it verbatim under `serving_provenance`.
+    /// MUTANT: drop the forward (stop copying the field into `ServingProvenance`
+    /// before calling `seal`) and this assertion goes red.
     #[test]
     fn twin_bracket_id_present_is_carried_verbatim() {
         let mut input = base_input(None);

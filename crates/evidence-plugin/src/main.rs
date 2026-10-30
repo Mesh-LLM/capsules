@@ -453,7 +453,22 @@ async fn settlement_legs_on_exchange(
     let Ok(envelope) = serde_json::from_slice::<OpenAiExchangeEnvelope>(body) else {
         return;
     };
+    let model = envelope
+        .serving_provenance
+        .as_ref()
+        .and_then(|p| p.model_canonical_ref.clone());
     if envelope.dispatch_path != lifecycle_channel::DispatchPath::RemoteMesh {
+        // Provider: the model it served this exchange, for the payee leg's
+        // agreement citation (R12).
+        if let (Some(exchange_id), Some(model), lifecycle_channel::Phase::Terminal) = (
+            envelope.exchange_id.as_deref(),
+            model.as_deref(),
+            &envelope.phase,
+        ) {
+            capsules
+                .settlement_legs()
+                .note_served_model(exchange_id, model);
+        }
         return;
     }
     let Some(exchange_id) = envelope.exchange_id.clone() else {
@@ -461,16 +476,24 @@ async fn settlement_legs_on_exchange(
     };
     let peer = push_counterparty(&envelope).map(str::to_string);
     let digest = envelope.response_digest.clone();
-    let model = envelope
-        .serving_provenance
-        .as_ref()
-        .and_then(|p| p.model_canonical_ref.clone());
+    let terminal = envelope.phase == lifecycle_channel::Phase::Terminal;
     let capsules = capsules.clone();
     let pushes = tokio::task::spawn_blocking(move || {
-        // The model the provider states it served: what the delivered leg's
-        // agreement citation is looked up by (R12).
-        if let Some(model) = &model {
-            capsules.settlement_legs().note_model(&exchange_id, model);
+        // The agreement this exchange cites, decided now, before a session
+        // can be set up from it below: the requested half and the delivered
+        // leg both use this decision, so the exchange never cites a session
+        // it triggered (R11, R12).
+        if let (true, Some(peer), Some(model)) = (terminal, &peer, &model) {
+            capsules
+                .settlement_legs()
+                .decide_citation(&exchange_id, || {
+                    agreement_bridge::delivered_citation(
+                        &capsules,
+                        peer,
+                        model,
+                        chrono::Utc::now().timestamp(),
+                    )
+                });
         }
         let pushes = capsules.settlement_legs().on_exchange(
             &capsules,

@@ -382,13 +382,60 @@ fn sessions(
     model: Option<&str>,
     now: i64,
 ) -> Vec<Session> {
-    let start = |r: &Value| {
-        r.get("session")?
-            .get("not_before")?
-            .as_str()
-            .and_then(evidence_request::time::parse_rfc3339)
-            .map(|t| t.seconds)
-    };
+    let mut found: Vec<&Complete> = Vec::new();
+    let complete = complete_sessions(store);
+    for c in complete.iter() {
+        if text(&c.record, "proposer") == Some(proposer)
+            && text(&c.record, "acceptor") == Some(acceptor)
+            && c.start - agreement::CLOCK_SKEW_SECONDS <= now
+            && now <= c.end
+            && model.is_none_or(|m| c.models.iter().any(|x| x == m))
+        {
+            found.push(c);
+        }
+    }
+    found.sort_by_key(|c| std::cmp::Reverse(c.start));
+    found
+        .into_iter()
+        .map(|c| Session {
+            acceptance_digest: c.digest.clone(),
+            record: c.record.clone(),
+        })
+        .collect()
+}
+
+/// An accepted session whose set-up finished: its receipt, terms and model
+/// policy are kept.
+struct Complete {
+    record: Value,
+    digest: String,
+    start: i64,
+    end: i64,
+    models: Vec<String>,
+}
+
+/// Every complete session `store` keeps, read from disk once per change: a
+/// half or leg seal asks on every exchange, and the store only grows.
+fn complete_sessions(store: &Store) -> Arc<Vec<Complete>> {
+    type Cache = std::collections::HashMap<std::path::PathBuf, (u64, Arc<Vec<Complete>>)>;
+    static CACHE: std::sync::OnceLock<Mutex<Cache>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(Cache::new()));
+    let generation = agreement::generation();
+    if let Some((seen, sessions)) = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(store.root())
+    {
+        if *seen == generation {
+            return sessions.clone();
+        }
+    }
+    let receipted: std::collections::BTreeSet<String> = store
+        .all(Kind::Receipt)
+        .into_iter()
+        .filter_map(|o| parse(&o))
+        .filter_map(|rc| text(&rc, "acceptance_digest").map(String::from))
+        .collect();
     let document = |r: &Value, k: &str| {
         r.get("session")?
             .get(k)?
@@ -396,35 +443,33 @@ fn sessions(
             .and_then(|d| store.get(Kind::Document, d))
             .and_then(|o| parse(&o))
     };
-    let mut found = store
+    let sessions: Vec<Complete> = store
         .all(Kind::Record)
         .into_iter()
         .filter_map(|o| parse(&o))
-        .filter(|r| {
-            text(r, "state") == Some("accepted")
-                && text(r, "proposer") == Some(proposer)
-                && text(r, "acceptor") == Some(acceptor)
-                && start(r).is_some_and(|nb| nb - agreement::CLOCK_SKEW_SECONDS <= now)
-                && window_end(r).is_some_and(|na| now <= na)
-                && document(r, "terms").is_some()
-                && document(r, "policy")
-                    .and_then(|p| agreement::read_policy(&p))
-                    .is_some_and(|models| model.is_none_or(|m| models.iter().any(|x| x == m)))
-        })
+        .filter(|r| text(r, "state") == Some("accepted"))
         .filter_map(|record| {
             let digest = evidence_request::acceptance::record_digest(&record).ok()?;
-            receipt_for(store, &digest)?;
-            Some((start(&record), digest, record))
+            if !receipted.contains(&digest) {
+                return None;
+            }
+            document(&record, "terms")?;
+            let models = agreement::read_policy(&document(&record, "policy")?)?;
+            Some(Complete {
+                start: window_start(&record)?,
+                end: window_end(&record)?,
+                digest,
+                models,
+                record,
+            })
         })
-        .collect::<Vec<_>>();
-    found.sort_by_key(|f| std::cmp::Reverse(f.0));
-    found
-        .into_iter()
-        .map(|(_, acceptance_digest, record)| Session {
-            acceptance_digest,
-            record,
-        })
-        .collect()
+        .collect();
+    let sessions = Arc::new(sessions);
+    cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(store.root().to_path_buf(), (generation, sessions.clone()));
+    sessions
 }
 
 /// The acceptance the payer's `delivered` leg cites (R12): its session with
@@ -442,15 +487,21 @@ pub fn delivered_citation(
 }
 
 /// The acceptance the provider's `payee_observed` leg cites (R12): its one
-/// unexpired session with the payer whose key signed the terms leg the
-/// payee leg answers, that key announced by a peer. With none, or several
-/// (sessions for several models at once), the leg cites nothing rather than
-/// guess; it still counts toward the cap through the exchange binding.
-pub fn payee_citation(capsules: &CapsuleState, payer_key: &str, now: i64) -> Option<String> {
+/// unexpired session, for the `model` it served the payment's exchange,
+/// with the payer whose key signed the terms leg the payee leg answers,
+/// that key announced by a peer. With none, or several, the leg cites
+/// nothing rather than guess; it still counts toward the cap through the
+/// exchange binding.
+pub fn payee_citation(
+    capsules: &CapsuleState,
+    payer_key: &str,
+    model: &str,
+    now: i64,
+) -> Option<String> {
     let registry = crate::peer_keys::registry();
     crate::peer_keys::peer_id_for_key_in(registry.as_deref(), payer_key)?;
     let store = Store::open(capsules.ledger_dir());
-    match sessions(&store, payer_key, &own_key(capsules), None, now).as_slice() {
+    match sessions(&store, payer_key, &own_key(capsules), Some(model), now).as_slice() {
         [only] => Some(only.acceptance_digest.clone()),
         _ => None,
     }
@@ -1055,6 +1106,7 @@ mod tests {
         // proposes again rather than relying on a session it cannot order.
         let receipts = p.rstore.root_for_tests().join("receipts");
         std::fs::remove_dir_all(&receipts).unwrap();
+        agreement::bump_generation_for_tests();
         assert_eq!(p.session(&p.rstore, MODEL, NOW + 10), None);
         assert!(p.session(&p.pstore, MODEL, NOW + 10).is_some());
         let _ = session;
@@ -1137,6 +1189,26 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// The complete sessions are read from disk once per change: asked
+    /// again with nothing new kept, the same list comes back; a new session
+    /// is seen at once.
+    #[test]
+    fn complete_sessions_are_read_again_only_after_a_change() {
+        let p = pair();
+        let (_, first, _) = p.agree(NOW);
+        let once = complete_sessions(&p.rstore);
+        assert!(
+            Arc::ptr_eq(&once, &complete_sessions(&p.rstore)),
+            "unchanged: cached"
+        );
+        let (_, second, _) = p.agree(NOW + 100);
+        let again = complete_sessions(&p.rstore);
+        assert!(!Arc::ptr_eq(&once, &again));
+        let digests: Vec<&str> = again.iter().map(|c| c.digest.as_str()).collect();
+        assert!(digests.contains(&first.acceptance_digest.as_str()));
+        assert!(digests.contains(&second.acceptance_digest.as_str()));
     }
 
     #[test]

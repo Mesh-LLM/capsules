@@ -655,7 +655,29 @@ pub struct Store {
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// Counts every object a [`Store`] in this process published, so a reader
+/// that keeps what it parsed (`agreement_bridge`'s session cache) knows when
+/// to read again.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Count a change made other than through [`Store::put`] (a test that
+/// removes files).
+#[cfg(test)]
+pub fn bump_generation_for_tests() {
+    GENERATION.fetch_add(1, Ordering::AcqRel);
+}
+
+/// The current publication count (see [`GENERATION`]).
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::Acquire)
+}
+
 impl Store {
+    /// Where this store keeps its objects.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn open(ledger_dir: &Path) -> Store {
         Store {
             root: ledger_dir.join("agreements"),
@@ -691,7 +713,11 @@ impl Store {
             f.sync_data()?;
             match std::fs::hard_link(&tmp, &path) {
                 Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
-                _ => Ok(()),
+                Err(_) => Ok(()),
+                Ok(()) => {
+                    GENERATION.fetch_add(1, Ordering::AcqRel);
+                    Ok(())
+                }
             }
         })();
         let _ = std::fs::remove_file(&tmp);

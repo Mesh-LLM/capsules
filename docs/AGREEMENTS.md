@@ -83,11 +83,16 @@ has no such member.
   whose window holds the time the half is sealed.
 - In settlement records, one leg per side cites it. The payer's `delivered`
   leg, sealed once the provider and model are known, cites the payer's session.
-  The provider's `payee_observed` leg cites its one open session with the
-  payer whose key signed the terms leg it answers. With none, or several
-  open at once for different models, it cites nothing rather than guess. The
+  The provider's `payee_observed` leg cites its one open session, for the
+  model it served the payment's exchange, with the payer whose key signed the
+  terms leg it answers. With none, or several, it cites nothing rather than
+  guess. A payment settled before the provider has served the exchange (a
+  deposit, often) is sealed before the model is known and cites nothing. The
   payer's `terms` and `payer_observed` legs are sealed before the provider is
   known and cite nothing.
+- An exchange's citation is decided at its terminal event, before a session
+  can be set up from it, so the exchange that sets up a session never cites
+  it.
 
 A leg carries the link in the same block, beside the settlement member, so
 the settlement record's own checks are unchanged; the interop profile's and
