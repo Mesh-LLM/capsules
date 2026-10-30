@@ -80,18 +80,18 @@ struct Deal {
     report: String,
 }
 
-fn deal_of(index: &LedgerIndex, ledger_dir: &Path, exchange: &str) -> Result<Deal, Refusal> {
-    let ids: Vec<String> = index
-        .deal_capsules_of(exchange)
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-    if ids.is_empty() {
-        return Err(Refusal::NoDeal);
-    }
+/// The journal's payloads for `ids`, read after the index lock is released.
+fn read_deal(ledger_dir: &Path, ids: Vec<String>) -> Result<Deal, Error> {
     // By bytes, like the deal flow reads it: a torn last line is skipped.
-    let journal =
-        std::fs::read(ledger_dir.join(crate::deal_flow::PAYLOADS_FILE)).unwrap_or_default();
+    let journal = match std::fs::read(ledger_dir.join(crate::deal_flow::PAYLOADS_FILE)) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            return Err(Error::Failed(format!(
+                "the deal journal is not readable: {e}"
+            )))
+        }
+    };
     let mut payloads = BTreeMap::new();
     let mut report = None;
     for line in journal.split(|b| *b == b'\n') {
@@ -115,7 +115,7 @@ fn deal_of(index: &LedgerIndex, ledger_dir: &Path, exchange: &str) -> Result<Dea
     }
     let report = report.ok_or(Refusal::NotReported)?;
     if let Some(missing) = ids.iter().find(|id| !payloads.contains_key(*id)) {
-        return Err(Refusal::PayloadMissing(missing.clone()));
+        return Err(Refusal::PayloadMissing(missing.clone()).into());
     }
     Ok(Deal {
         ids,
@@ -125,7 +125,7 @@ fn deal_of(index: &LedgerIndex, ledger_dir: &Path, exchange: &str) -> Result<Dea
 }
 
 /// The proofs and records of one consistent snapshot of this node's log, at
-/// its latest checkpoint.
+/// the checkpoint the bundle is proven against.
 struct LogSource<'a> {
     index: &'a LedgerIndex,
     view: LogView<'a>,
@@ -213,25 +213,45 @@ pub fn bundle(
     node_key_id: &str,
     exchange_capsule_id: &str,
 ) -> Result<Value, Error> {
+    let linked = |index: &LedgerIndex| -> Vec<String> {
+        index
+            .deal_capsules_of(exchange_capsule_id)
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    };
+    let unreadable = |e: std::io::Error| Error::Failed(format!("the ledger is not readable: {e}"));
+    let ids = evidence_log::with_index(ledger_dir, node_key_id, linked).map_err(unreadable)?;
+    if ids.is_empty() {
+        return Err(Refusal::NoDeal.into());
+    }
+    // The journal is read with the index lock released: it grows with every
+    // deal capsule and other answers wait on that lock.
+    let deal = read_deal(ledger_dir, ids)?;
     evidence_log::with_index(ledger_dir, node_key_id, |index| {
-        let deal = deal_of(index, ledger_dir, exchange_capsule_id)?;
-        let latest = index.chain.last().ok_or(Refusal::NotCheckpointed)?;
-        let size = latest.record.mmr_size;
-        let covered =
-            leaf_count(size).map_err(|e| Error::Failed(format!("checkpoint size: {e}")))?;
-        for id in &deal.ids {
-            match index.leaf_index_of(id) {
-                Some(i) if i < covered => {}
-                _ => return Err(Refusal::NotCheckpointed.into()),
-            }
+        if linked(index) != deal.ids {
+            return Err(Error::Failed(
+                "the deal changed while it was read; ask again".into(),
+            ));
         }
+        // The earliest checkpoint that reaches every deal record: the same
+        // bundle every time, and no count of what was sealed after the deal.
+        let covering = index
+            .chain
+            .iter()
+            .find(|c| {
+                leaf_count(c.record.mmr_size).is_ok_and(|covered| {
+                    deal.ids
+                        .iter()
+                        .all(|id| index.leaf_index_of(id).is_some_and(|i| i < covered))
+                })
+            })
+            .ok_or(Refusal::NotCheckpointed)?;
         let source = LogSource {
             index,
-            view: index
-                .view()
-                .map_err(|e| Error::Failed(format!("the ledger is not readable: {e}")))?,
-            statement: latest.statement.clone(),
-            size,
+            view: index.view().map_err(unreadable)?,
+            statement: covering.statement.clone(),
+            size: covering.record.mmr_size,
         };
         let mut options = BuildOptions::new(deal.report.clone(), Interval::ProducerSelected);
         // The records named are the whole selection: no citation is followed.
@@ -248,10 +268,9 @@ pub fn bundle(
                 (id.clone(), members)
             })
             .collect();
-        let key = hex::decode(node_key_id)
+        options.producer_key = hex::decode(node_key_id)
             .ok()
             .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
-        options.producer_key = key;
         options.extensions.insert(
             deal::PROFILE.into(),
             json!({ deal::REPORT_POINTER: deal.report }),
@@ -259,7 +278,7 @@ pub fn bundle(
         build_evidence_bundle(&source, &options)
             .map_err(|e| Error::Failed(format!("the bundle was not built: {e}")))
     })
-    .map_err(|e| Error::Failed(format!("the ledger is not readable: {e}")))?
+    .map_err(unreadable)?
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -361,18 +380,16 @@ mod tests {
         hex64('e')
     }
 
-    /// A node that has sealed a paid, delivered exchange's deal.
-    fn node(delivered: bool) -> (tempfile::TempDir, CapsuleState) {
-        let dir = tempfile::tempdir().unwrap();
-        let state = CapsuleState::open(dir.path(), "deal-receipt-test").unwrap();
-        let (request, exchange) = (hex64('d'), exchange_capsule());
+    /// Seal the payer's deal for `exchange`, delivered or not yet.
+    fn seal_deal(state: &CapsuleState, exchange: &str, delivered: bool) {
+        let request = hex64('d');
         let deals = state.deals();
-        deals.on_invoice(&state, EXCHANGE_ID, &hex64('a'), 1000, 1_790_000_000);
+        deals.on_invoice(state, EXCHANGE_ID, &hex64('a'), 1000, 1_790_000_000);
         deals.on_exchange(
-            &state,
+            state,
             EXCHANGE_ID,
             &SealedExchange {
-                capsule_id: &exchange,
+                capsule_id: exchange,
                 peer: PEER,
                 request_digest: &request,
                 model: "model-x",
@@ -380,9 +397,21 @@ mod tests {
             1_790_000_001,
         );
         if delivered {
-            deals.on_paid(&state, EXCHANGE_ID, &hex64('b'), 1000, 1_790_000_030);
-            deals.on_delivered(&state, EXCHANGE_ID, &hex64('c'), 1_790_000_040);
+            finish(state);
         }
+    }
+
+    fn finish(state: &CapsuleState) {
+        let deals = state.deals();
+        deals.on_paid(state, EXCHANGE_ID, &hex64('b'), 1000, 1_790_000_030);
+        deals.on_delivered(state, EXCHANGE_ID, &hex64('c'), 1_790_000_040);
+    }
+
+    /// A node that has sealed a paid exchange's deal.
+    fn node(delivered: bool) -> (tempfile::TempDir, CapsuleState) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = CapsuleState::open(dir.path(), "deal-receipt-test").unwrap();
+        seal_deal(&state, &exchange_capsule(), delivered);
         (dir, state)
     }
 
@@ -557,5 +586,52 @@ mod tests {
         cut(&state);
         let answered = answer(state.ledger_dir(), &key, &json!(exchange_capsule())).unwrap();
         assert_eq!(answered["state"], "bundle");
+    }
+
+    /// The deal links to a real exchange record on the ledger, and the bundle
+    /// carries that record neither as a record nor as a disclosure.
+    #[test]
+    fn a_real_exchange_record_is_not_carried() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = CapsuleState::open(dir.path(), "deal-receipt-test").unwrap();
+        let exchange = state
+            .emit_for_exchange(&crate::capsule_emit::tests::sample_exchange("node-a"))
+            .unwrap()
+            .capsule_id;
+        seal_deal(&state, &exchange, true);
+        cut(&state);
+        let bundle = bundle(
+            state.ledger_dir(),
+            &crate::commitment::key_id(state.signing_key()),
+            &exchange,
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(bundle["records"].as_array().unwrap().len(), 4);
+        assert!(bundle["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["capsule_id"] != json!(exchange)));
+        assert!(bundle["disclosures"].get(&exchange).is_none());
+    }
+
+    /// A checkpoint that stops short of the report does not cover the deal;
+    /// once one does, a later checkpoint changes nothing in the bundle.
+    #[test]
+    fn the_earliest_covering_checkpoint_is_used() {
+        let (_dir, state) = node(false);
+        cut(&state);
+        finish(&state);
+        assert!(matches!(
+            built(&state),
+            Err(Error::Refused(Refusal::NotCheckpointed))
+        ));
+        cut(&state);
+        let first = built(&state).unwrap_or_else(|e| panic!("{e:?}"));
+        state
+            .emit_for_exchange(&crate::capsule_emit::tests::sample_exchange("node-b"))
+            .unwrap();
+        cut(&state);
+        assert_eq!(built(&state).unwrap_or_else(|e| panic!("{e:?}")), first);
     }
 }
