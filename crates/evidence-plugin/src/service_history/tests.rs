@@ -760,42 +760,118 @@ fn a_published_model_above_the_total_does_not_check() {
     assert!(why.contains("do not add up"), "{why}");
 }
 
-/// What the History page is given: the card by default, the Service History
-/// once `share_standard_history` is on and a boundary checkpoint exists.
-#[test]
-fn the_history_page_is_given_the_form_the_policy_shares() {
-    let dir = node();
+/// A node whose ledger has `extra` more lines than [`ledger`] and whose
+/// checkpoints are cut at `cuts`.
+fn node_cut(extra: usize, cuts: &[(usize, &str)]) -> tempfile::TempDir {
+    let mut ledger = ledger();
+    for i in 0..extra {
+        ledger.push(served(
+            "node-a",
+            "a",
+            "confirmed",
+            "10.000",
+            json!({ "nonce": format!("late-{i}") }),
+        ));
+    }
+    let dir = tempfile::tempdir().unwrap();
+    write_jsonl(&dir.path().join("capsules.jsonl"), &ledger);
+    let lines: Vec<Value> = checkpoints_cut_at(&ledger, &key(), cuts)
+        .iter()
+        .map(CorpusCheckpoint::line)
+        .collect();
+    write_jsonl(&dir.path().join("checkpoints.jsonl"), &lines);
+    dir
+}
+
+/// What the History page is given, for a node whose switch is `share`.
+fn page_given(dir: &Path, share: bool) -> Value {
     let key = key();
     let announced = announced_keys();
     let replay = ReplayCache::default();
-    let serve = |share: bool| {
-        crate::history_page::serve(&Responder {
-            ledger_dir: dir.path(),
-            signing_key: &key,
-            now: NOW,
-            history_segments: "counterparties",
-            share_standard_history: share,
-            share_exchange_corroboration: false,
-            keys: Keys {
-                announced: &announced,
-                configured: None,
-                own_key: None,
-            },
-            replay: &replay,
-            node_id: Some(RESPONDER_NODE),
-            policy_digest: None,
-        })
-        .unwrap()
-    };
-    let off = serve(false);
+    crate::history_page::serve(&Responder {
+        ledger_dir: dir,
+        signing_key: &key,
+        now: NOW,
+        history_segments: "counterparties",
+        share_standard_history: share,
+        share_exchange_corroboration: false,
+        keys: Keys {
+            announced: &announced,
+            configured: None,
+            own_key: None,
+        },
+        replay: &replay,
+        node_id: Some(RESPONDER_NODE),
+        policy_digest: None,
+    })
+    .unwrap()
+}
+
+fn reply_of(page: &Value) -> Value {
+    serde_json::from_str(page["reply"].as_str().unwrap()).unwrap()
+}
+
+/// The card by default, the Service History once `share_standard_history`
+/// is on and a boundary checkpoint exists.
+#[test]
+fn the_history_page_is_given_the_form_the_policy_shares() {
+    let dir = node();
+    let off = page_given(dir.path(), false);
     assert_eq!(off["form"], "history_card/1");
     assert_eq!(off["outcome"], "answered");
-    let on = serve(true);
+    let on = page_given(dir.path(), true);
     assert_eq!(on["form"], "service_history/1");
     assert_eq!(on["outcome"], "answered");
-    let reply: Value = serde_json::from_str(on["reply"].as_str().unwrap()).unwrap();
-    assert_eq!(reply["responder"], on["node_key_id"]);
-    assert!(reply.get("witness_receipts").is_none() || reply["witness_receipts"].is_array());
+    assert_eq!(reply_of(&on)["responder"], on["node_key_id"]);
+}
+
+/// The Service History is pinned to the latest boundary checkpoint, not to
+/// the head: a node whose head is cut after the boundary still gives it.
+#[test]
+fn the_service_history_is_pinned_to_the_latest_boundary_not_the_head() {
+    let cuts = [
+        (6, "2026-01-07T10:00:00Z"),
+        (12, WEEK_1),
+        (20, "2026-01-14T08:00:00Z"),
+        (30, WEEK_2),
+        (34, "2026-01-20T08:00:00Z"),
+    ];
+    let dir = node_cut(4, &cuts);
+    let boundary = checkpoints_cut_at(
+        &{
+            let mut l = ledger();
+            for i in 0..4 {
+                l.push(served(
+                    "node-a",
+                    "a",
+                    "confirmed",
+                    "10.000",
+                    json!({ "nonce": format!("late-{i}") }),
+                ));
+            }
+            l
+        },
+        &key(),
+        &cuts,
+    )[3]
+    .anchor();
+    let page = page_given(dir.path(), true);
+    assert_eq!(page["form"], "service_history/1");
+    assert_eq!(page["outcome"], "answered");
+    assert_eq!(reply_of(&page)["anchor"]["digest"], boundary);
+}
+
+/// With the switch on but no checkpoint at a boundary, the page holds the
+/// card, and says so.
+#[test]
+fn without_a_boundary_checkpoint_the_page_holds_the_card() {
+    let dir = node_cut(
+        0,
+        &[(6, "2026-01-07T10:00:00Z"), (20, "2026-01-14T08:00:00Z")],
+    );
+    let page = page_given(dir.path(), true);
+    assert_eq!(page["form"], "history_card/1");
+    assert_eq!(page["outcome"], "answered");
 }
 
 /// The Service History reply the History page's tests open

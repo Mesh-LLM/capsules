@@ -81,8 +81,10 @@ function periodCounts(raw: unknown): PeriodCount[] {
         typeof cell.value === 'number'
           ? String(cell.value)
           : cell.suppressed === 'complementary'
-            ? 'withheld (another withheld count could be derived from it)'
-            : 'withheld (under 5)'
+            ? 'withheld (showing it would let a count under the floor be worked out)'
+            : cell.suppressed === 'below_floor'
+              ? 'withheld (below the floor)'
+              : 'no count stated'
       return [{ what, value }]
     })
     return [{ from: period.from, to: period.to, cells }]
@@ -270,6 +272,19 @@ export async function verifyHistoryReply(replyText: string): Promise<HistoryVerd
     checks.push({ id: 'card_digest', status: 'pass', detail: 'The history card inside matches its digest.' })
     if (artifact.anchor !== embedded.anchor || artifact.evidence_stream !== embedded.evidence_stream) {
       return fail('card', 'The history card inside names another anchor or log than the answer.')
+    }
+    // The answer names one derivation, the artifact says it carries the card and the counts, and
+    // the card is for the same subject (the node's own checker holds the same).
+    const declared = artifact.declared
+    if (
+      typeof reply.derivation !== 'string' ||
+      artifact.derivation !== reply.derivation ||
+      !Array.isArray(declared) ||
+      !declared.includes('history_card') ||
+      !declared.includes('period_counts') ||
+      jcs(embedded.subject) !== jcs(artifact.subject)
+    ) {
+      return fail('card', 'The artifact is not a Service History for the card inside it.')
     }
     card = embedded
     counts = periodCounts(artifact.period_counts)
