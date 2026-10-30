@@ -157,8 +157,14 @@ pub(crate) mod tests_between_reads {
 /// A deal capsule: one of a deal's steps (`deal_id`) or its report. A link
 /// names a counterparty for these and for no other record.
 fn is_deal_capsule(record: &Value) -> bool {
-    record.get("deal_id").is_some()
-        || record.get("action_id").and_then(Value::as_str) == Some("capsulectl-deal-report")
+    record.get("deal_id").is_some() || is_deal_report(record)
+}
+
+/// A deal's in-log report. It is the owner's own (audience `keep`): a copy
+/// for the counterparty is made only by a share path, so this one never
+/// leaves the node (Mesh-LLM/capsules-plugin#146).
+fn is_deal_report(record: &Value) -> bool {
+    record.get("action_id").and_then(Value::as_str) == Some("capsulectl-deal-report")
 }
 
 /// One line of [`DEAL_LINKS_FILE`]: the deal capsule and the exchange record
@@ -411,6 +417,7 @@ impl LedgerIndex {
             counterparty,
             never_leaves: crate::evidence_panes::is_local_routing_choice(&record)
                 || crate::ask_book::is_ask_record(&record)
+                || is_deal_report(&record)
                 || record
                     .pointer("/model_attestation/compute_attestation")
                     .and_then(|c| c.get(crate::producer::capsule::OWNER_MAINTENANCE_BLOCK))

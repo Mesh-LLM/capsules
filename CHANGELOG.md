@@ -4,6 +4,11 @@
 
 ### Changed
 
+- **The payer's deal report is sealed for the owner (`keep`) and never leaves the node.** It was
+  sealed for the counterparty audience, so capsule-viewer rendered the owner's own receipt as the
+  other party's copy and refused it as `keep`. A copy for the counterparty is made only by a share
+  path, which is not built; until then the counterparty is served the deal's steps, not the report.
+  Mesh-LLM/capsules-plugin#146.
 - **`evidencebook` 0.0.10 (with `agent-action-capsule` 0.5.0).** The `deal` git-rev patch is gone. `capsule-emit` 0.0.9 still takes `agent-action-capsule` 0.4.1, so the
   tree holds both until a `capsule-emit` release moves to 0.5.0.
   0.5.0 reads a witness receipt with an empty `receipt_b64` as malformed, so the served summary's
@@ -29,7 +34,7 @@
   least one invoice issued, the node seals a `baseline` (what was asked: the request digest and
   model, committed under a nonce the node keeps; the serving peer by fingerprint only; paid over
   Lightning, not refundable; no price, since an invoice's msat has no unit in the profile), then an
-  `outcome` and a `close`, then an in-log `deal_report` for the counterparty. `completed` once
+  `outcome` and a `close`, then an in-log `deal_report` for the owner (audience `keep`). `completed` once
   every invoice is paid and the response received; `open` when no settlement came within 15
   minutes of the first invoice or the node restarted first (the record is not final, never
   "pending"). A free exchange gets no deal. The Capsules are built by `capsule_emit::produce`
