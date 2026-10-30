@@ -506,7 +506,14 @@ fn checked_parts() -> (Map<String, Value>, Vec<String>, String) {
 
 fn check(art: &Map<String, Value>, times: &[String], anchor: &str) -> Result<Counts, String> {
     let times: Vec<&str> = times.iter().map(String::as_str).collect();
-    check_artifact(art, &times, anchor, "corpus-node-log", 30)
+    check_artifact(
+        Definition::active(),
+        art,
+        &times,
+        anchor,
+        "corpus-node-log",
+        30,
+    )
 }
 
 #[test]
