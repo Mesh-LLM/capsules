@@ -35,6 +35,16 @@
 //! runs in its own task, off the host's ordered channel handling, under one
 //! deadline; after a failure the requester waits [`RETRY_AFTER`] before it
 //! proposes to that provider again.
+//!
+//! Where the operator granted the admission hook, the requester sets the
+//! session up at `backend_selected` instead, before the request goes out,
+//! holding it at most [`hook_wait`], which the operator sets below the
+//! grant's `deadline_ms` ([`hold_for_session`]). A set-up that takes longer
+//! finishes in the background and the request goes on; whether that
+//! exchange then cites the session is decided at its terminal event, and
+//! the provider cites only a session it held complete when it served.
+//! A host that names no model there (or at the terminal event) is asked
+//! for the provider's model through its status (`host_status`).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -67,6 +77,24 @@ pub fn is_agreement_request(request: &OpenStreamRequest) -> bool {
 
 fn responder_timeout() -> Duration {
     env_millis("CAPSULES_AGREEMENT_RESPONDER_TIMEOUT_MS", 10_000)
+}
+
+/// Room the hold leaves under the declared deadline for the decision itself.
+const HOLD_MARGIN_MS: u64 = 250;
+
+/// How long after the admission hook is called a request may be held for
+/// its session set-up. Off (0) unless the operator sets it, since the plugin
+/// cannot see the grant's `deadline_ms`, which it must stay below; at most
+/// [`HOLD_MARGIN_MS`] under [`crate::admission::HOOK_DEADLINE_MS`], what the
+/// hook declares. Read once, at the first call (`main.rs` makes it at
+/// start), so the hook never reads a setting while it holds a request.
+pub fn hook_wait() -> Duration {
+    static WAIT: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *WAIT.get_or_init(|| {
+        env_millis("CAPSULES_AGREEMENT_HOOK_WAIT_MS", 0).min(Duration::from_millis(
+            crate::admission::HOOK_DEADLINE_MS - HOLD_MARGIN_MS,
+        ))
+    })
 }
 
 /// The bounded wait for one frame's round trip, connect included (R9).
@@ -686,10 +714,72 @@ pub fn ensure_session(
     peer_id: String,
     model: String,
 ) {
-    let Some(terms) = SessionTerms::from_settings() else {
-        return;
+    if let Some(terms) = SessionTerms::from_settings() {
+        spawn_set_up(context, capsules, peer_id, model, terms);
+    }
+}
+
+/// [`ensure_session`] from the admission hook, at `backend_selected`, for
+/// the model the host's status says `peer_id` serves. The set-up starts
+/// before the request goes out; the request is held until it ends or
+/// [`hook_wait`] has passed since `entered` (when the hook was called),
+/// whichever is first. With no hold set, or a set-up still running when it
+/// ends, the request goes on and the set-up finishes in the background.
+pub async fn hold_for_session(
+    context: PluginContext<'static>,
+    capsules: Arc<CapsuleState>,
+    peer_id: String,
+    entered: Instant,
+) {
+    let set_up = tokio::spawn(async move {
+        let terms = tokio::task::spawn_blocking(SessionTerms::from_settings).await;
+        let Ok(Some(terms)) = terms else {
+            return;
+        };
+        let Some(model) = crate::host_status::peer_model_now(&peer_id).await else {
+            return;
+        };
+        if let Some(set_up) = spawn_set_up(context, capsules, peer_id, model, terms) {
+            let _ = set_up.await;
+        }
+    });
+    let budget = hook_wait().saturating_sub(entered.elapsed());
+    if !budget.is_zero() && !wait_at_most(budget, set_up).await {
+        tracing::info!("agreement set-up outlasted the admission hold; the request goes on");
+    }
+}
+
+/// Whether `task` ended within `budget`. A task still running is left to
+/// run.
+async fn wait_at_most(budget: Duration, task: tokio::task::JoinHandle<()>) -> bool {
+    tokio::time::timeout(budget, task).await.is_ok()
+}
+
+/// Whether this node keeps an unexpired complete session with the node
+/// `peer_id`, in either role: what makes reading a model for its exchange
+/// worth it.
+pub fn holds_session_with(capsules: &CapsuleState, peer_id: &str) -> bool {
+    let registry = crate::peer_keys::registry();
+    let Some(key) = crate::peer_keys::announced_key_in(registry.as_deref(), peer_id) else {
+        return false;
     };
-    tokio::spawn(async move {
+    complete_sessions(&Store::open(capsules.ledger_dir()))
+        .iter()
+        .filter(|c| c.end >= now())
+        .any(|c| {
+            text(&c.record, "proposer") == Some(key.as_str())
+                || text(&c.record, "acceptor") == Some(key.as_str())
+        })
+}
+
+fn spawn_set_up(
+    context: PluginContext<'static>,
+    capsules: Arc<CapsuleState>,
+    peer_id: String,
+    model: String,
+    terms: SessionTerms,
+) -> Option<tokio::task::JoinHandle<()>> {
+    Some(tokio::spawn(async move {
         let mut context = context;
         let peer = peer_id.clone();
         let result = set_up(&mut context, capsules, peer_id, model, terms).await;
@@ -703,7 +793,7 @@ pub fn ensure_session(
             Ok(None) => {}
             Err(error) => tracing::info!(peer_id = %peer, %error, "no service evidence agreement"),
         }
-    });
+    }))
 }
 
 async fn set_up(
@@ -817,10 +907,61 @@ async fn exchange_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::agreement::SessionTerms;
 
     const NOW: i64 = 1_793_000_000;
     const MODEL: &str = "hf:example/model@main";
+
+    /// The admission hold ends at its budget and leaves the set-up running;
+    /// a set-up that ends sooner ends the hold at once.
+    #[tokio::test]
+    async fn the_admission_hold_ends_at_its_budget_and_the_set_up_goes_on() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let slow = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let _ = tx.send(());
+        });
+        let started = Instant::now();
+        assert!(!wait_at_most(Duration::from_millis(50), slow).await);
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "the hold ended at its budget"
+        );
+        rx.await.expect("the set-up went on after the hold ended");
+        let quick = tokio::spawn(async {});
+        assert!(wait_at_most(Duration::from_secs(5), quick).await);
+    }
+
+    /// The hold is off unless the operator sets it.
+    #[test]
+    fn the_admission_hold_is_off_by_default() {
+        assert_eq!(hook_wait(), Duration::ZERO);
+    }
+
+    /// A node keeps a session with a peer, in either role, only once one is
+    /// complete, and only with that peer's announced key.
+    #[test]
+    fn a_session_is_held_with_a_peer_once_it_is_complete() {
+        let p = pair();
+        let (requester_node, provider_node) = ("7a".repeat(32), "7b".repeat(32));
+        crate::peer_keys::announced::announce_for_test(&requester_node, &own_key(&p.requester));
+        crate::peer_keys::announced::announce_for_test(&provider_node, &own_key(&p.provider));
+        assert!(!holds_session_with(&p.requester, &provider_node));
+        p.agree(now());
+        assert!(holds_session_with(&p.requester, &provider_node));
+        assert!(holds_session_with(&p.provider, &requester_node));
+        assert!(
+            !holds_session_with(&p.requester, &"7c".repeat(32)),
+            "an unannounced peer"
+        );
+
+        // One that has expired is not held.
+        let q = pair();
+        crate::peer_keys::announced::announce_for_test(&"7d".repeat(32), &own_key(&q.provider));
+        q.agree(now() - 2 * 3_600);
+        assert!(!holds_session_with(&q.requester, &"7d".repeat(32)));
+    }
 
     fn node(dir: &std::path::Path, name: &str) -> CapsuleState {
         CapsuleState::open(dir, name).unwrap()

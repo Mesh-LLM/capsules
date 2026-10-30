@@ -30,6 +30,7 @@ mod evidence_routes;
 mod exchange_corroboration;
 mod exchange_text;
 mod history_page;
+mod host_status;
 mod ledger_fetch_bridge;
 mod lifecycle_channel;
 mod mesh_evidence_bridge;
@@ -447,6 +448,31 @@ async fn settlement_legs_on_lifecycle(
     }
 }
 
+/// The model an exchange's agreement decisions use: the one its event
+/// names; otherwise, at its terminal event and only when `wanted` holds,
+/// the one `lookup` gives (the host's status). `wanted` and `lookup` run
+/// only when needed.
+async fn agreement_model(
+    stated: Option<String>,
+    terminal: bool,
+    wanted: impl std::future::Future<Output = bool>,
+    lookup: impl std::future::Future<Output = Option<String>>,
+) -> Option<String> {
+    match stated {
+        Some(model) => Some(model),
+        None if terminal && wanted.await => lookup.await,
+        None => None,
+    }
+}
+
+/// [`agreement_bridge::holds_session_with`], off the async runtime.
+async fn keeps_session_with(capsules: &Arc<CapsuleState>, peer_id: String) -> bool {
+    let capsules = capsules.clone();
+    tokio::task::spawn_blocking(move || agreement_bridge::holds_session_with(&capsules, &peer_id))
+        .await
+        .unwrap_or(false)
+}
+
 /// Settlement-records legs from an exchange event: a remote exchange names
 /// the serving peer (where this node's terms legs go) and, when terminal,
 /// the response digest (this node's delivered leg).
@@ -463,7 +489,21 @@ async fn settlement_legs_on_exchange(
         .serving_provenance
         .as_ref()
         .and_then(|p| p.model_canonical_ref.clone());
+    let terminal = envelope.phase == lifecycle_channel::Phase::Terminal;
     if envelope.dispatch_path != lifecycle_channel::DispatchPath::RemoteMesh {
+        // A host that names no model: this node's own, from its status.
+        // Read only for a requester this node keeps a session with.
+        let requester_id = envelope
+            .serving_provenance
+            .as_ref()
+            .and_then(|p| p.requested_by_node_id.clone());
+        let wanted = async {
+            match requester_id {
+                Some(requester) => keeps_session_with(capsules, requester).await,
+                None => false,
+            }
+        };
+        let model = agreement_model(model, terminal, wanted, host_status::own_model_now()).await;
         // Provider: the agreement this served exchange cites, decided at its
         // terminal event, before the served half is sealed below; the payee
         // leg uses the same decision (R12).
@@ -500,14 +540,26 @@ async fn settlement_legs_on_exchange(
     };
     let peer = push_counterparty(&envelope).map(str::to_string);
     let digest = envelope.response_digest.clone();
-    let terminal = envelope.phase == lifecycle_channel::Phase::Terminal;
+    // A host that names no model: the provider's, from this host's status.
+    // Read only when a session may be proposed or cited.
+    let model = match &peer {
+        Some(peer) => {
+            let wanted = async {
+                agreement::SessionTerms::from_settings().is_some()
+                    || keeps_session_with(capsules, peer.clone()).await
+            };
+            agreement_model(model, terminal, wanted, host_status::peer_model_now(peer)).await
+        }
+        None => model,
+    };
     let capsules = capsules.clone();
+    let citation_model = model.clone();
     let pushes = tokio::task::spawn_blocking(move || {
         // The agreement this exchange cites, decided now, before a session
         // can be set up from it below: the requested half and the delivered
         // leg both use this decision, so the exchange never cites a session
         // it triggered (R11, R12).
-        if let (true, Some(peer), Some(model)) = (terminal, &peer, &model) {
+        if let (true, Some(peer), Some(model)) = (terminal, &peer, &citation_model) {
             capsules
                 .settlement_legs()
                 .decide_citation(&exchange_id, || {
@@ -534,11 +586,7 @@ async fn settlement_legs_on_exchange(
         // operator set session terms and none holds now: this exchange is
         // outside it, later ones cite it (R11). It runs in its own task, so
         // the host's ordered channel handling never waits on the provider.
-        if envelope.phase == lifecycle_channel::Phase::Terminal {
-            let model = envelope
-                .serving_provenance
-                .as_ref()
-                .and_then(|p| p.model_canonical_ref.clone());
+        if terminal {
             if let (Some(peer), Some(model)) = (push_counterparty(&envelope), model) {
                 agreement_bridge::ensure_session(
                     context.owned(),
@@ -1576,6 +1624,9 @@ async fn main() -> anyhow::Result<()> {
     // Unreadable settings fail closed inside `Admission`, never stop the
     // plugin (under a `best_effort` grant a host routes to every peer past a
     // plugin it has no manifest for).
+    let capsules_for_hook = capsules.clone();
+    // The hold, read now so the hook never reads a setting.
+    let _ = agreement_bridge::hook_wait();
     let peer_admission = Arc::new(admission::Admission::new(
         admission::Policy::from_settings(),
         capsules.clone(),
@@ -1810,7 +1861,7 @@ async fn main() -> anyhow::Result<()> {
             })
         })
     })
-    .customize(move |plugin| with_admission_hook(plugin, peer_admission))
+    .customize(move |plugin| with_admission_hook(plugin, peer_admission, capsules_for_hook))
     .customize(move |plugin| {
         // This node's own key, announced through the host
         // (`peer_keys::own`), and peers' keys for this plugin, when the host
@@ -1855,21 +1906,34 @@ async fn main() -> anyhow::Result<()> {
 fn with_admission_hook(
     plugin: mesh_llm_plugin::SimplePlugin,
     admission: Arc<admission::Admission>,
+    capsules: Arc<CapsuleState>,
 ) -> mesh_llm_plugin::SimplePlugin {
     let mut manifest = mesh_llm_plugin::Plugin::manifest(&plugin).unwrap_or_default();
     manifest.openai_exchange_hook = Some(Box::new(admission::hook_manifest()));
     plugin
         .with_manifest(manifest)
-        .with_openai_exchange_handler(move |_handler, event, _context| {
+        .with_openai_exchange_handler(move |_handler, event, context| {
+            let entered = std::time::Instant::now();
             let admission = admission.clone();
-            // Seal on `spawn_blocking`, like every other seal path: the emit
-            // holds the std ledger mutex across two `sync_all()`s.
+            let capsules = capsules.clone();
+            let context = context.owned();
             Box::pin(async move {
-                Ok(
-                    tokio::task::spawn_blocking(move || admission.answer(&event))
-                        .await
-                        .unwrap_or_else(|_| admission::seal_failed()),
-                )
+                let peer = admission::selected_peer(&event);
+                // Seal on `spawn_blocking`, like every other seal path: the
+                // emit holds the std ledger mutex across two `sync_all()`s.
+                let decision = tokio::task::spawn_blocking(move || admission.answer(&event))
+                    .await
+                    .unwrap_or_else(|_| admission::seal_failed());
+                // Admitted to a peer: the session for the model it serves is
+                // set up before the request goes out, within the hold (R11).
+                if decision.decision
+                    == mesh_llm_plugin::openai_exchange::OpenAiAdmissionDecision::Allow
+                {
+                    if let Some(peer) = peer {
+                        agreement_bridge::hold_for_session(context, capsules, peer, entered).await;
+                    }
+                }
+                Ok(decision)
             })
         })
 }
@@ -2443,5 +2507,45 @@ mod exchange_text_wiring_tests {
         let log =
             std::fs::read_to_string(dir.path().join("lifecycle-events.jsonl")).unwrap_or_default();
         assert!(!log.contains("SECRET"), "{log}");
+    }
+}
+
+#[cfg(test)]
+mod agreement_model_tests {
+    use super::*;
+
+    async fn never<T>() -> T {
+        panic!("not needed, so never run")
+    }
+
+    /// The model the event names is used as is: the status is not read.
+    #[tokio::test]
+    async fn a_model_the_event_names_is_used_without_a_status_read() {
+        let model = agreement_model(Some("m".into()), true, never(), never()).await;
+        assert_eq!(model.as_deref(), Some("m"));
+    }
+
+    /// With none named, the status is read only at the terminal event and
+    /// only when a session can be proposed or cited; its model is then the
+    /// one the citation and the set-up use, and none stays none.
+    #[tokio::test]
+    async fn the_status_is_read_only_at_the_end_and_only_when_wanted() {
+        assert_eq!(agreement_model(None, false, never(), never()).await, None);
+        assert_eq!(
+            agreement_model(None, true, async { false }, never()).await,
+            None
+        );
+        let looked_up = async { Some("local-gguf/sha256-74a4".to_string()) };
+        assert_eq!(
+            agreement_model(None, true, async { true }, looked_up)
+                .await
+                .as_deref(),
+            Some("local-gguf/sha256-74a4")
+        );
+        assert_eq!(
+            agreement_model(None, true, async { true }, async { None }).await,
+            None,
+            "a provider serving several models: no model"
+        );
     }
 }

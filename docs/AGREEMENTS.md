@@ -20,6 +20,7 @@ nothing is proposed and nothing changes.
 | `CAPSULES_AGREEMENT_WINDOW_SECONDS` | Optional: how long a session lasts, from its proposal. Default 3600; 60 to 86400. |
 | `CAPSULES_AGREEMENT_TIMEOUT_MS` | Optional: how long the requester waits for each round trip with the provider, connecting included. Default 8000. |
 | `CAPSULES_AGREEMENT_RESPONDER_TIMEOUT_MS` | Optional: how long a provider waits at each step of an inbound agreement stream. Default 10000. |
+| `CAPSULES_AGREEMENT_HOOK_WAIT_MS` | Optional: with the admission hook granted, how long a request may be held for its session to be set up, counted from when the hook is called. Off (0) by default. Set it below the grant's `deadline_ms`; at most 1750, under the 2000 the plugin declares. |
 
 The spend cap is the requester's own statement of what it expects to spend,
 an agent-origin assertion. It is not a signed authorization by a person, and
@@ -34,6 +35,28 @@ model, once agreements are on, and again after the session's window ends.
 That first exchange is outside the agreement; later exchanges in the window
 with that model are under it. The set-up runs beside the exchange and never
 holds it up.
+
+Where the operator granted the plugin's admission hook, the requester
+starts the set-up when the host has selected the provider
+(`backend_selected`), before the request goes out. With
+`CAPSULES_AGREEMENT_HOOK_WAIT_MS` set, it holds the request that long at
+most, so that exchange can be under the agreement too. That works when the
+provider serves one model and the set-up finishes within the hold. A set-up
+that takes longer finishes in the background and the request goes on;
+whether that exchange cites the session is decided when it ends, from the
+complete sessions each side holds then. An exchange set up this way usually
+falls in the same minute as the receipt, so it reads covered with
+"agreement present; ordering not established", not "accepted before".
+
+The session names the provider's own model id. When the host's exchange
+events don't name it (mesh-llm 0.78 doesn't), the plugin reads the
+host's `GET /api/status`, on the console it already reads announced keys
+from: its own `serving_models` on the provider, the provider's on the
+requester. A node serving exactly one model gives that model. A provider
+serving several, or a status that lists the provider twice or not at all,
+gives none, and no session is proposed or cited for that exchange. The
+status is read only where a session can be proposed or cited, and not
+again for 30 seconds after a read fails.
 
 A provider whose plugin predates agreements answers the proposal with
 something else at once, and the requester goes on without an agreement.

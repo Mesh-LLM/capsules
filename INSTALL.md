@@ -385,6 +385,10 @@ max_in_flight = 32
 failure_policy = "required"
 ```
 
+For a service evidence agreement to cover the exchange the hook admits, raise `deadline_ms`
+(the plugin declares at most 2000) and set `CAPSULES_AGREEMENT_HOOK_WAIT_MS` below it, with
+room for the decision itself (`docs/AGREEMENTS.md`).
+
 A NO refuses the request with 403 `plugin_policy_denied`; trying the next peer instead waits on
 Mesh-LLM/mesh-llm#2061. With `failure_policy = "required"`, a hook that errors or misses
 `deadline_ms` also refuses the request (503). With the default, `best_effort`, mesh-llm routes

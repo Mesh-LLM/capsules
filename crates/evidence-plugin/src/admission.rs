@@ -216,6 +216,12 @@ pub fn salt(signing_key: &ed25519_dalek::SigningKey) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// The longest the hook may take, as declared: room for a service evidence
+/// agreement's set-up when the operator grants it and sets
+/// `CAPSULES_AGREEMENT_HOOK_WAIT_MS` (`agreement_bridge`). The host applies
+/// the smaller of this and the grant's `deadline_ms`.
+pub const HOOK_DEADLINE_MS: u64 = 2_000;
+
 /// The hook the plugin declares: admission on `backend_selected` only, no
 /// bodies or headers. Not required, so a host without the lifecycle still
 /// loads the plugin; the operator's grant decides whether a failed hook
@@ -224,7 +230,20 @@ pub fn hook_manifest() -> OpenAiExchangeHookManifest {
     let mut hook = openai_exchange_hook(HANDLER);
     hook.phases = vec!["backend_selected".into()];
     hook.admission = true;
+    hook.deadline_ms = HOOK_DEADLINE_MS;
     hook
+}
+
+/// The mesh peer a `backend_selected` event selected, by its lowercase
+/// 64-hex node id; `None` for any other event or target.
+pub fn selected_peer(event: &Value) -> Option<String> {
+    if event.get("phase").and_then(Value::as_str) != Some("backend_selected") {
+        return None;
+    }
+    match target(event) {
+        Target::Peer(peer) => Some(peer),
+        _ => None,
+    }
 }
 
 /// Which backend a `backend_selected` event names.
@@ -463,6 +482,22 @@ mod tests {
         let head = capsules.chain_head().expect("a record was sealed");
         let entry = capsules.lookup(&head).expect("lookup").expect("present");
         entry.capsule["model_attestation"]["compute_attestation"][BLOCK].clone()
+    }
+
+    /// Only `backend_selected` to a mesh peer names a peer to set a
+    /// session up with.
+    #[test]
+    fn only_a_backend_selected_peer_is_a_selected_peer() {
+        let id = "ab".repeat(32);
+        assert_eq!(
+            selected_peer(&selected(&remote(&id.to_uppercase()))),
+            Some(id.clone())
+        );
+        let mut terminal = selected(&remote(&id));
+        terminal["phase"] = json!("terminal");
+        assert_eq!(selected_peer(&terminal), None);
+        assert_eq!(selected_peer(&selected("Local(0)")), None);
+        assert_eq!(selected_peer(&selected("Remote(PublicKey(abc))")), None);
     }
 
     #[test]
@@ -818,6 +853,7 @@ mod tests {
         let hook = hook_manifest();
         assert_eq!(hook.handler, HANDLER);
         assert_eq!(hook.phases, vec!["backend_selected".to_string()]);
+        assert_eq!(hook.deadline_ms, HOOK_DEADLINE_MS);
         assert!(hook.admission);
         assert!(
             !hook.required,

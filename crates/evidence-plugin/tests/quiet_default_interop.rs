@@ -381,3 +381,57 @@ async fn a_configured_witness_is_dialled_exactly_as_given() {
     }
     host.stop().await;
 }
+
+/// A console at a local port whose `/api/status` lists `SERVING_PEER` (by
+/// its id prefix, as mesh-llm 0.78 does) serving `models`.
+async fn status_console(models: &[&str]) -> String {
+    let status = serde_json::json!({
+        "node_id": &SELF_PEER[..10],
+        "serving_models": [],
+        "peers": [{"id": &SERVING_PEER[..10], "serving_models": models}],
+    });
+    let app = axum::Router::new().route(
+        "/api/status",
+        axum::routing::get(move || {
+            let status = status.clone();
+            async move { axum::Json(status) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let console = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    console
+}
+
+/// On a host whose exchange events name no model (mesh-llm 0.78), a
+/// requester with session terms set takes the provider's model from the
+/// host's status and proposes a session after the exchange; with a provider
+/// that serves two models it proposes none.
+#[tokio::test]
+async fn a_requester_proposes_with_the_model_the_status_names_and_only_one() {
+    let peer_keys = serde_json::json!({ SERVING_PEER: "cd".repeat(32) }).to_string();
+    for (models, proposes) in [
+        (&["local-gguf/sha256-74a4da8c"][..], true),
+        (&["model-a", "model-b"][..], false),
+    ] {
+        let console = status_console(models).await;
+        let mut host = Host::spawn(&[
+            ("CAPSULES_SHARE_RECORD_AT_COMPLETION", "off"),
+            ("CAPSULES_AGREEMENT_SPEND_CAP_MSAT", "3000"),
+            ("CAPSULES_HOST_CONSOLE_URL", &console),
+            ("CAPSULES_PEER_KEYS", &peer_keys),
+        ])
+        .await;
+        host.exchange_and_settle().await;
+        let opened = |host: &Host| {
+            host.sent.iter().any(|sent| {
+                sent.starts_with("open_mesh_stream")
+                    && sent.contains("x-capsules-agreement/1")
+                    && sent.contains(SERVING_PEER)
+            })
+        };
+        host.watch(Duration::from_secs(5), opened).await;
+        assert_eq!(opened(&host), proposes, "{models:?}: {:?}", host.sent);
+        host.stop().await;
+    }
+}
