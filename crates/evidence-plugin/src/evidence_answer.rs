@@ -567,10 +567,8 @@ fn answer_from(
     // anchor: any other subject or coverage is `policy_declined`, the same
     // for every requester, before anything is resolved (ISH §6.1 item 5).
     let service_history = crate::service_history::is_derivation(req.derivation.as_ref());
-    if service_history
-        && !(matches!(req.subject, Subject::FullHistory)
-            && matches!(req.coverage, Coverage::ExpectedPin(_)))
-    {
+    let definition = crate::service_history::Definition::active();
+    if service_history && definition.declines_request(&req.subject, &req.coverage) {
         return Err(Reason::PolicyDeclined);
     }
     // 7. Resolve.
@@ -580,7 +578,7 @@ fn answer_from(
     };
     let at = serving_position(view, &anchor)?;
     // ... and only at an anchor on a period boundary (ISH §6.1 item 2).
-    if service_history && !crate::service_history::is_boundary(&index.chain[at].record.timestamp) {
+    if service_history && definition.declines_anchor(&index.chain[at].record.timestamp) {
         return Err(Reason::PolicyDeclined);
     }
     let served_summary = matches!(&req.derivation,

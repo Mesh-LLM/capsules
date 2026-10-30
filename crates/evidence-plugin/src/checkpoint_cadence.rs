@@ -692,7 +692,7 @@ mod tests {
         assert_eq!(until_boundary(epoch, epoch + 30), Duration::ZERO);
         assert_eq!(
             crate::service_history::next_boundary_after(epoch),
-            epoch + crate::service_history::LENGTH_S
+            epoch + 604_800
         );
     }
 

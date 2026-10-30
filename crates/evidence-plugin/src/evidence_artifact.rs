@@ -573,7 +573,7 @@ pub fn check(
         }
         Some(Derivation::Digest(d))
             if d == crate::exchange_corroboration::DEFINITION_DIGEST
-                || d == crate::service_history::DEFINITION_DIGEST =>
+                || d == crate::service_history::definition_digest() =>
         {
             Some(d.as_str())
         }
@@ -628,7 +628,7 @@ pub fn check(
             let (served, listed) = card_chain(&art, key)?;
             (served, Vec::new(), listed)
         }
-        (Some(d), Subject::FullHistory) if d == crate::service_history::DEFINITION_DIGEST => {
+        (Some(d), Subject::FullHistory) if d == crate::service_history::definition_digest() => {
             // A Standard History is answered only at a pinned anchor.
             if !matches!(request.coverage, Coverage::ExpectedPin(_)) {
                 return fail("a Service History is answered only under an expected_pin");
@@ -648,6 +648,7 @@ pub fn check(
                 .map_err(|_| CheckError::Answer("the anchor's size is not an MMR size".into()))?;
             history = Some(
                 crate::service_history::check_artifact(
+                    crate::service_history::Definition::active(),
                     &art,
                     &times,
                     &served.digest,
