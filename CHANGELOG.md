@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Changed
+
+- **`evidencebook` 0.0.10 (with `agent-action-capsule` 0.5.0).** The `deal` git-rev patch is gone. `capsule-emit` 0.0.9 still takes `agent-action-capsule` 0.4.1, so the
+  tree holds both until a `capsule-emit` release moves to 0.5.0.
+  0.5.0 reads a witness receipt with an empty `receipt_b64` as malformed, so the served summary's
+  `witness_check` for the pinned baseline's synthetic stub receipt (empty `receipt_b64`,
+  `is_stub: true`) is now `FAIL` with no per-receipt rows, not `NOT_CHECKED`. The three
+  `served_summary` forms in `tests/fixtures/evidence_answers_5d2d102.json` are rewritten for it
+  (nothing else changes); the node's own witness client sets `is_stub: false`, so no served
+  checkpoint carries such a stub.
+
 ### Added
 
 - **A paid exchange is sealed as an `x-deal-v0` deal (payer side).** For an exchange with at
@@ -18,7 +29,7 @@
   restart neither repeats a step nor loses one. The provider seals no deal (its receipt is
   "your receipt only", Mesh-LLM/capsules-plugin#134). `check_profile.py` accepts the built chains
   (`EVIDENCEBOOK_DEAL_PROFILE_DIR` runs it in the tests). Takes `evidencebook` (feature `deal`)
-  from a git rev until its release; not mergeable before then. Mesh-LLM/capsules-plugin#96.
+  from crates.io. Mesh-LLM/capsules-plugin#96.
 - **Counterparties receive and check the operator binding (loop step 12).** A node holding a
   controller binding of its key to its operator's Nostr key carries it whole in the bundles it
   pushes to an exchange's counterparty, in the existing `controller_binding` member, and never in
