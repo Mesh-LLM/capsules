@@ -21,7 +21,8 @@ needed.
   a rate over a cap, or one that cannot be read, is NO, and the reason names the rule. With no
   profile, shipped caps apply as an outlier guard, and a request that carries no rate is recorded
   `not_checked` rather than refused. The host must list `openai_exchange.backend_pricing.v1` to
-  send the rates; no mesh-llm release does yet, and `doctor` flags a host that does not.
+  send the rates; no mesh-llm release does yet, and `doctor` flags a host that does not. Until
+  one does, a profile you set gives every peer NO, free ones included (it fails closed).
 
 Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules-plugin/blob/main/CHANGELOG.md).
 
