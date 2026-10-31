@@ -139,11 +139,26 @@ fn read_deal(ledger_dir: &Path, ids: Vec<String>) -> Result<Deal, Error> {
 
 /// The proofs and records of one consistent snapshot of this node's log, at
 /// the checkpoint the bundle is proven against.
-struct LogSource<'a> {
+pub(crate) struct LogSource<'a> {
     index: &'a LedgerIndex,
     view: LogView<'a>,
     statement: Vec<u8>,
     size: u64,
+}
+
+impl<'a> LogSource<'a> {
+    /// The log as `checkpoint`, one of `index`'s, states it.
+    pub(crate) fn at(
+        index: &'a LedgerIndex,
+        checkpoint: &evidence_log::ChainCheckpoint,
+    ) -> std::io::Result<Self> {
+        Ok(LogSource {
+            index,
+            view: index.view()?,
+            statement: checkpoint.statement.clone(),
+            size: checkpoint.record.mmr_size,
+        })
+    }
 }
 
 fn failed(message: impl Into<String>) -> BuildError {
@@ -214,9 +229,25 @@ impl ProofSource for LogSource<'_> {
         })
     }
 
-    fn range_proof(&self, _first_seq: u64) -> Result<RangeProof, BuildError> {
-        // Only producer-selected bundles are built: the log is not shown whole.
-        Err(failed("no range proof: the bundle is producer-selected"))
+    fn range_proof(&self, first_seq: u64) -> Result<RangeProof, BuildError> {
+        let tip = leaf_count(self.size).map_err(|e| failed(format!("checkpoint size: {e}")))?;
+        if first_seq == 0 || first_seq > tip {
+            return Err(failed(format!(
+                "range proof from seq {first_seq}: outside 1..={tip}"
+            )));
+        }
+        let proof = self
+            .index
+            .range_proof(first_seq - 1, tip - 1, self.size)
+            .map_err(|e| failed(format!("range proof from seq {first_seq}: {e}")))?;
+        Ok(RangeProof {
+            from_seq: first_seq,
+            to_seq: tip,
+            size: proof.size,
+            from_index: proof.from_index,
+            to_index: proof.to_index,
+            witness: proof.witness,
+        })
     }
 }
 
@@ -433,7 +464,7 @@ pub(crate) mod tests {
     }
 
     /// Seal the payer's deal for `exchange`, delivered or not yet.
-    fn seal_deal(state: &CapsuleState, exchange: &str, delivered: bool) {
+    pub(crate) fn seal_deal(state: &CapsuleState, exchange: &str, delivered: bool) {
         let request = hex64('d');
         let deals = state.deals();
         deals.on_invoice(state, EXCHANGE_ID, &hex64('a'), 1000, 1_790_000_000);
