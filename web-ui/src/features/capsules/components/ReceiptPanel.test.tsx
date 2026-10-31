@@ -154,6 +154,15 @@ describe('ReceiptPanel states', () => {
     expect(screen.queryByText(/holds no sealed deal/)).not.toBeInTheDocument()
   })
 
+  it('shows the provider route\'s own refusal, with no payer-only sentence', async () => {
+    const why = 'this node holds no single served record for that exchange'
+    routeAnswers({ state: 'refused', why })
+    render(<ReceiptPanel row={providerRow} />)
+    await check()
+    expect(await screen.findByText(why)).toBeInTheDocument()
+    expect(screen.queryByText(/sealed deal/)).not.toBeInTheDocument()
+  })
+
   it.each([
     ['this node noted no payment received for that exchange', false],
     ['this node holds no single served record for that exchange', true],

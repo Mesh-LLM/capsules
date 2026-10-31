@@ -7,6 +7,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
 import { fetchReceipt } from '@/features/capsules/api/receiptClient'
+import { saveTextFile } from '@/features/capsules/lib/exchange-export'
 import {
   RECEIPT_CANNOT_CHECK,
   RECEIPT_CANNOT_CHECK_POINTER,
@@ -25,12 +26,7 @@ const BUTTON_CLASS = 'ui-control h-7 w-fit gap-1 rounded-[var(--radius)] px-2 te
 /** Hand the owner their own bundle as a file, to check it with a full
  *  verifier (the offline viewer). A click, a local Blob, nothing sent. */
 function saveBundle(bundle: unknown): void {
-  const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' }))
-  const link = document.createElement('a')
-  link.href = url
-  link.download = 'receipt-bundle.json'
-  link.click()
-  URL.revokeObjectURL(url)
+  saveTextFile('receipt-bundle.json', JSON.stringify(bundle, null, 2), 'application/json')
 }
 
 export function ReceiptPanel({ row }: { row: PaneCRow }) {
@@ -85,7 +81,7 @@ export function ReceiptPanel({ row }: { row: PaneCRow }) {
           </span>
         ) : null}
         {view?.kind === 'no_record' ? (
-          <span className="text-fg-dim">This node holds no sealed deal for this exchange.</span>
+          <span className="text-fg-dim">{view.why}</span>
         ) : null}
         {view?.kind === 'no_receipt_yet' ? (
           <span className="text-fg-dim" data-receipt-case="no-receipt-yet">
