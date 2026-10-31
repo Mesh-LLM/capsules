@@ -18,7 +18,7 @@ describe('AttackCards', () => {
     expect(within(region).getByText('13 / 13')).toBeInTheDocument()
     await userEvent.click(within(region).getByRole('button', { name: 'Turn on a witness' }))
     expect(onAction).toHaveBeenCalledWith('integrity')
-    await userEvent.click(within(region).getByRole('button', { name: 'Ask for their history (Peers)' }))
+    await userEvent.click(within(region).getByRole('button', { name: 'Ask a peer for their history' }))
     expect(onAction).toHaveBeenCalledWith('peers')
   })
 })

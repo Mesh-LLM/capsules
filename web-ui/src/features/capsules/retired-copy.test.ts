@@ -18,7 +18,9 @@ import { describe, expect, it } from 'vitest'
 import { STANDING_WORD } from '@/features/capsules/lib/banned-terms'
 
 const RETIRED_PHRASES = [
-  // -> "Get the other side’s record" (7bc96e8a4)
+  // -> "Get the other side’s record" (7bc96e8a4). Only the bare label stays retired: Sherlock2 ruled
+  // (Buzz a8611f42, on Steven's Evidence Tab Redesign) that "Ask a peer for their history" is the ruled
+  // wording for the history ask, so `ALLOWED_PHRASES` below is removed before the scan.
   'Ask a peer',
   // -> "not held" (7bc96e8a4: the banned word "pending" left the on-screen state)
   'pending fetch',
@@ -128,6 +130,9 @@ const RETIRED_PHRASES = [
   'chips on each row'
 ] as const
 
+/** Exact phrases that contain a retired phrase and are the ruled wording. */
+const ALLOWED_PHRASES = ['Ask a peer for their history'] as const
+
 const HERE = dirname(fileURLToPath(import.meta.url))
 const EVIDENCE_UI_ROOT = resolve(HERE, '../..')
 /** The plugin's Rust panes: what the page shows comes from here too. */
@@ -157,9 +162,10 @@ function rustShippedPart(source: string): string {
 }
 
 function offenders(files: Array<{ label: string; code: string }>): string[] {
-  return files.flatMap(({ label, code }) =>
-    RETIRED_PHRASES.filter((phrase) => code.includes(phrase)).map((phrase) => `${label}: "${phrase}"`)
-  )
+  return files.flatMap(({ label, code }) => {
+    const scanned = ALLOWED_PHRASES.reduce((text, allowed) => text.split(allowed).join(''), code)
+    return RETIRED_PHRASES.filter((phrase) => scanned.includes(phrase)).map((phrase) => `${label}: "${phrase}"`)
+  })
 }
 
 describe('retired Evidence copy stays retired', () => {
@@ -168,6 +174,13 @@ describe('retired Evidence copy stays retired', () => {
     expect(sources.length).toBeGreaterThan(20)
     expect(sources.some((path) => path.endsWith('register-mesh-plugin-ui.tsx'))).toBe(true)
     expect(sources.some((path) => path.endsWith('LedgerPage.tsx'))).toBe(true)
+  })
+
+  it('the history ask may say "Ask a peer for their history" but never the bare label', () => {
+    const allowed = [{ label: 'x', code: '<a>Ask a peer for their history</a>' }]
+    expect(offenders(allowed)).toEqual([])
+    const bare = [{ label: 'x', code: '<a>Ask a peer</a> <b>Ask a peer for their history</b>' }]
+    expect(offenders(bare)).toEqual(['x: "Ask a peer"'])
   })
 
   it('no shipped Evidence UI source carries a retired phrase', () => {

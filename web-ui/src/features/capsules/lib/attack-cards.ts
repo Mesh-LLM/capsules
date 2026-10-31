@@ -122,7 +122,7 @@ export function buildAttackCards(input: AttackCardInputs): readonly AttackCard[]
       },
       { label: 'Their full history compared', value: 'not checked', tone: 'muted' }
     ],
-    action: { label: 'Ask for their history (Peers)', target: 'peers' }
+    action: { label: 'Ask a peer for their history', target: 'peers' }
   }
 
   const swapped: AttackCard = {
