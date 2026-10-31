@@ -359,8 +359,9 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                 .default_value(&"counterparty")
                 .description(
                     "Push your sealed record of each exchange to the counterparty. Symmetric: \
-                     off means you don't receive theirs either. With checkpointing on, the \
-                     push carries a checkpoint, which shows your log's size and time; the \
+                     off means you don't receive theirs either. It governs pushes only: a \
+                     record you ask the other side for is checked and held either way. With \
+                     checkpointing on, the push carries a checkpoint, which shows your log's size and time; the \
                      public checkpoint list shows when your exchanges ended.",
                 )
                 .label("Send your record to the other side")

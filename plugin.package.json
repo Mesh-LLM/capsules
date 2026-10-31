@@ -233,7 +233,7 @@
         "apply_mode": "static_on_load",
         "restart_scope": "none",
         "visibility": "user",
-        "description": "Push your sealed record of each exchange to the counterparty. Symmetric: off means you don't receive theirs either. With checkpointing on, the push carries a checkpoint, which shows your log's size and time; the public checkpoint list shows when your exchanges ended.",
+        "description": "Push your sealed record of each exchange to the counterparty. Symmetric: off means you don't receive theirs either. It governs pushes only: a record you ask the other side for is checked and held either way. With checkpointing on, the push carries a checkpoint, which shows your log's size and time; the public checkpoint list shows when your exchanges ended.",
         "presentation": {
           "label": "Send your record to the other side",
           "category_id": "records",
