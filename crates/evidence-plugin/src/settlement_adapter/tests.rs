@@ -489,3 +489,70 @@ fn bands_are_signed_decades_of_the_amount_in_btc() {
     assert_eq!(band((1u64 << 53) - 1), btc(4));
     assert_eq!(band(u64::MAX), btc(8));
 }
+
+/// A settlement whose event carries the payment's preimage: the hash the
+/// invoice commits to is checked, and finality rests on it, not the wallet.
+fn paid_with_preimage(preimage: &[u8; 32], payment_hash: &str) -> Value {
+    let mut event = host_event(
+        "payer",
+        "input_settlement_observed",
+        Some(0),
+        Some(payment_hash),
+        1000,
+    );
+    event["preimage"] = json!(hex::encode(preimage));
+    seal(event)
+}
+
+fn method<'a>(book: &'a Value, i: usize, name: &str) -> &'a str {
+    book["settlements"][i]["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["detail"]["check"] == name)
+        .unwrap()["method"]
+        .as_str()
+        .unwrap()
+}
+
+#[test]
+fn a_preimage_that_hashes_to_the_payment_hash_makes_finality_a_check() {
+    use sha2::{Digest, Sha256};
+    let preimage = [7u8; 32];
+    let h = hex::encode(Sha256::digest(preimage));
+    let b = book(vec![
+        invoice("payer", 0, &h, 1000),
+        paid_with_preimage(&preimage, &h),
+    ]);
+    assert_eq!(chk(&b, 0, "preimage"), "PASS", "{b:#}");
+    assert_eq!(chk(&b, 0, "finality"), "PASS");
+    assert_eq!(method(&b, 0, "finality"), PREIMAGE_FINALITY_METHOD);
+    assert_eq!(
+        chk(&b, 0, "object_held"),
+        "PASS",
+        "event_ref covers the preimage"
+    );
+    assert_eq!(settled(&b), "PASS");
+}
+
+#[test]
+fn a_preimage_that_does_not_hash_to_the_payment_hash_fails_finality() {
+    let h = hash("aa");
+    let b = book(vec![
+        invoice("payer", 0, &h, 1000),
+        paid_with_preimage(&[7u8; 32], &h),
+    ]);
+    assert_eq!(chk(&b, 0, "preimage"), "FAIL", "{b:#}");
+    assert_eq!(chk(&b, 0, "finality"), "FAIL");
+    assert_eq!(settled(&b), "FAIL");
+}
+
+#[test]
+fn a_settlement_without_a_preimage_keeps_the_wallets_word() {
+    let b = book(vec![
+        invoice("payer", 0, &hash("aa"), 1000),
+        paid("payer", 0, Some(&hash("aa")), 1000),
+    ]);
+    assert_eq!(chk(&b, 0, "preimage"), "NOT_PRESENT");
+    assert_eq!(method(&b, 0, "finality"), FINALITY_METHOD);
+}

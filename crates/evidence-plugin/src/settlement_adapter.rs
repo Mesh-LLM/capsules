@@ -60,6 +60,10 @@ pub const BAND_ASSET_SCALE: i64 = 11;
 /// The finality method: the wallet's report, which the declaration names.
 pub const FINALITY_METHOD: &str = "wallet_reported";
 
+/// The finality method when the settlement carries a preimage that hashes to
+/// its `payment_hash`: the payee released it, so the payment completed.
+pub const PREIMAGE_FINALITY_METHOD: &str = "preimage_verified";
+
 /// A property status (interop profile §7.1). Never a score.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -141,6 +145,8 @@ pub struct Observation {
     pub amount_msat: u64,
     pub credited_msat: Option<u64>,
     pub fee_msat: Option<u64>,
+    /// The payment's preimage, when the settlement object carries one.
+    pub preimage: Option<String>,
     /// The rail reported this payment terminal.
     pub terminal: bool,
     pub held: Check,
@@ -176,6 +182,7 @@ impl Observation {
             amount_msat: u("amount_msat")?,
             credited_msat: u("credited_msat"),
             fee_msat: u("fee_msat"),
+            preimage: s("preimage").map(str::to_string),
             terminal: s("source") == Some("wallet_reported") && s("settlement") == Some("terminal"),
             held: lifecycle_event_ref(block),
         })
@@ -200,6 +207,7 @@ fn lifecycle_event_ref(block: &Map<String, Value>) -> Check {
         "amount_msat",
         "credited_msat",
         "fee_msat",
+        "preimage",
     ] {
         if let Some(v) = block.get(key) {
             base.insert(key.into(), v.clone());
@@ -295,6 +303,32 @@ fn invoice_for<'a>(
     }
 }
 
+/// `sha256(preimage) == payment_hash`, the hash the invoice commits to.
+fn preimage_check(settlement: &Observation) -> Check {
+    use sha2::{Digest, Sha256};
+    let Some(preimage) = &settlement.preimage else {
+        return check(
+            Status::NotPresent,
+            "the settlement object carries no preimage",
+        );
+    };
+    let Some(hash) = &settlement.payment_hash else {
+        return check(
+            Status::NotPresent,
+            "the settlement names no payment_hash to check the preimage against",
+        );
+    };
+    let bytes = match hex::decode(preimage) {
+        Ok(bytes) if bytes.len() == 32 => bytes,
+        _ => return check(Status::Fail, "the preimage is not 32 bytes of hex"),
+    };
+    if hex::encode(Sha256::digest(&bytes)).eq_ignore_ascii_case(hash) {
+        check(Status::Pass, "sha256(preimage) equals payment_hash")
+    } else {
+        check(Status::Fail, "sha256(preimage) differs from payment_hash")
+    }
+}
+
 /// One terminal settlement's checks, in declaration order.
 fn settlement_checks(
     settlement: &Observation,
@@ -312,10 +346,18 @@ fn settlement_checks(
             "settled amount differs from the invoice amount",
         ),
     };
-    let finality = if settlement.terminal {
-        check(Status::Pass, FINALITY_METHOD)
-    } else {
-        check(Status::Fail, "the settlement is not reported terminal")
+    let preimage = preimage_check(settlement);
+    // A preimage that hashes to the payment hash is the rail's own proof of
+    // completion and outranks the wallet's word; one that does not is a
+    // failed finality whatever the wallet said.
+    let finality = match preimage.status {
+        Status::Pass => check(Status::Pass, PREIMAGE_FINALITY_METHOD),
+        Status::Fail => check(
+            Status::Fail,
+            "the preimage does not hash to the payment_hash",
+        ),
+        _ if settlement.terminal => check(Status::Pass, FINALITY_METHOD),
+        _ => check(Status::Fail, "the settlement is not reported terminal"),
     };
     let payee_credit = match (
         settlement.side,
@@ -349,13 +391,7 @@ fn settlement_checks(
         ("invoice_join", invoice_join),
         ("amount", amount),
         ("finality", finality),
-        (
-            "preimage",
-            check(
-                Status::NotPresent,
-                "the settlement object carries no preimage",
-            ),
-        ),
+        ("preimage", preimage),
         ("payee_credit", payee_credit),
     ]
 }

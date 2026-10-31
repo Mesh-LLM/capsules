@@ -909,6 +909,10 @@ pub struct SettlementObservation<'a> {
     /// otherwise, so a record sealed from an event without them is unchanged.
     pub credited_msat: Option<u64>,
     pub fee_msat: Option<u64>,
+    /// A terminal settlement's Lightning preimage (64 lowercase hex), when
+    /// the event carries one. Copied verbatim and omitted otherwise, so the
+    /// settlement adapter can check `sha256(preimage) == payment_hash`.
+    pub preimage: Option<&'a str>,
 }
 
 /// Seal a SETTLEMENT record: this payer node's own signed, chained record that
@@ -969,6 +973,9 @@ pub fn seal_settlement_record(
     }
     if let Some(fee) = ev.fee_msat {
         observation.insert("fee_msat".into(), json!(fee));
+    }
+    if let Some(preimage) = ev.preimage {
+        observation.insert("preimage".into(), json!(preimage));
     }
 
     // The same local-record path as every other record with no served
@@ -3071,6 +3078,7 @@ mod tests {
             tokens: None,
             credited_msat: None,
             fee_msat: None,
+            preimage: None,
         }
     }
 
@@ -3125,6 +3133,13 @@ mod tests {
         let plain = block(&sample_settlement(Some("ab")));
         assert!(plain.get("credited_msat").is_none());
         assert!(plain.get("fee_msat").is_none());
+        assert!(plain.get("preimage").is_none());
+        let preimage = "5a".repeat(32);
+        let with_preimage = SettlementObservation {
+            preimage: Some(&preimage),
+            ..sample_settlement(Some("ab"))
+        };
+        assert_eq!(block(&with_preimage)["preimage"], json!(preimage));
         let mut keys: Vec<&String> = plain.as_object().unwrap().keys().collect();
         keys.sort();
         assert_eq!(
