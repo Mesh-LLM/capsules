@@ -20,7 +20,8 @@ more under `evidence-interop/0`, which 0.1.5 answers.
 - **Each ask is recorded,** before it is sent: the request, then the answer, the refusal, or that
   nothing came back in its window.
 - **A paid exchange is sealed as a deal** on the payer's side, with the payer's and the provider's
-  receipts as Evidence Bundles, and its records go to the counterparty of the exchange.
+  receipts as Evidence Bundles. The deal's steps go to the counterparty of the exchange; the
+  payer's deal report stays on this node.
 - **The Service History** (`service_history/1`): what this node served, per period, as a Standard
   History.
 - **Service evidence agreements** and their coverage on the Exchanges rows, and the **join switch,
