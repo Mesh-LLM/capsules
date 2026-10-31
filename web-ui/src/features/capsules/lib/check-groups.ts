@@ -10,7 +10,7 @@
 import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
 import type { ChecksRow, ChecksSideCell, CommitsToRow } from '@/features/capsules/lib/security-checks-view'
 import { TEE_COPY } from '@/features/capsules/lib/security-checks-view'
-import { askedVerdict } from '@/features/capsules/lib/twin-bracket'
+import { askedVerdict, rowNamesNode } from '@/features/capsules/lib/twin-bracket'
 
 /** Where a result came from: redone in this browser, taken from the node,
  *  failed, not set up on this node, or nothing to check yet. */
@@ -95,7 +95,8 @@ function comparedLine(commits: readonly CommitsToRow[], label: string, id: strin
         : row.theirs.note === DIFFERS_NOTE
           ? ({ text: 'differs', mark: 'failed' } as const)
           : null
-    if (!compared) theirs = { kind: 'text', text: 'not checked', mark: 'none' }
+    // Nothing of ours to compare against: not a difference.
+    if (!compared || row.yours === 'unavailable') theirs = { kind: 'text', text: 'not checked', mark: 'none' }
     else if (/^[0-9a-f]{64}$/i.test(value)) theirs = { kind: 'digest', value, compared }
     else theirs = { kind: 'text', text: compared.text === 'same' ? 'same' : `differs: ${value}`, mark: compared.mark }
   }
@@ -111,20 +112,37 @@ function teeSide(text: string | undefined): LineSide | null {
 
 const REFEREE_WORDS = {
   corroborated: 'agreed',
-  contradicted: 'contradicted',
   inconclusive: 'inconclusive',
   not_comparable: 'not comparable'
 } as const
+
+/** The coverage cell's own state: a failed or unchecked cell is never counted
+ *  as checked just because it has a sentence. */
+function captureMark(state: string | undefined): CheckMark {
+  if (state === 'PASS') return 'node'
+  if (state === 'FAIL') return 'failed'
+  if (state === undefined || state === 'NOT_PRESENT') return 'not_set_up'
+  return 'none'
+}
 
 function refereeLine(row: PaneCRow): CheckLine {
   const asked = askedVerdict([row])
   let yours: LineSide
   if (!asked) {
     yours = { kind: 'text', text: row.twin ? 'not checked' : 'not a pair', mark: 'none' }
+  } else if (asked.verdict.kind === 'contradicted') {
+    // The ruling names one node: only the row that names it reads wrong
+    // answer, and the other row agreed with the referee.
+    yours = rowNamesNode(row, [], asked.verdict.party)
+      ? { kind: 'text', text: 'wrong answer', mark: 'failed' }
+      : { kind: 'text', text: 'agreed', mark: 'node' }
   } else {
     const kind = asked.verdict.kind
-    const mark: CheckMark = kind === 'contradicted' ? 'failed' : kind === 'not_comparable' ? 'none' : 'node'
-    yours = { kind: 'text', text: REFEREE_WORDS[kind], mark }
+    yours = {
+      kind: 'text',
+      text: REFEREE_WORDS[kind],
+      mark: kind === 'not_comparable' ? 'none' : 'node'
+    }
   }
   return {
     propertyKey: null,
@@ -150,7 +168,7 @@ export function buildCheckGroups(input: {
         propertyKey: 'capture_coverage',
         id: 'capture_coverage',
         name: 'Captured in full',
-        mark: coverage.singleLine === 'not present' ? 'not_set_up' : 'node',
+        mark: captureMark(row.properties?.capture_coverage?.state),
         yours: { kind: 'text', text: coverage.singleLine ?? 'not checked', mark: 'none' },
         theirs: null
       }
@@ -180,8 +198,7 @@ export function buildCheckGroups(input: {
 
   const identity = checks.find((r) => r.key === 'identity_authority')
   const bindingFact = identity?.facts?.find((f) => f.factLabel === 'binding')
-  const authorityFact = identity?.facts?.find((f) => f.factLabel === 'authority')
-  const factLine = (fact: typeof bindingFact, factKey: 'binding' | 'authority', name: string): CheckLine | null =>
+  const factLine = (fact: typeof bindingFact, factKey: 'binding', name: string): CheckLine | null =>
     fact
       ? {
           propertyKey: 'identity_authority',
@@ -231,8 +248,7 @@ export function buildCheckGroups(input: {
       key: 'stands_behind',
       question: 'Who stands behind it?',
       lines: present([
-        factLine(bindingFact, 'binding', 'Signing key bound to an owner'),
-        factLine(authorityFact, 'authority', 'Owner bound to a person')
+        factLine(bindingFact, 'binding', 'Signing key bound to an owner')
       ])
     }
   ]
@@ -247,16 +263,16 @@ export function countMarks(lines: readonly CheckLine[]): MarkCounts {
 }
 
 /** What a set of checks found, every count over its total:
- *  "6 of 15 checked (2 here, 4 node says) · 1 of 15 failed · 3 of 15 not set up". */
+ *  "6/15 checked (2 here, 4 node says) · 1/15 failed · 3/15 not set up". */
 export function summarizeMarks(counts: MarkCounts, withBreakdown: boolean): string {
   const checked = counts.here + counts.node
   const parts = [
     withBreakdown && checked > 0
-      ? `${checked} of ${counts.total} checked (${counts.here} here, ${counts.node} node says)`
-      : `${checked} of ${counts.total} checked`
+      ? `${checked}/${counts.total} checked (${counts.here} here, ${counts.node} node says)`
+      : `${checked}/${counts.total} checked`
   ]
-  if (counts.failed > 0) parts.push(`${counts.failed} of ${counts.total} failed`)
-  if (counts.not_set_up > 0) parts.push(`${counts.not_set_up} of ${counts.total} not set up`)
-  if (counts.none > 0) parts.push(`${counts.none} of ${counts.total} nothing to check yet`)
+  if (counts.failed > 0) parts.push(`${counts.failed}/${counts.total} failed`)
+  if (counts.not_set_up > 0) parts.push(`${counts.not_set_up}/${counts.total} not set up`)
+  if (counts.none > 0) parts.push(`${counts.none}/${counts.total} nothing to check yet`)
   return parts.join(' · ')
 }

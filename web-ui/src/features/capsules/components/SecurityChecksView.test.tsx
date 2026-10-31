@@ -105,15 +105,15 @@ describe('SecurityChecksView — four questions, each group closed until opened'
     for (const group of groups) {
       expect(group.querySelector('button')).toHaveAttribute('aria-expanded', 'false')
       expect(group.querySelector('[data-check-line]')).toBeNull()
-      expect(group.querySelector('[data-group-summary]')?.textContent).toMatch(/^\d+ of \d+ checked/)
+      expect(group.querySelector('[data-group-summary]')?.textContent).toMatch(/^\d+\/\d+ checked/)
     }
   })
 
   it('every count carries its denominator, in the headline and in each group summary', () => {
     const { container } = renderView()
     const headline = container.querySelector('[data-checks-headline]') as HTMLElement
-    expect(headline.textContent).toMatch(/^\d+ of \d+ checked/)
-    for (const piece of headline.textContent?.split(' · ') ?? []) expect(piece).toMatch(/\d+ of \d+/)
+    expect(headline.textContent).toMatch(/^\d+\/\d+ checked/)
+    for (const piece of headline.textContent?.split(' · ') ?? []) expect(piece).toMatch(/\d+\/\d+/)
     expect(headline.textContent).not.toMatch(/%|score|grade/i)
   })
 
@@ -336,14 +336,13 @@ describe('SecurityChecksView — capture_coverage: sentence or not present, neve
   })
 })
 
-describe('SecurityChecksView — owner link: two facts, each with its own state', () => {
-  it('renders both a "binding" and an "authority" fact', async () => {
+describe('SecurityChecksView — who stands behind it: one line, the owner key', () => {
+  it('renders only "Signing key bound to an owner"; no always-not-set-up person line', async () => {
     renderView()
     await openAllGroups()
     expect(screen.getByText('Signing key bound to an owner')).toBeInTheDocument()
-    expect(screen.getByText('Owner bound to a person')).toBeInTheDocument()
-    const authority = cellWithDetail('No owner set — not bound to a person.')
-    expect(chipTooltip(authority)).toContain('No owner set — not bound to a person.')
+    expect(screen.queryByText('Owner bound to a person')).not.toBeInTheDocument()
+    expect(document.querySelectorAll('[data-check-group="stands_behind"] [data-check-line]')).toHaveLength(1)
     expect(document.body.textContent).not.toContain('Owner: …')
   })
 })
@@ -458,7 +457,30 @@ describe('SecurityChecksView — referee verdict follows the asked-and-sealed ru
     renderView({ twin: twin({ state: 'adjudicated', verdict: 'contradicted:peer-9', referee: 'ref-1', tier: 1 }) })
     await openAllGroups()
     const line = document.querySelector('[data-check-line="Referee verdict on this pair"]') as HTMLElement
-    expect(within(line).getByText('contradicted')).toBeInTheDocument()
+    expect(within(line).getByText('agreed')).toBeInTheDocument()
+  })
+
+  it('on a caught swap, only the row naming the contradicted party reads wrong answer and opens as failed', async () => {
+    const naming = twin({ state: 'adjudicated', verdict: 'contradicted:peer-9', referee: 'ref-1', tier: 1 })
+    renderView({ twin: naming, counterparty: 'peer-9' })
+    expect(screen.getByRole('button', { name: /Was it the model they advertised/ })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    const line = document.querySelector('[data-check-line="Referee verdict on this pair"]') as HTMLElement
+    expect(within(line).getByText('wrong answer')).toBeInTheDocument()
+    expect(within(line).queryByText('agreed')).not.toBeInTheDocument()
+  })
+
+  it('the row that does not name the party is not failed, and its group stays closed', () => {
+    renderView({
+      twin: twin({ state: 'adjudicated', verdict: 'contradicted:peer-9', referee: 'ref-1', tier: 1 }),
+      counterparty: 'peer-2'
+    })
+    expect(screen.getByRole('button', { name: /Was it the model they advertised/ })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
   })
 
   it('a pair with no ruling reads "not checked", never an inferred mismatch', async () => {
@@ -466,6 +488,32 @@ describe('SecurityChecksView — referee verdict follows the asked-and-sealed ru
     await openAllGroups()
     const line = document.querySelector('[data-check-line="Referee verdict on this pair"]') as HTMLElement
     expect(within(line).getByText('not checked')).toBeInTheDocument()
+  })
+
+  it('a missing model id on our side is never a difference: theirs reads not checked, nothing fails', async () => {
+    const theirsRecompute = {
+      status: 'found' as const,
+      idMatch: true,
+      signatureOk: true,
+      peerRecord: { model_attestation: { model_id: 'model-x' } },
+      fetch: () => {}
+    }
+    renderView(
+      { theirs: { state: 'NOT_CHECKED', capsule_id: 'a'.repeat(64), peer_id: 'peer-1' } },
+      { localRecord: {} as never, theirsRecompute }
+    )
+    await openAllGroups()
+    const line = document.querySelector('[data-check-line="Same model identity"]') as HTMLElement
+    expect(within(line).queryByText(/differs/)).not.toBeInTheDocument()
+    expect(within(line).getByText('not checked')).toBeInTheDocument()
+  })
+
+  it('a failed coverage cell is a failure, not a check: it opens its group', () => {
+    renderView({ properties: { ...paneCRow().properties, capture_coverage: { state: 'FAIL' } } as never })
+    expect(screen.getByRole('button', { name: /Could anyone have rewritten this/ })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
   })
 
   it('a row that is not one of a pair says so', async () => {

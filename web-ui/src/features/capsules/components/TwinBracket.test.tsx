@@ -179,10 +179,49 @@ describe('TwinBracket — the group card', () => {
       referee_row: adjudicated('corroborated')
     })
     renderCard([twinRow('a', { twin }), twinRow('b', { twin })])
-    expect(await screen.findByText('Signature not checked')).toBeInTheDocument()
+    expect(await screen.findByText('signature not checked')).toBeInTheDocument()
     expect(screen.queryByText('Signature checks here')).not.toBeInTheDocument()
     expect(screen.getAllByText('Referee: agreed')).toHaveLength(2)
     expect(screen.queryByText('Swap caught')).not.toBeInTheDocument()
+  })
+
+  it('a verdict the log does not record is "not confirmed here", not a bad signature; only a reported signature error is', async () => {
+    const twin = pairFacts({
+      verdict_capsule_id: 'a9a0ca66822384be1f73188ca010620f',
+      referee_row: adjudicated('corroborated')
+    })
+    fetchVerdictRecord.mockResolvedValue({ capsule: {}, signed_by_key_id: 'k', verify_ok: false })
+    const first = renderCard([twinRow('a', { twin }), twinRow('b', { twin })])
+    expect(await screen.findByText('not confirmed here')).toBeInTheDocument()
+    expect(screen.queryByText('signature does not check')).not.toBeInTheDocument()
+    first.unmount()
+    fetchVerdictRecord.mockResolvedValue({
+      capsule: {},
+      signed_by_key_id: 'k',
+      verify_ok: false,
+      signature_error: 'bad signature'
+    })
+    renderCard([twinRow('a', { twin }), twinRow('b', { twin })])
+    expect(await screen.findByText('signature does not check')).toBeInTheDocument()
+  })
+
+  it('a declined or empty answer is said as such on the card, not as waiting', () => {
+    const declined = { ...twinRow('a'), rightCellState: { kind: 'open_refused' as const, date: null } }
+    const absent = { ...twinRow('b'), rightCellState: { kind: 'open_absent' as const, date: null } }
+    renderCard([declined, absent])
+    expect(document.querySelector('[data-twin-column="Machine A"]')).toHaveTextContent('they declined')
+    expect(document.querySelector('[data-twin-column="Machine B"]')).toHaveTextContent('they have no record')
+    expect(document.querySelector('[data-twin-columns]')).not.toHaveTextContent('waiting for their record')
+  })
+
+  it('opens the verdict record only for the ruling shown, not another referee’s', () => {
+    const twin = pairFacts({
+      verdict: 'corroborated',
+      verdict_capsule_id: 'a9a0ca66822384be1f73188ca010620f',
+      referee_row: adjudicated('contradicted:node-a-0001')
+    })
+    renderCard([twinRow('a', { twin }), twinRow('b', { twin })])
+    expect(screen.queryByRole('button', { name: 'Open the verdict' })).not.toBeInTheDocument()
   })
 
   it('a not-comparable ruling is a ruling, shown as not comparable, never as a disagreement', () => {

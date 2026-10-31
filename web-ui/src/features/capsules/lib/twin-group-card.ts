@@ -10,10 +10,9 @@
 //   - there is no score, grade or percentage.
 import type { CapsuleRecord } from '@/features/capsules/api/types'
 import type { ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
-import { recordServedBy } from '@/features/capsules/lib/security-checks-view'
 import { shortId } from '@/features/capsules/lib/adjudication-view'
 import { rowModelName, servingProvenance, tokenFlowText } from '@/features/capsules/lib/serving-provenance'
-import { askedVerdict, twinAnswerState, type TwinAnswerState } from '@/features/capsules/lib/twin-bracket'
+import { askedVerdict, rowNamesNode, twinAnswerState, type TwinAnswerState } from '@/features/capsules/lib/twin-bracket'
 
 export type CardTone = 'good' | 'bad' | 'muted'
 
@@ -48,17 +47,13 @@ function ownRecord(row: ExchangeLedgerRow): CapsuleRecord | null {
   return (row.raw.mine.record as CapsuleRecord | undefined) ?? null
 }
 
-/** Every id this row's evidence uses for the node on the other side. */
-function rowNodeIds(row: ExchangeLedgerRow): string[] {
-  const own = ownRecord(row)
-  return [row.counterparty, row.raw.theirs.peer_id, row.raw.theirs.received_from, own ? recordServedBy(own) : null]
-    .filter((id): id is string => typeof id === 'string' && id.length > 0)
-    .map((id) => id.toLowerCase())
+function namesNode(row: ExchangeLedgerRow, party: string): boolean {
+  return rowNamesNode(row.raw, [row.counterparty], party)
 }
 
-function namesNode(row: ExchangeLedgerRow, party: string): boolean {
-  const wanted = party.toLowerCase()
-  return rowNodeIds(row).some((id) => id === wanted || id.startsWith(wanted) || wanted.startsWith(id))
+/** The id the card shows for a machine. */
+function rowId(row: ExchangeLedgerRow): string | null {
+  return row.counterparty ?? row.raw.theirs.peer_id ?? row.raw.theirs.received_from ?? null
 }
 
 function machineFacts(row: ExchangeLedgerRow): string {
@@ -66,12 +61,19 @@ function machineFacts(row: ExchangeLedgerRow): string {
   const tokens = own ? servingProvenance(own) : null
   const flow = tokens ? tokenFlowText(tokens.promptTokens, tokens.completionTokens) : null
   const sealed = row.raw.mine.state !== 'absent' ? 'sealed' : 'not sealed here'
+  // Said from the pane's state, in the row's own words for a declined or
+  // empty answer; a waiting row says only that it is not confirmed here.
+  const kind = row.rightCellState.kind
   const their =
-    row.rightCellState.kind === 'closed'
+    kind === 'closed'
       ? 'confirmed by them'
-      : row.rightCellState.kind === 'contradicted'
+      : kind === 'contradicted'
         ? 'their record differs'
-        : 'waiting for their record'
+        : kind === 'open_refused'
+          ? 'they declined'
+          : kind === 'open_absent'
+            ? 'they have no record'
+            : 'not confirmed here'
   return [flow ?? 'tokens not recorded', sealed, their].join(' · ')
 }
 
@@ -102,12 +104,19 @@ export function buildTwinGroupCard(rows: readonly ExchangeLedgerRow[]): TwinGrou
 
   const machine = (row: ExchangeLedgerRow | undefined, label: MachineColumn['label']): MachineColumn => ({
     label,
-    id: row ? (rowNodeIds(row)[0] ?? null) : null,
+    id: row ? rowId(row) : null,
     facts: row ? machineFacts(row) : 'not recorded',
     pill: row ? pillFor(row) : null
   })
 
-  const verdictRow = rows.find((row) => row.raw.twin?.verdict_capsule_id)
+  // The verdict record to open is the one for the ruling shown: a record
+  // whose own verdict differs from the asked ruling is another referee's.
+  const askedWire = rows.map((row) => row.raw.twin?.referee_row).find((r) => r?.state === 'adjudicated')
+  const verdictRow = rows.find((row) => {
+    const twin = row.raw.twin
+    if (!twin?.verdict_capsule_id) return false
+    return !twin.verdict || askedWire?.state !== 'adjudicated' || twin.verdict === askedWire.verdict
+  })
   const answerState = twinAnswerState(rows)
   return {
     model,

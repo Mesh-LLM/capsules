@@ -12,6 +12,9 @@
 //     diff), never an equality/inconclusive judgment call.
 import type { ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
 import { parseVerdict, type ParsedVerdict } from '@/features/capsules/lib/adjudication-view'
+import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
+import type { CapsuleRecord } from '@/features/capsules/api/types'
+import { recordServedBy } from '@/features/capsules/lib/security-checks-view'
 import type { RefereeRow } from '@/features/capsules/lib/referee-row'
 
 /** The bracket's one statement of how the pair came to be: a client marked
@@ -71,12 +74,6 @@ export function twinAnswerState(rows: readonly ExchangeLedgerRow[]): TwinAnswerS
   return 'not_compared'
 }
 
-export const TWIN_ANSWER_LABEL: Record<TwinAnswerState, string> = {
-  same: 'same answer',
-  different: 'different answers',
-  not_compared: 'not compared yet'
-}
-
 /** The ruling THIS node asked for on a pair and holds as a sealed record
  *  (the plugin's `referee_row`, state `adjudicated`), from either row. The
  *  same rule as the "Swapped the model" card (`attack-cards.ts`): another
@@ -95,13 +92,15 @@ export function askedVerdict(
   return null
 }
 
-/** A referee's signed verdict for this pair, when one exists. */
-export type TwinVerdict = ParsedVerdict | null
-
-export function twinVerdict(rows: readonly ExchangeLedgerRow[]): { verdict: TwinVerdict; capsuleId: string | null } {
-  for (const row of rows) {
-    const verdict = parseVerdict(row.raw.twin?.verdict)
-    if (verdict !== null) return { verdict, capsuleId: row.raw.twin?.verdict_capsule_id ?? null }
-  }
-  return { verdict: null, capsuleId: null }
+/** Whether a pair row's evidence names `party` as the node on its other side:
+ *  an id equal to it, or one that is a prefix of the other (ids are shown
+ *  shortened). `extraIds` carries ids only the caller knows (the ledger row's
+ *  counterparty). */
+export function rowNamesNode(raw: PaneCRow, extraIds: readonly (string | null | undefined)[], party: string): boolean {
+  const own = raw.mine.record as CapsuleRecord | undefined
+  const wanted = party.toLowerCase()
+  return [...extraIds, raw.counterparty, raw.theirs.peer_id, raw.theirs.received_from, own ? recordServedBy(own) : null]
+    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    .map((id) => id.toLowerCase())
+    .some((id) => id === wanted || id.startsWith(wanted) || wanted.startsWith(id))
 }

@@ -15,16 +15,16 @@ describe('summarizeMarks — every count over its total, no score', () => {
   it('puts a denominator on each number', () => {
     const counts = countMarks([line('here'), line('node'), line('node'), line('not_set_up'), line('none'), line('failed')])
     expect(summarizeMarks(counts, true)).toBe(
-      '3 of 6 checked (1 here, 2 node says) · 1 of 6 failed · 1 of 6 not set up · 1 of 6 nothing to check yet'
+      '3/6 checked (1 here, 2 node says) · 1/6 failed · 1/6 not set up · 1/6 nothing to check yet'
     )
     expect(summarizeMarks(counts, false)).toBe(
-      '3 of 6 checked · 1 of 6 failed · 1 of 6 not set up · 1 of 6 nothing to check yet'
+      '3/6 checked · 1/6 failed · 1/6 not set up · 1/6 nothing to check yet'
     )
   })
 
-  it('omits the empty kinds, and says 0 of N when nothing is checked', () => {
+  it('omits the empty kinds, and says 0/N when nothing is checked', () => {
     expect(summarizeMarks(countMarks([line('none'), line('none')]), true)).toBe(
-      '0 of 2 checked · 2 of 2 nothing to check yet'
+      '0/2 checked · 2/2 nothing to check yet'
     )
   })
 })
