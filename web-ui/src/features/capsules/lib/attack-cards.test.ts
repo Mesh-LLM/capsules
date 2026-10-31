@@ -25,7 +25,7 @@ describe('buildAttackCards', () => {
     expect(rewrote.action).toEqual({ label: 'Turn on a witness', target: 'integrity' })
     expect(leftOut.badge).toBe('No peer record yet')
     expect(leftOut.rows.at(-1)).toMatchObject({ label: 'Their full history compared', value: 'not checked' })
-    expect(swapped).toMatchObject({ badge: 'Not tested', tone: 'muted', action: null })
+    expect(swapped).toMatchObject({ badge: 'Not checked', tone: 'muted', action: null })
   })
 
   it('says nothing is sealed yet for an empty node and reports missing coverage as "not reported"', () => {
@@ -36,29 +36,54 @@ describe('buildAttackCards', () => {
     expect(partial.action).toBeNull()
   })
 
-  it('counts one pair once and reads only the referee verdict it has', () => {
-    const half = (verdict: string | null) =>
-      row({ twin: { bracket_id: 'b1', same_answer: false, other_row: 'x', verdict } })
+  const adjudicated = (verdict: string) => ({ state: 'adjudicated', verdict, referee: 'r', tier: 1 })
+  const half = (bracket: string, referee_row: unknown, extra: Record<string, unknown> = {}) =>
+    row({ twin: { bracket_id: bracket, same_answer: false, other_row: 'x', referee_row, ...extra } })
+
+  it('counts a pair once and always shows how many were checked', () => {
     const [, , swapped] = buildAttackCards({
-      records: 2,
-      covered: 2,
+      records: 4,
+      covered: 4,
       witness: 'off',
-      rows: [half(null), half('contradicted:abcd')]
+      rows: [
+        half('b1', adjudicated('contradicted:abcd')),
+        half('b1', adjudicated('contradicted:abcd')),
+        half('b2', adjudicated('corroborated')),
+        half('b3', adjudicated('inconclusive'))
+      ]
     })
-    expect(swapped).toMatchObject({ badge: '1 caught', tone: 'bad' })
-    expect(swapped.rows[0].value).toBe('1 pair')
-    expect(swapped.rows[1].value).toBe('1 contradicted')
+    expect(swapped).toMatchObject({ badge: '1 caught of 3 checked', tone: 'bad' })
+    expect(swapped.rows.map((r) => r.value)).toEqual(['3 pairs', '1 caught of 3 checked'])
     expect(swapped.action).toEqual({ label: 'Open the verdict', target: 'exchanges' })
   })
 
-  it('a pair nobody judged is "Not judged", not "None found"', () => {
+  it('with nothing asked it reads "not checked"; "not comparable" and an unjudged pair are no check', () => {
     const [, , swapped] = buildAttackCards({
       records: 2,
       covered: 2,
       witness: 'off',
-      rows: [row({ twin: { bracket_id: 'b1', same_answer: true, other_row: 'x' } })]
+      rows: [
+        half('b1', { state: 'not_adjudicated', reason: 'twins_agree' }),
+        half('b2', adjudicated('not_comparable')),
+        half('b3', null)
+      ]
     })
-    expect(swapped).toMatchObject({ badge: 'Not judged', tone: 'muted' })
-    expect(swapped.rows[1].value).toBe('none asked')
+    expect(swapped).toMatchObject({ badge: 'Not checked', tone: 'muted', action: null })
+    expect(swapped.rows[1].value).toBe('not checked')
+  })
+
+  it('never reads another node\'s ask or an inferred mismatch', () => {
+    const [, , swapped] = buildAttackCards({
+      records: 2,
+      covered: 2,
+      witness: 'off',
+      rows: [
+        // A verdict a referee delivered to this node about its own answer: someone else's ask.
+        row({ adjudication: { verdict: 'contradicted:me', about_this_node: true, referee_node_id: 'r' } }),
+        // The two answers differ, but nobody was asked: an inferred mismatch.
+        half('b1', null, { same_answer: false })
+      ]
+    })
+    expect(swapped.badge).toBe('Not checked')
   })
 })

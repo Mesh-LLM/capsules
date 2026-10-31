@@ -48,13 +48,16 @@ function witnessValue(state: WitnessState): { value: string; tone: AttackTone } 
   }
 }
 
-/** One count per pair: the two rows of a twin pair carry the same bracket id. */
-function twinPairs(rows: readonly PaneCRow[]): ReadonlyMap<string, string | null> {
+/** One entry per pair (the two rows of a pair carry the same bracket id): the verdict THIS node asked for and
+ *  holds as a sealed record, or `null`. Another node's ask (a verdict delivered to this node) and a verdict this
+ *  node issued as a referee are never read here, and no mismatch is inferred from the two answers. */
+function askedVerdicts(rows: readonly PaneCRow[]): ReadonlyMap<string, string | null> {
   const pairs = new Map<string, string | null>()
   for (const row of rows) {
     const bracket = row.twin?.bracket_id
     if (!bracket) continue
-    const verdict = row.twin?.verdict ?? null
+    const recorded = row.twin?.referee_row
+    const verdict = recorded?.state === 'adjudicated' ? recorded.verdict : null
     if (!pairs.has(bracket) || (pairs.get(bracket) === null && verdict !== null)) pairs.set(bracket, verdict)
   }
   return pairs
@@ -68,11 +71,12 @@ export function buildAttackCards(input: AttackCardInputs): readonly AttackCard[]
   const differ = states.filter((kind) => kind === 'contradicted').length
   const received = states.filter((kind) => kind === 'closed' || kind === 'contradicted').length
 
-  const pairs = twinPairs(rows)
+  const pairs = askedVerdicts(rows)
   const verdicts = [...pairs.values()].map((wire) => parseVerdict(wire))
-  const contradicted = verdicts.filter((verdict) => verdict?.kind === 'contradicted').length
-  const corroborated = verdicts.filter((verdict) => verdict?.kind === 'corroborated').length
-  const asked = verdicts.filter((verdict) => verdict !== null).length
+  // Checked: a ruling on the answers. "Inconclusive" is checked, not caught; "not comparable" is no check at all.
+  const checked = verdicts.filter((verdict) => verdict && verdict.kind !== 'not_comparable').length
+  const caught = verdicts.filter((verdict) => verdict?.kind === 'contradicted').length
+  const checkedLine = checked === 0 ? 'not checked' : `${caught} caught of ${checked} checked`
 
   const witnessRow = witnessValue(witness)
   const rewrote: AttackCard = {
@@ -125,17 +129,13 @@ export function buildAttackCards(input: AttackCardInputs): readonly AttackCard[]
     id: 'swapped',
     title: 'Swapped the model',
     summary: 'A peer serves a cheaper model or quant than it advertised.',
-    badge: contradicted > 0 ? `${contradicted} caught` : pairs.size === 0 ? 'Not tested' : asked === 0 ? 'Not judged' : 'None found',
-    tone: contradicted > 0 ? 'bad' : pairs.size === 0 || asked === 0 ? 'muted' : 'good',
+    badge: checked === 0 ? 'Not checked' : checkedLine,
+    tone: caught > 0 ? 'bad' : checked === 0 ? 'muted' : 'good',
     rows: [
       { label: 'Same request to two machines', value: plural(pairs.size, 'pair'), tone: pairs.size > 0 ? undefined : 'muted' },
-      {
-        label: 'Referee re-answered',
-        value: asked === 0 ? 'none asked' : contradicted > 0 ? `${contradicted} contradicted` : `${corroborated} corroborated`,
-        tone: contradicted > 0 ? 'bad' : asked === 0 ? 'muted' : 'good'
-      }
+      { label: 'Referee re-answered', value: checkedLine, tone: caught > 0 ? 'bad' : checked === 0 ? 'muted' : 'good' }
     ],
-    action: contradicted > 0 ? { label: 'Open the verdict', target: 'exchanges' } : null
+    action: caught > 0 ? { label: 'Open the verdict', target: 'exchanges' } : null
   }
 
   return [rewrote, leftOut, swapped]
