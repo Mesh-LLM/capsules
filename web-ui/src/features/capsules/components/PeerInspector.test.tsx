@@ -89,14 +89,14 @@ describe('PeerInspector — three rows and an ids line', () => {
         tone: 'bad' as const,
         checked: 3,
         caught: 1,
-        tally: '1 caught of 3 checked',
+        tally: '1 caught · 3 checked',
         otherNode: '0a542985bb11',
         referee: 'b9979a730e22'
       }
     }
     render(<PeerInspector facts={facts} meshStatus={null} onClose={() => {}} onOpenExchanges={() => {}} open row={ROW} />)
     const swapped = screen.getByRole('region', { name: PEER_DRAWER.swappedTitle })
-    expect(swapped).toHaveTextContent('1 caught of 3 checked.')
+    expect(swapped).toHaveTextContent('1 caught · 3 checked.')
     expect(swapped).toHaveTextContent('The same request also went to 0a542985bb…')
     expect(swapped).toHaveTextContent('Referee b9979a730e… re-answered it and ruled this peer’s answer wrong.')
     expect(within(swapped).getByRole('button', { name: 'Open the verdict' })).toBeInTheDocument()

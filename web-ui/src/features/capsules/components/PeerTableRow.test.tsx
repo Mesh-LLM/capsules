@@ -86,7 +86,7 @@ describe('PeerTableRow — dealt-with peers', () => {
     ] as never)
     renderInTable(<PeerTableRow meshStatus={null} view={view} />)
     expect(screen.getByText('Contradicted by referee')).toBeInTheDocument()
-    expect(screen.getByText('1 caught of 1 checked')).toBeInTheDocument()
+    expect(screen.getByText('1 caught · 1 checked')).toBeInTheDocument()
   })
 
   it('has an Open link that opens the drawer', async () => {

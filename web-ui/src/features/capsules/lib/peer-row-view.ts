@@ -528,7 +528,7 @@ export type PeerSwappedFacts = PeerBadge & {
   checked: number
   /** Of those, the pairs where the referee ruled THIS peer's answer wrong. */
   caught: number
-  /** "1 caught of 3 checked", or "not checked" with none asked. */
+  /** "1 caught · 3 checked", or "not checked" with none asked. */
   tally: string
   /** The other machine the same request also went to, when known. */
   otherNode: string | null
@@ -615,7 +615,7 @@ export function peerSwappedFacts(
     ...badge,
     checked,
     caught,
-    tally: checked === 0 ? 'not checked' : `${caught} caught of ${checked} checked`,
+    tally: checked === 0 ? 'not checked' : `${caught} caught · ${checked} checked`,
     otherNode,
     referee
   }

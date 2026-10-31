@@ -619,7 +619,7 @@ describe('peerFacts — swapped the model counts only referee verdicts this node
     ]
     const { swapped } = peerFacts(SWAP_PEER, rows)
     expect(swapped).toMatchObject({ text: 'Contradicted by referee', tone: 'bad', caught: 1, checked: 3 })
-    expect(swapped.tally).toBe('1 caught of 3 checked')
+    expect(swapped.tally).toBe('1 caught · 3 checked')
     expect(swapped.otherNode).toBe('peer:other')
     expect(swapped.referee).toBe('node:ref')
   })
@@ -630,13 +630,13 @@ describe('peerFacts — swapped the model counts only referee verdicts this node
       text: 'Corroborated by referee',
       tone: 'good',
       caught: 0,
-      tally: '0 caught of 1 checked'
+      tally: '0 caught · 1 checked'
     })
   })
 
   it('inconclusive counts as checked and not caught; not comparable is no check at all', () => {
     const inconclusive = peerFacts(SWAP_PEER, askedPair(1, 'peer:swap', 'peer:other', 'inconclusive')).swapped
-    expect(inconclusive).toMatchObject({ checked: 1, caught: 0, tally: '0 caught of 1 checked' })
+    expect(inconclusive).toMatchObject({ checked: 1, caught: 0, tally: '0 caught · 1 checked' })
     expect(inconclusive.text).not.toBe('Corroborated by referee')
     const notComparable = peerFacts(SWAP_PEER, askedPair(1, 'peer:swap', 'peer:other', 'not_comparable')).swapped
     expect(notComparable).toMatchObject({ text: 'Not tested', checked: 0, tally: 'not checked' })
@@ -682,7 +682,7 @@ describe('peerFacts — review fixes', () => {
     const rows = askedPair(1, 'peer:swap', 'peer:other', 'contradicted:node:swap-node')
     const { swapped } = peerFacts(noIdentity, rows)
     expect(swapped.text).not.toBe('Corroborated by referee')
-    expect(swapped).toMatchObject({ text: 'Checked', tone: 'muted', caught: 0, checked: 1, tally: '0 caught of 1 checked' })
+    expect(swapped).toMatchObject({ text: 'Checked', tone: 'muted', caught: 0, checked: 1, tally: '0 caught · 1 checked' })
   })
 
   it('a peer is not marked as a referee by a verdict another node delivered', () => {

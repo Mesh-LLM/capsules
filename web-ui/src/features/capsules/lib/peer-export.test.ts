@@ -29,10 +29,10 @@ describe('peerRowsToCsv — exactly the columns on screen', () => {
           text: 'Contradicted by referee',
           checked: 3,
           caught: 1,
-          tally: '1 caught of 3 checked'
+          tally: '1 caught · 3 checked'
         }
       }
     }
-    expect(peerRowsToCsv([ruled])).toContain('Contradicted by referee (1 caught of 3 checked)')
+    expect(peerRowsToCsv([ruled])).toContain('Contradicted by referee (1 caught · 3 checked)')
   })
 })
