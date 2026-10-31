@@ -20,6 +20,20 @@
     commitment to the profile's digest (the profile holds the counterparty list in clear). `doctor` shows them with the profile's values.
   - With no profile, shipped caps apply as an outlier guard: 500,000 input and 1,500,000 output
     msat per million (`DEFAULT_RATE_CAPS`), 1000x mesh-llm's CLI default price.
+- **Admission's lists and base rows through capsule-engine's admission evaluator (#178).** The
+  allow and deny lists (#55) and the five base rows (#64) are decided by
+  `capsule_engine::admission` (`capsule-engine` crate, now pinned at c770138) under a base pack
+  the plugin ships, `asg/mesh_admission_base/1.0.0` (`policies/admission/mesh-base/`, embedded and
+  pinned by its definition digest), not by a second evaluator here. The pack yields GO and NO only:
+  the lists are its two NO rows and the five rows are recorded and decide nothing, with today's ids
+  and thresholds. Every verdict and `source` is the one the lists gave before, and the price rule
+  still runs after them.
+  - Each sealed row gains the evaluator's `effect` and, for the three rows from this node's own
+    book, `count` and `denominator` (the peer's exchanges, or the verdicts in the 30-day period).
+    `reads` gains a `terms_pack` entry with `role: "base"` citing the pack and its definition
+    digest; the price rule's entry now says `role: "price"`.
+  - A verified card whose first checkpoint does not parse now records `key_age` as `fail` (the
+    evaluator reads it as showing no age), where it read `not_read`.
 
 ## 0.1.6
 

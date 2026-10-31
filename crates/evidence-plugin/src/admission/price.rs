@@ -193,13 +193,15 @@ impl PriceRule {
         })
     }
 
-    /// The pack the rule runs, as a decision cites it. The profile is cited
+    /// The pack the rule runs, as a decision cites it (`role: "price"`, beside
+    /// the base pack's `role: "base"`). The profile is cited
     /// by `sha256(salt || profile digest)`: its digest is over the
     /// counterparty list in clear, so a clear digest would let a reader
     /// confirm a guessed list (the same reason #55 commits to its lists).
     pub fn reads(&self, salt: &[u8; 32]) -> Value {
         json!({
             "kind": "terms_pack",
+            "role": "price",
             "pack": self.engine.pack_id(),
             "definition_digest": {"alg": "SHA-256", "digest": self.engine.definition_digest()},
             "profile": self.profile_digest.as_ref().map(|d| json!({

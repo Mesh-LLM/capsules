@@ -1,0 +1,94 @@
+# mesh_admission_base@1 -- the Mesh capsules plugin's base admission pack
+# (#178 part 1), in evidencebook-skills' admission pack profile v0
+# (docs/admission-pack-profile-v0.md). The plugin embeds the compiled
+# pack-definition.json beside this file and pins its digest
+# (crates/evidence-plugin/src/admission/base.rs); see README.md here for how
+# to recompile.
+#
+# It is base/1 (#55, #64) as a pack, decided by capsule-engine's admission
+# evaluator: the operator's lists decide NO, and the five base rows are read
+# and sealed with the decision but decide nothing (Steven, 10-29: u126, u137).
+# A NO comes only from the operator's lists here, and from the price rule
+# (#105) after them in the plugin.
+#
+# The pack yields GO and NO only, and missing is NO. So nothing else may reach
+# the missing default:
+#   - the plugin always passes the deal as amount "0" msat, a free deal in T0,
+#     never an empty or unreadable amount;
+#   - T0 is as wide as the profile allows (max_decade 60), so no deal is
+#     above_tier;
+#   - the operator rows never read not_read: no deny list denies no one, and
+#     no allow list kept refuses no one.
+#
+# Thresholds are base/1's placeholders, the constants in base.rs. Outcomes are
+# quoted: YAML 1.1 reads a plain NO as false.
+pack_id: asg/mesh_admission_base/1.0.0
+pack_version: 1.0.0
+scope:
+  kind: admission
+source: "Mesh-LLM/capsules-plugin#178; base/1 (#55, #64); Steven 10-29 u126, u137"
+
+outcomes: ["GO", "NO"]
+missing: "NO"
+
+accept:
+  msat: {band: sat, scale: -3}
+
+tiers:
+  - id: T0
+    max_decade: {sat: 60}
+
+budget:
+  max_asks: 0
+  deadline_s: 86400
+
+rows:
+  # The operator's lists (#55). Deny wins over allow: the deny row comes
+  # first, and the first failing NO row is the decision's source.
+  - id: deny_list
+    statement: The peer is not on the operator's deny list.
+    source: operator
+    check: operator.not_deny_listed
+    from: T0
+    on_fail: "NO"
+  - id: allow_list
+    statement: When the operator admits only listed peers, the peer is on the allow list.
+    source: operator
+    check: operator.allow_listed
+    from: T0
+    on_fail: "NO"
+  # The five base rows (#64), recorded and deciding nothing.
+  - id: identity
+    statement: The peer's history card verifies under the record key it announces now.
+    source: card
+    check: card.verified
+    from: T0
+    on_fail: "record"
+  - id: key_age
+    statement: The card's first checkpoint is at least 7 days old.
+    source: card
+    check: card.key_age
+    params: {min_days: 7}
+    from: T0
+    on_fail: "record"
+  - id: performed_and_settled
+    statement: This node's own book holds at least 1 exchange with the peer that reads settled.
+    source: own_history
+    check: own.settled
+    params: {min: 1}
+    from: T0
+    on_fail: "record"
+  - id: disputes
+    statement: No adjudication this node holds about the peer went against it in the last 30 days.
+    source: own_history
+    check: own.no_adverse_adjudication
+    params: {window_days: 30}
+    from: T0
+    on_fail: "record"
+  - id: corroboration
+    statement: This node holds the peer's pushed half of at least 1 exchange.
+    source: own_history
+    check: own.held_halves
+    params: {min: 1}
+    from: T0
+    on_fail: "record"

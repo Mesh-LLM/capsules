@@ -25,6 +25,17 @@
 //! for in the background, and its rows read `not_read` until it comes. Every
 //! threshold is a placeholder, fixed here and cited by the policy digest.
 //!
+//! The rows are decided by capsule-engine's admission evaluator
+//! (`capsule_engine::admission`, #178), never by a second evaluator here,
+//! under the Mesh base pack this plugin ships
+//! (`policies/admission/mesh-base/`): the operator's lists as its two NO rows,
+//! then these five as `record` rows, each with today's id and threshold. This
+//! module gathers what the rows read and hands it to the evaluator as
+//! `Inputs`. The pack yields GO and NO only and its missing default is NO, so
+//! nothing but a list may reach NO: the deal is always passed as
+//! [`DEAL_AMOUNT`] [`DEAL_CURRENCY`] (free, in the one tier), the tier is as
+//! wide as the profile allows, and an operator row never reads `not_read`.
+//!
 //! Nothing here is read while a request waits: the card comes from a
 //! background ask ([`Base::start`]), and the three local rows from a snapshot
 //! a background refresh recomputes from this node's own chain every
@@ -32,9 +43,10 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
+use capsule_engine::admission as engine;
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
@@ -47,6 +59,42 @@ const CARD_TTL: Duration = Duration::from_secs(24 * 3600);
 /// The least time between two asks of one peer.
 const ASK_RETRY: Duration = Duration::from_secs(3600);
 pub const REFRESH: Duration = Duration::from_secs(60);
+
+/// The base pack this plugin ships, as a decision cites it.
+pub const PACK_ID: &str = "asg/mesh_admission_base/1.0.0";
+/// The SHA-256 of [`DEFINITION`]. Recompiling the pack changes it, and the
+/// pinned load then fails until this is updated with it
+/// (`policies/admission/mesh-base/README.md`).
+pub const DEFINITION_DIGEST: &str =
+    "d7cdf88f0c6c401ad35039a10686f1b68adf08334c1bf04bd419302caf31b09b";
+/// The pack's compiled `pack-definition.json`, embedded as committed.
+pub const DEFINITION: &[u8] =
+    include_bytes!("../../../../policies/admission/mesh-base/pack-definition.json");
+
+/// The deal every decision passes: admission is asked before an attempt and
+/// knows no amount, so the deal is free, which sits in the pack's one tier.
+/// Never empty: a missing amount would reach the pack's missing default, NO.
+pub const DEAL_AMOUNT: &str = "0";
+/// A currency the pack's `accept` names.
+pub const DEAL_CURRENCY: &str = "msat";
+
+/// The base pack, loaded once from [`DEFINITION`] and pinned by
+/// [`PACK_ID`] and [`DEFINITION_DIGEST`]. A file that changed without its
+/// digest fails loudly; a test loads it.
+pub fn pack() -> &'static engine::Pack {
+    static PACK: LazyLock<engine::Pack> = LazyLock::new(|| {
+        engine::Pack::load_pinned(DEFINITION, PACK_ID, DEFINITION_DIGEST)
+            .unwrap_or_else(|error| panic!("the embedded base pack does not load: {error}"))
+    });
+    &PACK
+}
+
+/// `at` as the evaluator's instant, to the nanosecond.
+fn timestamp(at: DateTime<Utc>) -> engine::Timestamp {
+    engine::Timestamp::from_unix_nanos(
+        i128::from(at.timestamp()) * 1_000_000_000 + i128::from(at.timestamp_subsec_nanos()),
+    )
+}
 
 /// The thresholds, as the policy digest covers them.
 pub fn thresholds() -> Value {
@@ -74,11 +122,11 @@ impl RowResult {
         }
     }
 
-    fn of(pass: bool) -> Self {
-        if pass {
-            Self::Pass
-        } else {
-            Self::Fail
+    fn from_status(status: engine::RowStatus) -> Self {
+        match status {
+            engine::RowStatus::Pass => Self::Pass,
+            engine::RowStatus::Fail => Self::Fail,
+            engine::RowStatus::NotRead => Self::NotRead,
         }
     }
 }
@@ -134,11 +182,27 @@ pub struct LocalFacts {
     pub adverse: usize,
 }
 
+/// What the evaluator reads beside [`LocalFacts`] for one peer: the
+/// denominator and each verdict's time, which it windows itself.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Book {
+    /// Distinct exchanges with the peer in this node's own book, settled or
+    /// not.
+    pub exchanges: usize,
+    /// Each verdict about the peer this node holds, as [`LocalFacts::verdicts`]
+    /// counts them: its sealed time (`None` when it does not read, which
+    /// counts as in the period) and whether it is adverse.
+    pub verdicts: Vec<(Option<DateTime<Utc>>, bool)>,
+}
+
 /// The local rows' inputs from one read of this node's chain.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Facts {
     /// Per peer node id (lowercase): settled exchanges and adverse verdicts.
     pub by_peer: HashMap<String, LocalFacts>,
+    /// Per peer node id (lowercase): the exchange count and the verdicts'
+    /// times.
+    pub books: HashMap<String, Book>,
     /// The halves held, by the key the receiver verified each under
     /// (`sender_key_id`). A receiver records no transport-attested node id
     /// (`record_push_bridge`), so a half is the peer's when its key is the
@@ -152,6 +216,8 @@ pub struct Read {
     pub rows: [RowResult; 5],
     /// The card cited: `Some(artifact digest)` when one was read.
     pub card: Option<String>,
+    /// The evaluator's decision under the base pack, its rows included.
+    pub decision: engine::Decision,
 }
 
 pub struct Base {
@@ -173,15 +239,24 @@ impl Base {
         }
     }
 
-    /// The rows for `peer` (a lowercase 64-hex node id) at `now`, queueing an
-    /// ask of its card when one is due.
-    pub fn read(&self, peer: &str, at: Instant, now: DateTime<Utc>) -> Read {
+    /// The rows for `peer` (a lowercase 64-hex node id) at `now`, and the base
+    /// pack's decision with `operator`'s lists, queueing an ask of its card
+    /// when one is due.
+    pub fn read(
+        &self,
+        peer: &str,
+        operator: engine::Operator,
+        at: Instant,
+        now: DateTime<Utc>,
+    ) -> Read {
         let registry = crate::peer_keys::registry();
         let key = crate::peer_keys::announced_key_in(registry.as_deref(), peer);
-        self.read_with_key(peer, key.as_deref(), at, now)
+        self.read_with(peer, key.as_deref(), operator, at, now)
     }
 
-    /// [`Base::read`] with `key`, the peer's announced record key now.
+    /// [`Base::read`] with `key`, the peer's announced record key now, and no
+    /// list.
+    #[cfg(test)]
     fn read_with_key(
         &self,
         peer: &str,
@@ -189,9 +264,21 @@ impl Base {
         at: Instant,
         now: DateTime<Utc>,
     ) -> Read {
+        self.read_with(peer, key, engine::Operator::default(), at, now)
+    }
+
+    /// [`Base::read`] with `key`, the peer's announced record key now.
+    fn read_with(
+        &self,
+        peer: &str,
+        key: Option<&str>,
+        operator: engine::Operator,
+        at: Instant,
+        now: DateTime<Utc>,
+    ) -> Read {
         let key = key.map(str::to_ascii_lowercase);
-        let (card, card_rows) = self.card_rows(peer, key.as_deref(), at, now);
-        let local = self
+        let (card, card_input) = self.card(peer, key.as_deref(), at);
+        let own = self
             .facts
             .read()
             .expect("the facts lock is never poisoned")
@@ -201,37 +288,33 @@ impl Base {
                 if let Some(halves) = key.as_ref().and_then(|key| facts.halves_by_key.get(key)) {
                     local.held_halves += halves.len();
                 }
-                local
+                own_history(&local, facts.books.get(peer), now)
             });
-        let local_row = |pass: fn(&LocalFacts) -> bool| {
-            local
-                .as_ref()
-                .map_or(RowResult::NotRead, |facts| RowResult::of(pass(facts)))
-        };
-        let rows = [
-            card_rows[0],
-            card_rows[1],
-            local_row(|f| f.settled >= MIN_SETTLED),
-            // No verdict about the peer at all is not "checked, clean".
-            match local.as_ref() {
-                Some(facts) if facts.verdicts > 0 => RowResult::of(facts.adverse == 0),
-                _ => RowResult::NotRead,
-            },
-            local_row(|f| f.held_halves >= MIN_HELD_HALVES),
-        ];
-        Read { rows, card }
+        let mut inputs = engine::Inputs::at(timestamp(now));
+        inputs.amount = DEAL_AMOUNT.into();
+        inputs.currency = DEAL_CURRENCY.into();
+        inputs.card = card_input;
+        inputs.own = own;
+        inputs.operator = operator;
+        let decision = engine::evaluate(pack(), &inputs);
+        let rows = ROWS.map(|id| {
+            decision
+                .rows
+                .iter()
+                .find(|row| row.row == id)
+                .map_or(RowResult::NotRead, |row| RowResult::from_status(row.result))
+        });
+        Read {
+            rows,
+            card,
+            decision,
+        }
     }
 
-    /// The identity and key-age rows, and the card cited. `key` is the
-    /// peer's announced record key now; a card read under another key is not
-    /// read.
-    fn card_rows(
-        &self,
-        peer: &str,
-        key: Option<&str>,
-        at: Instant,
-        now: DateTime<Utc>,
-    ) -> (Option<String>, [RowResult; 2]) {
+    /// The card the identity and key-age rows read, and the card cited.
+    /// `key` is the peer's announced record key now; a card read under
+    /// another key is not read.
+    fn card(&self, peer: &str, key: Option<&str>, at: Instant) -> (Option<String>, engine::Card) {
         let mut cards = self.cards.lock().expect("the card lock is never poisoned");
         let entry = cards.entry(peer.to_string()).or_default();
         // A new key starts over: neither an old card nor an old failure
@@ -263,19 +346,25 @@ impl Base {
             }
         }
         if let Some((card, _)) = &entry.card {
-            let key_age = card
-                .first_checkpoint_at
-                .map_or(RowResult::NotRead, |first| {
-                    RowResult::of(now - first >= chrono::Duration::days(KEY_AGE_DAYS))
-                });
             return (
                 Some(card.artifact_digest.clone()),
-                [RowResult::Pass, key_age],
+                engine::Card {
+                    state: engine::CARD_VERIFIED.into(),
+                    first_checkpoint_at: card.first_checkpoint_at.map(timestamp),
+                    ..engine::Card::default()
+                },
             );
         }
         match entry.last {
-            Some(CardOutcome::Unverifiable) => (None, [RowResult::Fail, RowResult::NotRead]),
-            _ => (None, [RowResult::NotRead; 2]),
+            Some(CardOutcome::Unverifiable) => (
+                None,
+                engine::Card {
+                    state: engine::CARD_UNVERIFIABLE.into(),
+                    ..engine::Card::default()
+                },
+            ),
+            // No card yet, or a refusal or silence: absent.
+            _ => (None, engine::Card::default()),
         }
     }
 
@@ -294,14 +383,24 @@ impl Base {
         entry.last = Some(outcome);
     }
 
+    /// Set `peer`'s local facts, with a book that agrees with them: every
+    /// verdict's time unread (in the period), and as many exchanges as the
+    /// larger of its settled and held counts.
     #[cfg(test)]
     pub fn set_facts_for_test(&self, peer: &str, facts: LocalFacts) {
-        self.facts
+        let book = Book {
+            exchanges: facts.settled.max(facts.held_halves),
+            verdicts: (0..facts.verdicts)
+                .map(|i| (None, i < facts.adverse))
+                .collect(),
+        };
+        let mut all = self
+            .facts
             .write()
-            .expect("the facts lock is never poisoned")
-            .get_or_insert_with(Facts::default)
-            .by_peer
-            .insert(peer.to_string(), facts);
+            .expect("the facts lock is never poisoned");
+        let all = all.get_or_insert_with(Facts::default);
+        all.by_peer.insert(peer.to_string(), facts);
+        all.books.insert(peer.to_string(), book);
     }
 
     /// Recompute the local rows' inputs from this node's own chain. A chain
@@ -449,18 +548,24 @@ pub fn local_facts(ledger_dir: &Path, now: DateTime<Utc>) -> Option<Facts> {
     let records = crate::evidence_panes::read_capsule_records(ledger_dir);
     let settled_ids = crate::evidence_panes::settled_exchange_ids(&records);
     let mut settled: HashMap<String, BTreeSet<String>> = HashMap::new();
+    let mut exchanges: HashMap<String, BTreeSet<String>> = HashMap::new();
     let mut facts = Facts::default();
     for record in &records {
         if let (Some(peer), Some(exchange)) = (
             crate::evidence_panes::full_counterparty_node_id(record),
             crate::evidence_panes::record_exchange_id(record),
         ) {
+            let peer = peer.to_ascii_lowercase();
             if settled_ids.contains(exchange) {
                 settled
-                    .entry(peer.to_ascii_lowercase())
+                    .entry(peer.clone())
                     .or_default()
                     .insert(exchange.to_string());
             }
+            exchanges
+                .entry(peer)
+                .or_default()
+                .insert(exchange.to_string());
         }
         if let Some((key, half)) = held_half(record) {
             facts.halves_by_key.entry(key).or_default().insert(half);
@@ -469,26 +574,58 @@ pub fn local_facts(ledger_dir: &Path, now: DateTime<Utc>) -> Option<Facts> {
     for (peer, exchanges) in settled {
         facts.by_peer.entry(peer).or_default().settled = exchanges.len();
     }
+    for (peer, exchanges) in exchanges {
+        facts.books.entry(peer).or_default().exchanges = exchanges.len();
+    }
     let period = chrono::Duration::days(DISPUTE_PERIOD_DAYS);
     let verdicts =
         crate::verdict_counts::fold(&records, &crate::verdict_counts::read_requested(ledger_dir));
     for (peer, verdicts) in verdicts {
-        // A verdict whose time doesn't read counts as in the period.
-        let adverse = verdicts
+        let peer = peer.to_ascii_lowercase();
+        let timed: Vec<(Option<DateTime<Utc>>, bool)> = verdicts
             .iter()
-            .filter(|v| v.bucket == crate::verdict_counts::CONTRADICTED)
-            .filter(|v| {
-                v.recorded_at
-                    .as_deref()
-                    .and_then(parse_minute)
-                    .is_none_or(|at| now - at <= period)
+            .map(|v| {
+                (
+                    v.recorded_at.as_deref().and_then(parse_minute),
+                    v.bucket == crate::verdict_counts::CONTRADICTED,
+                )
             })
+            .collect();
+        // A verdict whose time doesn't read counts as in the period.
+        let adverse = timed
+            .iter()
+            .filter(|(at, adverse)| *adverse && at.is_none_or(|at| now - at <= period))
             .count();
-        let facts = facts.by_peer.entry(peer.to_ascii_lowercase()).or_default();
-        facts.verdicts = verdicts.len();
-        facts.adverse = adverse;
+        let local = facts.by_peer.entry(peer.clone()).or_default();
+        local.verdicts = verdicts.len();
+        local.adverse = adverse;
+        facts.books.entry(peer).or_default().verdicts = timed;
     }
     Some(facts)
+}
+
+/// The evaluator's view of this node's own book with a peer. `book` carries
+/// the denominator and the verdicts' times; the evaluator windows the
+/// verdicts to the pack's `window_days`, which equals [`DISPUTE_PERIOD_DAYS`].
+/// As [`local_facts`] counts them, a verdict whose time does not read is in
+/// the period, and so is one stated after `now`: both are read at `now`.
+fn own_history(local: &LocalFacts, book: Option<&Book>, now: DateTime<Utc>) -> engine::OwnHistory {
+    let count = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
+    let book = book.cloned().unwrap_or_default();
+    engine::OwnHistory {
+        exchanges: count(book.exchanges),
+        settled: count(local.settled),
+        held_halves: count(local.held_halves),
+        conflicting: 0,
+        verdicts: book
+            .verdicts
+            .iter()
+            .map(|(at, adverse)| engine::AdjudicationVerdict {
+                at: timestamp(at.map_or(now, |at| at.min(now))),
+                adverse: *adverse,
+            })
+            .collect(),
+    }
 }
 
 /// `(the key the half verified under, the half's capsule id)` from a citing
