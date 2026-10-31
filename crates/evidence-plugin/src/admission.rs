@@ -1211,4 +1211,17 @@ mod tests {
         );
         assert!(!text.contains(ALLOWED));
     }
+
+    #[test]
+    fn no_price_on_a_request_with_no_model_is_not_free() {
+        // mesh-llm#2742: the no-model fallback never prices its pick.
+        let (admission, _capsules, _dir) = priced_admission(Some(CAPS), true);
+        let mut event = priced(&remote(STRANGER), None);
+        event["model"] = Value::Null;
+        let answer = admission.answer(&event);
+        assert_eq!(
+            answer.reason.as_deref(),
+            Some("admission NO (price_rule: rate_cap)")
+        );
+    }
 }

@@ -7,7 +7,8 @@
 //! The rates are the ones the host routed on: mesh-llm puts the selected
 //! peer's `Pricing` on the `backend_selected` event as `pricing`, and says so
 //! by listing [`PRICING_CAPABILITY`]. With the capability, an event without
-//! `pricing` is a free route, rates 0. Without it the host never sends a
+//! `pricing` is a free route, rates 0, unless it names no model: the host's
+//! no-model fallback never prices its pick, so its rates are missing. Without it the host never sends a
 //! price, so a paid route cannot be told from a free one. Under the operator's
 //! own profile that is NO ([`Read::Unavailable`], fail closed). Under the
 //! shipped default alone, the pack is not run and the record says the price
@@ -228,6 +229,15 @@ impl PriceRule {
     ) -> Read {
         let (input, output) = if host_prices {
             match event.get("pricing") {
+                // No price on a request with no model is not "free": the
+                // host's no-model fallback never prices its pick
+                // (mesh-llm#2742), so the rates are missing and rate_cap
+                // refuses them.
+                None | Some(Value::Null)
+                    if event.get("model").and_then(Value::as_str).is_none() =>
+                {
+                    (None, None)
+                }
                 None | Some(Value::Null) => (Some(0), Some(0)),
                 Some(pricing) => (
                     pricing["input_msat_per_million"].as_u64(),
