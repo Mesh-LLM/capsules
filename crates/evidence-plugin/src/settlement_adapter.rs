@@ -552,7 +552,7 @@ pub fn check_exchange(exchange_id: &str, observations: &[&Observation]) -> Value
 pub fn report(
     records: impl IntoIterator<Item = Value>,
     exchange_id: Option<&str>,
-    counterparty: Option<Result<crate::settlement_counterparty::Verified, String>>,
+    counterparty: Option<Result<crate::settlement_counterparty::Books, String>>,
 ) -> Value {
     let mut settlement_records = 0u64;
     let mut unread = 0u64;
@@ -602,10 +602,7 @@ pub fn report(
             "no counterparty settlement bundle was given",
         ),
         Some(Err(why)) => crate::settlement_counterparty::not_run(Status::NotChecked, &why),
-        Some(Ok(verified)) => {
-            let own: Vec<&Observation> = by_exchange.values().flatten().collect();
-            crate::settlement_counterparty::cross_check(&own, &verified)
-        }
+        Some(Ok(books)) => crate::settlement_counterparty::cross_check(&books),
     };
     json!({
         "adapter": LIGHTNING_ADAPTER,
@@ -643,19 +640,13 @@ pub async fn handle(
     let configured = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
     let announced = crate::peer_keys::announced::snapshot();
     tokio::task::spawn_blocking(move || -> Result<Value, String> {
-        let own_key = hex::encode(capsules.signing_key().verifying_key().to_bytes());
         let counterparty = args.counterparty_bundle.as_ref().map(|bundle| {
-            crate::settlement_counterparty::verify(bundle, |key| {
-                crate::peer_keys::accepted_via(
-                    configured.as_deref(),
-                    &announced,
-                    key,
-                    &own_key,
-                    None,
-                    None,
-                )
-                .map(|accepted| accepted.peers)
-            })
+            crate::settlement_counterparty::books(
+                &capsules,
+                configured.as_deref(),
+                &announced,
+                bundle,
+            )
         });
         let mut records = Vec::new();
         for id in capsules.capsule_ids_in_order() {

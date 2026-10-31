@@ -3,28 +3,33 @@
 //! count of settlements a node discloses is checked against the other side's
 //! book instead.
 //!
-//! **The other side's half.** `GET settlement-bundle` gives this node's own
-//! terminal settlement records (`payment.lifecycle.v1`, either side) as an
-//! Evidence Bundle proven against one signed checkpoint, built by the same
-//! producer-selected builder as the receipt bundles
-//! ([`crate::deal_receipt::selected_bundle`]). Only terminal settlements are
-//! carried: no invoice, terms, accounting or exchange record. The route is
-//! the owner's; the owner hands the file to the counterparty.
+//! **The other side's half.** `GET settlement-bundle?peer=<id>` gives this
+//! node's own terminal settlement records (`payment.lifecycle.v1`, either
+//! side) for exchanges with that one peer, as an Evidence Bundle proven
+//! against one signed checkpoint, built by the same producer-selected builder
+//! as the receipt bundles ([`crate::deal_receipt::selected_bundle`]). Only
+//! terminal settlements are carried: no invoice, terms, accounting or
+//! exchange record, and nothing about payments with anyone else. A
+//! settlement belongs to the peer its exchange's record names
+//! ([`settlements_with`]). The route is the owner's; the owner hands the file
+//! to the counterparty, and it is never served to peers.
 //!
 //! **The check.** `settlement_check` given that bundle as
-//! `counterparty_bundle` verifies it (every record and the checkpoint signed
-//! by one key, accepted for a peer through [`crate::peer_keys::accepted_via`]
-//! and not this node's own; every record proven under the checkpoint), then
-//! pairs payment hashes across the two books with loop#183's rule
-//! (`steps/06-settle`, `crosscheck`): a hash pairs when all its payer
-//! observations are in one book with one `amount_msat`, all its provider
-//! observations are in the other with one `credited_msat + fee_msat`, and the
-//! two amounts are equal. Every other hash is unpaired, with its reason.
+//! `counterparty_bundle` verifies it strictly (every record and the
+//! checkpoint signed by one key, accepted for a peer through
+//! [`crate::peer_keys::accepted_via`] and not this node's own; every record
+//! proven under the checkpoint), takes this node's own settlements for
+//! exchanges with those peers, and pairs payment hashes across the two books
+//! with loop#183's rule (`steps/06-settle`, `crosscheck`): a hash pairs when
+//! all its payer observations are in one book with one `amount_msat`, all its
+//! provider observations are in the other with one
+//! `credited_msat + fee_msat`, and the two amounts are equal. Every other hash
+//! is unpaired, with its reason.
 //!
-//! A hash held in one book only is not a failure: either node may have paid
-//! a third party. Both books holding a hash and disagreeing about it is.
-//! `public_ledger_count` stays `NOT_CHECKED`; this result never stands in
-//! for it.
+//! Both books holding a hash and contradicting each other is `FAIL`. A hash
+//! in one book only, a settlement with no hash, or one of this node's that
+//! names no peer leaves the result `INCONCLUSIVE`. `public_ledger_count`
+//! stays `NOT_CHECKED`; this result never stands in for it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -38,22 +43,30 @@ use serde_json::{json, Map, Value};
 use crate::checkpoint_cadence::CheckpointHandle;
 use crate::deal_receipt::{selected_bundle, Error, Selection};
 use crate::evidence_log::{self, LedgerIndex};
-use crate::producer::capsule::SETTLEMENT_BLOCK_POINTER;
 use crate::settlement_adapter::{Kind, Observation, Side, Status};
 
 /// The method a `counterparty_count` result names.
 pub const METHOD: &str = "payment_hash pairs across the two books by role and amount (loop#183)";
 
-/// Whether `record` is a terminal settlement the bundle carries.
-fn is_terminal_settlement(record: &Value) -> bool {
-    Observation::from_lifecycle_record(record)
-        .is_some_and(|o| o.kind == Kind::Settlement && o.terminal)
+/// This node's terminal settlement records for exchanges with `peers`, in
+/// log order.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Attributed {
+    pub ids: Vec<String>,
+    /// Terminal settlements whose exchange names no counterparty this node
+    /// can read, so they belong to no peer: never carried, and they keep a
+    /// cross-check from passing.
+    pub unattributed: u64,
 }
 
-/// The capsule ids of this node's terminal settlement records, in log order.
-fn settlement_ids(index: &LedgerIndex) -> std::io::Result<Vec<String>> {
+/// A settlement names its exchange by the host's `exchange_id`; the
+/// exchange's own record, correlated under the same id, names the peer
+/// (`Leaf::counterparty`). A settlement for another peer's exchange is
+/// neither carried nor counted, so a bundle never shows a counterparty this
+/// node's payments with anyone else.
+pub fn settlements_with(index: &LedgerIndex, peers: &[String]) -> std::io::Result<Attributed> {
     let view = index.view()?;
-    let mut ids = Vec::new();
+    let mut out = Attributed::default();
     for (i, leaf) in index.leaves.iter().enumerate() {
         if leaf.padding {
             continue;
@@ -64,11 +77,24 @@ fn settlement_ids(index: &LedgerIndex) -> std::io::Result<Vec<String>> {
         let Ok(capsule) = serde_json::from_slice::<Value>(&record.body) else {
             continue;
         };
-        if capsule.pointer(SETTLEMENT_BLOCK_POINTER).is_some() && is_terminal_settlement(&capsule) {
-            ids.push(record.digest);
+        let Some(observation) = Observation::from_lifecycle_record(&capsule)
+            .filter(|o| o.kind == Kind::Settlement && o.terminal)
+        else {
+            continue;
+        };
+        let named: BTreeSet<&str> = index
+            .correlated(&observation.exchange_id)
+            .iter()
+            .filter_map(|&j| index.leaves.get(usize::try_from(j).ok()?))
+            .filter_map(|l| l.counterparty.as_deref())
+            .collect();
+        if named.is_empty() {
+            out.unattributed += 1;
+        } else if named.iter().any(|p| peers.iter().any(|want| want == p)) {
+            out.ids.push(record.digest);
         }
     }
-    Ok(ids)
+    Ok(out)
 }
 
 /// Why no bundle is given.
@@ -81,7 +107,9 @@ pub enum Refusal {
 impl Refusal {
     fn why(&self) -> &'static str {
         match self {
-            Refusal::NoSettlement => "this node holds no terminal settlement record",
+            Refusal::NoSettlement => {
+                "this node holds no terminal settlement record for an exchange with that peer"
+            }
             Refusal::NotCheckpointed => "no signed checkpoint covers the records yet",
         }
     }
@@ -102,21 +130,32 @@ impl From<Error> for Failure {
     }
 }
 
-/// This node's terminal settlement records as a producer-selected bundle.
-pub fn bundle(ledger_dir: &Path, node_key_id: &str) -> Result<Value, Failure> {
-    let unreadable =
-        |e: std::io::Error| Failure::Failed(format!("the ledger is not readable: {e}"));
+fn unreadable(e: std::io::Error) -> Failure {
+    Failure::Failed(format!("the ledger is not readable: {e}"))
+}
+
+/// The terminal settlements for exchanges with `peer`, chosen once so the
+/// checkpoint cut for them and the bundle built over them are the same set.
+pub fn select(ledger_dir: &Path, node_key_id: &str, peer: &str) -> Result<Attributed, Failure> {
     evidence_log::with_index(ledger_dir, node_key_id, |index| {
-        let ids = settlement_ids(index).map_err(unreadable)?;
-        let Some(root) = ids.last().cloned() else {
-            return Err(Failure::Refused(Refusal::NoSettlement));
-        };
+        settlements_with(index, &[peer.to_string()]).map_err(unreadable)
+    })
+    .map_err(unreadable)?
+}
+
+/// `ids` as a producer-selected bundle, proven against the earliest
+/// checkpoint that reaches them all.
+pub fn bundle(ledger_dir: &Path, node_key_id: &str, ids: &[String]) -> Result<Value, Failure> {
+    let Some(root) = ids.last().cloned() else {
+        return Err(Failure::Refused(Refusal::NoSettlement));
+    };
+    evidence_log::with_index(ledger_dir, node_key_id, |index| {
         Ok(selected_bundle(
             index,
             node_key_id,
             Selection {
                 root: &root,
-                ids: &ids,
+                ids,
                 disclosures: BTreeMap::new(),
                 extensions: Map::new(),
             },
@@ -125,26 +164,20 @@ pub fn bundle(ledger_dir: &Path, node_key_id: &str) -> Result<Value, Failure> {
     .map_err(unreadable)?
 }
 
-pub fn answer(ledger_dir: &Path, node_key_id: &str) -> Result<Value, String> {
-    match bundle(ledger_dir, node_key_id) {
+pub fn answer(ledger_dir: &Path, node_key_id: &str, ids: &[String]) -> Result<Value, String> {
+    match bundle(ledger_dir, node_key_id, ids) {
         Ok(bundle) => Ok(json!({"state": "bundle", "bundle": bundle})),
         Err(Failure::Refused(r)) => Ok(json!({"state": "refused", "why": r.why()})),
         Err(Failure::Failed(why)) => Err(why),
     }
 }
 
-/// The last terminal settlement this node sealed, which a covering
-/// checkpoint must reach.
-fn last_settlement(ledger_dir: &Path, node_key_id: &str) -> Option<String> {
-    evidence_log::with_index(ledger_dir, node_key_id, |index| {
-        settlement_ids(index).ok()?.pop()
-    })
-    .ok()
-    .flatten()
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SettlementBundleArgs {
+    /// The counterparty's peer id: only settlements for exchanges with it
+    /// are carried.
+    pub peer: Value,
 }
-
-#[derive(Debug, Default, Deserialize, JsonSchema)]
-pub struct SettlementBundleArgs {}
 
 pub fn with_route(
     builder: DeclarativePluginBuilder,
@@ -155,28 +188,49 @@ pub fn with_route(
         http::get("/settlement-bundle")
             .binding_id("evidence_settlement_bundle")
             .description(
-                "This node's own terminal Lightning settlement records, proven against a signed \
-                 checkpoint, for a counterparty's settlement_check to cross-check its count \
-                 against. Cuts a signed checkpoint when none covers the records yet.",
+                "This node's own terminal Lightning settlement records for exchanges with one \
+                 peer, proven against a signed checkpoint, for that peer's settlement_check to \
+                 cross-check its count against. Owner-only; the owner hands it over. Cuts a \
+                 signed checkpoint when none covers the records yet.",
             )
             .input::<SettlementBundleArgs>()
-            .handle(move |_args, _context| {
+            .handle(move |args, _context| {
                 let capsules = capsules.clone();
                 let checkpoints = checkpoints.clone();
                 Box::pin(async move {
+                    let Some(peer) = args
+                        .peer
+                        .as_str()
+                        .filter(|s| !s.is_empty() && s.len() <= 256)
+                        .map(str::to_string)
+                    else {
+                        return Err(PluginError::invalid_params(
+                            "peer must be a non-empty string",
+                        ));
+                    };
                     let ledger_dir = capsules.ledger_dir().to_path_buf();
                     let node_key_id = crate::commitment::key_id(capsules.signing_key());
-                    let last = {
+                    let selected = {
                         let (dir, key) = (ledger_dir.clone(), node_key_id.clone());
-                        tokio::task::spawn_blocking(move || last_settlement(&dir, &key))
+                        tokio::task::spawn_blocking(move || select(&dir, &key, &peer))
                             .await
-                            .ok()
-                            .flatten()
+                            .map_err(|e| {
+                                PluginError::internal(format!(
+                                    "settlement bundle task did not complete: {e}"
+                                ))
+                            })?
                     };
-                    if let (Some(handle), Some(last)) = (checkpoints.as_ref(), last) {
-                        let _ = handle.coverage_for(&last).await;
+                    let ids = match selected {
+                        Ok(a) => a.ids,
+                        Err(Failure::Refused(r)) => {
+                            return Ok(json!({"state": "refused", "why": r.why()}))
+                        }
+                        Err(Failure::Failed(why)) => return Err(PluginError::internal(why)),
+                    };
+                    if let (Some(handle), Some(last)) = (checkpoints.as_ref(), ids.last()) {
+                        let _ = handle.coverage_for(last).await;
                     }
-                    tokio::task::spawn_blocking(move || answer(&ledger_dir, &node_key_id))
+                    tokio::task::spawn_blocking(move || answer(&ledger_dir, &node_key_id, &ids))
                         .await
                         .map_err(|error| {
                             PluginError::internal(format!(
@@ -249,6 +303,52 @@ pub fn verify(
     })
 }
 
+/// Both books, ready to pair: the counterparty's verified one, and this
+/// node's terminal settlements for exchanges with that counterparty.
+pub struct Books {
+    pub counterparty: Verified,
+    pub own: Vec<Observation>,
+    /// This node's terminal settlements it cannot attribute to any peer.
+    pub own_unattributed: u64,
+}
+
+/// Verify `bundle` as the counterparty's, its key accepted the way every
+/// peer key is ([`crate::peer_keys::accepted_via`]: never this node's own),
+/// and gather this node's settlements for exchanges with the peers that key
+/// is accepted for.
+pub fn books(
+    capsules: &crate::capsule_emit::CapsuleState,
+    configured: Option<&str>,
+    announced: &BTreeMap<String, String>,
+    bundle: &Value,
+) -> Result<Books, String> {
+    let own_key = hex::encode(capsules.signing_key().verifying_key().to_bytes());
+    let counterparty = verify(bundle, |key| {
+        crate::peer_keys::accepted_via(configured, announced, key, &own_key, None, None)
+            .map(|accepted| accepted.peers)
+    })?;
+    let node_key_id = crate::commitment::key_id(capsules.signing_key());
+    let attributed = evidence_log::with_index(capsules.ledger_dir(), &node_key_id, |index| {
+        settlements_with(index, &counterparty.peers)
+    })
+    .and_then(|r| r)
+    .map_err(|e| format!("the ledger is not readable: {e}"))?;
+    let mut own = Vec::new();
+    for id in &attributed.ids {
+        let entry = capsules
+            .lookup(id)
+            .map_err(|e| format!("the ledger could not be read: {e}"))?;
+        if let Some(o) = entry.and_then(|e| Observation::from_lifecycle_record(&e.capsule)) {
+            own.push(o);
+        }
+    }
+    Ok(Books {
+        counterparty,
+        own,
+        own_unattributed: attributed.unattributed,
+    })
+}
+
 /// Which book an observation is from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Book {
@@ -265,98 +365,110 @@ impl Book {
     }
 }
 
-/// Pair payment hashes across the two books (loop#183's rule).
-pub fn cross_check(own: &[&Observation], counterparty: &Verified) -> Value {
-    let mut by_hash: BTreeMap<&str, Vec<(Book, &Observation)>> = BTreeMap::new();
-    for o in own
-        .iter()
-        .copied()
-        .filter(|o| o.kind == Kind::Settlement && o.terminal)
-    {
-        if let Some(h) = o.payment_hash.as_deref() {
-            by_hash.entry(h).or_default().push((Book::Own, o));
+/// One payment hash's verdict across the two books: paired, unpaired with
+/// a reason, and whether the books contradict each other.
+fn pair(seen: &[(Book, &Observation)]) -> Option<(String, bool)> {
+    let books: BTreeSet<Book> = seen.iter().map(|(b, _)| *b).collect();
+    if books.len() < 2 {
+        let only = books.iter().next().map_or("", |b| b.wire());
+        return Some((format!("recorded by {only} only"), false));
+    }
+    let mut payers: BTreeSet<(Book, u64)> = BTreeSet::new();
+    let mut payees: BTreeSet<(Book, u64)> = BTreeSet::new();
+    let mut incomplete = false;
+    for (book, o) in seen {
+        match o.side {
+            Side::Payer => {
+                payers.insert((*book, o.amount_msat));
+            }
+            Side::Provider => match o
+                .credited_msat
+                .zip(o.fee_msat)
+                .and_then(|(c, f)| c.checked_add(f))
+            {
+                Some(sum) => {
+                    payees.insert((*book, sum));
+                }
+                None => incomplete = true,
+            },
         }
     }
-    for o in counterparty.observations.iter() {
-        if let Some(h) = o.payment_hash.as_deref() {
-            by_hash.entry(h).or_default().push((Book::Counterparty, o));
+    let payer_books: BTreeSet<Book> = payers.iter().map(|(b, _)| *b).collect();
+    let payee_books: BTreeSet<Book> = payees.iter().map(|(b, _)| *b).collect();
+    let payer_amounts: BTreeSet<u64> = payers.iter().map(|(_, a)| *a).collect();
+    let payee_amounts: BTreeSet<u64> = payees.iter().map(|(_, a)| *a).collect();
+    // A contradiction among the complete observations stands whatever an
+    // incomplete one would have said.
+    if payer_books.len() > 1
+        || payee_books.len() > 1
+        || (!payer_books.is_empty() && payer_books == payee_books)
+    {
+        return Some((
+            "both books observed the same role: one book of each role is needed".into(),
+            true,
+        ));
+    }
+    if !payers.is_empty()
+        && !payees.is_empty()
+        && (payer_amounts.len() > 1 || payee_amounts.len() > 1 || payer_amounts != payee_amounts)
+    {
+        return Some((
+            format!(
+                "conflicting amounts: payer {payer_amounts:?}, provider credited plus fee {payee_amounts:?}"
+            ),
+            true,
+        ));
+    }
+    if incomplete {
+        return Some((
+            "a provider observation has no wallet-reported credited_msat and fee_msat".into(),
+            false,
+        ));
+    }
+    None
+}
+
+/// Pair payment hashes across the two books (loop#183's rule). A settlement
+/// with no payment hash cannot be paired, and a settlement of this node's
+/// that names no peer cannot be scoped: either keeps the result from `PASS`.
+pub fn cross_check(books: &Books) -> Value {
+    let mut by_hash: BTreeMap<&str, Vec<(Book, &Observation)>> = BTreeMap::new();
+    let mut hashless: BTreeMap<Book, u64> =
+        BTreeMap::from([(Book::Own, 0), (Book::Counterparty, 0)]);
+    let tagged = books
+        .own
+        .iter()
+        .map(|o| (Book::Own, o))
+        .chain(
+            books
+                .counterparty
+                .observations
+                .iter()
+                .map(|o| (Book::Counterparty, o)),
+        )
+        .filter(|(_, o)| o.kind == Kind::Settlement && o.terminal);
+    for (book, o) in tagged {
+        match o.payment_hash.as_deref() {
+            Some(h) => by_hash.entry(h).or_default().push((book, o)),
+            None => *hashless.entry(book).or_default() += 1,
         }
     }
     let mut paired = 0u64;
     let mut unpaired = Vec::new();
     let mut conflicting = false;
     for (hash, seen) in &by_hash {
-        let books: BTreeSet<Book> = seen.iter().map(|(b, _)| *b).collect();
-        let mut payers: BTreeSet<(Book, u64)> = BTreeSet::new();
-        let mut payees: BTreeSet<(Book, u64)> = BTreeSet::new();
-        let mut malformed: BTreeSet<Book> = BTreeSet::new();
-        for (book, o) in seen {
-            match (o.side, o.credited_msat, o.fee_msat) {
-                (Side::Payer, ..) => {
-                    payers.insert((*book, o.amount_msat));
-                }
-                (Side::Provider, Some(credited), Some(fee)) => match credited.checked_add(fee) {
-                    Some(sum) => {
-                        payees.insert((*book, sum));
-                    }
-                    None => {
-                        malformed.insert(*book);
-                    }
-                },
-                (Side::Provider, ..) => {
-                    malformed.insert(*book);
-                }
-            }
-        }
-        let payer_books: BTreeSet<Book> = payers.iter().map(|(b, _)| *b).collect();
-        let payee_books: BTreeSet<Book> = payees.iter().map(|(b, _)| *b).collect();
-        let payer_amounts: BTreeSet<u64> = payers.iter().map(|(_, a)| *a).collect();
-        let payee_amounts: BTreeSet<u64> = payees.iter().map(|(_, a)| *a).collect();
-        let (reason, conflict) = if books.len() < 2 {
-            let only = books.iter().next().map_or("", |b| b.wire());
-            (Some(format!("recorded by {only} only")), false)
-        } else if !malformed.is_empty() {
-            (
-                Some(
-                    "a provider observation has no wallet-reported credited_msat and fee_msat"
-                        .to_string(),
-                ),
-                false,
-            )
-        } else if payers.is_empty() || payees.is_empty() {
-            (
-                Some("no payer observation or no provider observation, with amounts".to_string()),
-                true,
-            )
-        } else if payer_books.len() > 1 || payee_books.len() > 1 || payer_books == payee_books {
-            (
-                Some("both books observed the same role: one book of each role is needed".into()),
-                true,
-            )
-        } else if payer_amounts.len() > 1
-            || payee_amounts.len() > 1
-            || payer_amounts != payee_amounts
-        {
-            (
-                Some(format!(
-                    "conflicting amounts: payer {payer_amounts:?}, provider credited plus fee {payee_amounts:?}"
-                )),
-                true,
-            )
-        } else {
-            (None, false)
-        };
-        match reason {
+        match pair(seen) {
             None => paired += 1,
-            Some(reason) => {
+            Some((reason, conflict)) => {
                 conflicting |= conflict;
                 unpaired.push(json!({"payment_hash": hash, "reason": reason}));
             }
         }
     }
+    let uncheckable = hashless.values().sum::<u64>() + books.own_unattributed;
     let status = if conflicting {
         Status::Fail
-    } else if unpaired.is_empty() && paired > 0 {
+    } else if unpaired.is_empty() && uncheckable == 0 && paired > 0 {
         Status::Pass
     } else {
         Status::Inconclusive
@@ -364,10 +476,15 @@ pub fn cross_check(own: &[&Observation], counterparty: &Verified) -> Value {
     json!({
         "status": status.wire(),
         "method": METHOD,
-        "counterparty_key": counterparty.key_id,
-        "counterparty_peers": counterparty.peers,
+        "counterparty_key": books.counterparty.key_id,
+        "counterparty_peers": books.counterparty.peers,
         "paired": paired,
         "unpaired": unpaired,
+        "settlements_without_payment_hash": {
+            "this_node": hashless[&Book::Own],
+            "counterparty": hashless[&Book::Counterparty],
+        },
+        "settlements_unattributed": books.own_unattributed,
     })
 }
 

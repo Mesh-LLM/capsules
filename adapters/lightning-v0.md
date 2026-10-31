@@ -154,20 +154,30 @@ party that maps currencies does so with its own pinned table.
 - **What the count cannot catch alone:** a node that never seals a settlement. The independent
   cross-check is the counterparty's book, `counterparty_count`, below.
 - **`counterparty_count`** checks this node's terminal settlements against the counterparty's.
-  The counterparty gives its own terminal settlement records from its owner-only
-  `settlement-bundle` route: an Evidence Bundle, producer-selected, proven against one checkpoint
-  it signed, carrying no invoice, terms or exchange record. `settlement_check` takes it as
-  `counterparty_bundle` and uses it only when it verifies strictly (every record signed, the
-  checkpoint signed and authenticated, every record proven under it, every record under the
-  checkpoint's key) and its key is accepted for a peer and is not this node's own. Hashes then pair
-  under loop#183's rule: a hash pairs when all its payer observations are in one book with one
-  `amount_msat`, all its provider observations are in the other with one
+  The counterparty gives its own terminal settlement records for exchanges with this node from its
+  owner-only `settlement-bundle?peer=<this node's peer id>` route. It is an Evidence Bundle,
+  producer-selected and proven against one checkpoint it signed. It carries no invoice, terms or
+  exchange record, and nothing about payments with anyone else: a settlement belongs to the peer
+  its exchange's record names. The route is never served to peers; the owner hands the file over.
+  `settlement_check` takes it as `counterparty_bundle` and uses it only when it verifies strictly:
+  every record is signed, the checkpoint is signed and authenticated, every record is proven under
+  it, and every record is under the checkpoint's key. That key must also be accepted for a peer
+  and not be this node's own. This node's side is its own settlements for exchanges with those
+  peers. Hashes then pair under loop#183's rule: a hash pairs when all its payer observations are
+  in one book with one `amount_msat`, all its provider observations are in the other with one
   `credited_msat + fee_msat`, and the two amounts are equal. Every other hash is listed in
-  `unpaired` with its reason. The result is `FAIL` when both books hold a hash and disagree about
-  it (role or amount), `PASS` when every hash pairs, and `INCONCLUSIVE` otherwise: a hash in one
-  book only may be a payment to a third node, so it is never a failure. It is `NOT_PRESENT` with
-  no bundle and `NOT_CHECKED` with a bundle that does not verify, with the reason. It names the
-  counterparty's key and the peers it is accepted for. It never stands in for
+  `unpaired` with its reason.
+  - `FAIL`: both books hold a hash and the complete observations contradict each other (the same
+    role in both books, or different amounts). A provider observation without the wallet's numbers
+    never hides such a contradiction.
+  - `PASS`: every hash pairs, no settlement in either book lacks a hash
+    (`settlements_without_payment_hash`), and none of this node's names no peer
+    (`settlements_unattributed`).
+  - `INCONCLUSIVE`: anything else, such as a hash in one book only.
+  - `NOT_PRESENT` with no bundle, and `NOT_CHECKED` with a bundle that does not verify, with the
+    reason.
+
+  The result names the counterparty's key and the peers it is accepted for. It never stands in for
   `public_ledger_count`.
 - **`settlement_records`** counts every settlement record the book holds, and
   **`settlement_records_unread`** counts those the reader could not read.

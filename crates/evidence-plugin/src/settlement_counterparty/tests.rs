@@ -4,6 +4,7 @@
 use super::*;
 use crate::capsule_emit::CapsuleState;
 use crate::deal_receipt::tests::cut;
+use crate::producer::capsule::SETTLEMENT_BLOCK_POINTER;
 use crate::producer::jcs;
 use crate::settlement_channel::parse_and_check;
 
@@ -11,18 +12,26 @@ fn hash(b: &str) -> String {
     b.repeat(32)
 }
 
+/// The exchange record naming `peer`, under the host id `exchange_id`.
+fn exchange(state: &CapsuleState, exchange_id: &str, peer: &str) {
+    let mut served = crate::capsule_emit::tests::sample_exchange(peer);
+    served.exchange_id = Some(exchange_id);
+    state.emit_for_exchange(&served).unwrap();
+}
+
 /// Seal one host-shaped `payment.lifecycle.v1` event on `state`.
 fn seal(
     state: &CapsuleState,
+    exchange_id: &str,
     role: &str,
     phase: &str,
-    h: &str,
+    h: Option<&str>,
     amount: u64,
     wallet: Option<(u64, u64)>,
 ) {
     let settlement = phase.ends_with("_settlement_observed");
     let mut event = json!({
-        "exchange_id": format!("{role}-ex"),
+        "exchange_id": exchange_id,
         "event_ref": "",
         "terms_digest": "7d".repeat(32),
         "role": role,
@@ -45,60 +54,82 @@ fn seal(
         .unwrap();
 }
 
-fn paid(state: &CapsuleState, h: &str, amount: u64) {
-    seal(state, "payer", "input_settlement_observed", h, amount, None);
-}
-
-fn received(state: &CapsuleState, h: &str, credited: u64, fee: u64) {
+/// Node `a` pays under its exchange `a-ex` with `b`.
+fn paid(a: &CapsuleState, h: Option<&str>, amount: u64) {
     seal(
-        state,
-        "provider",
+        a,
+        "a-ex",
+        "payer",
         "input_settlement_observed",
         h,
-        credited + fee,
-        Some((credited, fee)),
+        amount,
+        None,
     );
 }
 
-fn node(dir: &tempfile::TempDir, id: &str) -> CapsuleState {
-    CapsuleState::open(dir.path(), id).unwrap()
+/// Node `b` receives under its exchange `b-ex` with `a`.
+fn received(b: &CapsuleState, h: Option<&str>, wallet: Option<(u64, u64)>) {
+    let amount = wallet.map_or(1000, |(c, f)| c + f);
+    seal(
+        b,
+        "b-ex",
+        "provider",
+        "input_settlement_observed",
+        h,
+        amount,
+        wallet,
+    );
+}
+
+/// Two nodes, `a` and `b`, each holding its record of one exchange with the
+/// other.
+fn pair_of_nodes() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    CapsuleState,
+    CapsuleState,
+) {
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (a, b) = (
+        CapsuleState::open(da.path(), "a").unwrap(),
+        CapsuleState::open(db.path(), "b").unwrap(),
+    );
+    exchange(&a, "a-ex", "b");
+    exchange(&b, "b-ex", "a");
+    (da, db, a, b)
 }
 
 fn key(state: &CapsuleState) -> String {
     crate::commitment::key_id(state.signing_key())
 }
 
-fn bundle_of(state: &CapsuleState) -> Value {
+/// `state`'s settlement bundle for `peer`, after a checkpoint covers it.
+fn bundle_for(state: &CapsuleState, peer: &str) -> Value {
     cut(state);
-    bundle(state.ledger_dir(), &key(state)).unwrap()
+    let ids = select(state.ledger_dir(), &key(state), peer).unwrap().ids;
+    bundle(state.ledger_dir(), &key(state), &ids).unwrap()
 }
 
-/// Accept exactly `peer_key`, as the counterparty `b`.
-fn accepting(peer_key: String) -> impl Fn(&str) -> Option<Vec<String>> {
-    move |k| (k == peer_key).then(|| vec!["b".to_string()])
+/// The operator's registry naming `b` with `key`.
+fn registry(peer: &str, key: &str) -> String {
+    json!({ peer: key }).to_string()
 }
 
-fn own_observations(state: &CapsuleState) -> Vec<Observation> {
-    state
-        .capsule_ids_in_order()
-        .iter()
-        .filter_map(|id| state.lookup(id).unwrap())
-        .filter_map(|e| Observation::from_lifecycle_record(&e.capsule))
-        .collect()
+/// `settlement_check`'s cross-check on `a` with `b`'s bundle, through the
+/// production acceptance path.
+fn check(a: &CapsuleState, b: &CapsuleState) -> Value {
+    let reg = registry("b", &key(b));
+    let books = books(a, Some(&reg), &BTreeMap::new(), &bundle_for(b, "a")).unwrap();
+    cross_check(&books)
 }
 
-fn check(payer: &CapsuleState, provider: &CapsuleState) -> Value {
-    let verified = verify(&bundle_of(provider), accepting(key(provider))).unwrap();
-    let own = own_observations(payer);
-    cross_check(&own.iter().collect::<Vec<_>>(), &verified)
-}
+const WALLET: Option<(u64, u64)> = Some((995, 5));
 
 #[test]
 fn a_payment_both_books_hold_with_equal_amounts_pairs() {
-    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let (a, b) = (node(&da, "a"), node(&db, "b"));
-    paid(&a, &hash("aa"), 1000);
-    received(&b, &hash("aa"), 995, 5);
+    let (_da, _db, a, b) = pair_of_nodes();
+    paid(&a, Some(&hash("aa")), 1000);
+    received(&b, Some(&hash("aa")), WALLET);
     let r = check(&a, &b);
     assert_eq!(r["status"], "PASS", "{r:#}");
     assert_eq!(r["paired"], 1);
@@ -109,10 +140,9 @@ fn a_payment_both_books_hold_with_equal_amounts_pairs() {
 
 #[test]
 fn both_books_disagreeing_on_a_payment_fails() {
-    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let (a, b) = (node(&da, "a"), node(&db, "b"));
-    paid(&a, &hash("aa"), 1000);
-    received(&b, &hash("aa"), 900, 5);
+    let (_da, _db, a, b) = pair_of_nodes();
+    paid(&a, Some(&hash("aa")), 1000);
+    received(&b, Some(&hash("aa")), Some((900, 5)));
     let r = check(&a, &b);
     assert_eq!(r["status"], "FAIL", "{r:#}");
     assert!(r["unpaired"][0]["reason"]
@@ -122,23 +152,55 @@ fn both_books_disagreeing_on_a_payment_fails() {
 }
 
 #[test]
+fn an_incomplete_observation_does_not_hide_a_contradiction() {
+    let (_da, _db, a, b) = pair_of_nodes();
+    paid(&a, Some(&hash("aa")), 1000);
+    received(&b, Some(&hash("aa")), Some((900, 0)));
+    // A second, wallet-silent provider observation of the same payment.
+    seal(
+        &b,
+        "b-ex",
+        "provider",
+        "input_settlement_observed",
+        Some(&hash("aa")),
+        901,
+        None,
+    );
+    assert_eq!(check(&a, &b)["status"], "FAIL");
+}
+
+#[test]
+fn an_incomplete_observation_alone_is_inconclusive() {
+    let (_da, _db, a, b) = pair_of_nodes();
+    paid(&a, Some(&hash("aa")), 1000);
+    received(&b, Some(&hash("aa")), None);
+    let r = check(&a, &b);
+    assert_eq!(r["status"], "INCONCLUSIVE", "{r:#}");
+}
+
+#[test]
 fn both_books_naming_the_same_role_fails() {
-    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let (a, b) = (node(&da, "a"), node(&db, "b"));
-    paid(&a, &hash("aa"), 1000);
-    paid(&b, &hash("aa"), 1000);
+    let (_da, _db, a, b) = pair_of_nodes();
+    paid(&a, Some(&hash("aa")), 1000);
+    seal(
+        &b,
+        "b-ex",
+        "payer",
+        "input_settlement_observed",
+        Some(&hash("aa")),
+        1000,
+        None,
+    );
     assert_eq!(check(&a, &b)["status"], "FAIL");
 }
 
 #[test]
 fn a_payment_one_book_holds_is_unpaired_not_failed() {
-    // The payer also paid a third node; the counterparty never saw it.
-    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let (a, b) = (node(&da, "a"), node(&db, "b"));
-    paid(&a, &hash("aa"), 1000);
-    received(&b, &hash("aa"), 995, 5);
-    paid(&a, &hash("cc"), 2000);
-    received(&b, &hash("dd"), 300, 0);
+    let (_da, _db, a, b) = pair_of_nodes();
+    paid(&a, Some(&hash("aa")), 1000);
+    received(&b, Some(&hash("aa")), WALLET);
+    paid(&a, Some(&hash("cc")), 2000);
+    received(&b, Some(&hash("dd")), Some((300, 0)));
     let r = check(&a, &b);
     assert_eq!(r["status"], "INCONCLUSIVE", "{r:#}");
     assert_eq!(r["paired"], 1);
@@ -152,69 +214,132 @@ fn a_payment_one_book_holds_is_unpaired_not_failed() {
 }
 
 #[test]
-fn the_bundle_carries_terminal_settlements_only() {
-    let db = tempfile::tempdir().unwrap();
-    let b = node(&db, "b");
+fn a_settlement_with_no_hash_keeps_the_count_from_passing() {
+    let (_da, _db, a, b) = pair_of_nodes();
+    paid(&a, Some(&hash("aa")), 1000);
+    received(&b, Some(&hash("aa")), WALLET);
+    paid(&a, None, 500);
+    let r = check(&a, &b);
+    assert_eq!(r["status"], "INCONCLUSIVE", "{r:#}");
+    assert_eq!(
+        r["settlements_without_payment_hash"],
+        json!({"this_node": 1, "counterparty": 0})
+    );
+    received(&b, None, WALLET);
+    let r = check(&a, &b);
+    assert_eq!(r["settlements_without_payment_hash"]["counterparty"], 1);
+}
+
+#[test]
+fn a_settlement_of_this_node_that_names_no_peer_keeps_the_count_from_passing() {
+    let (_da, _db, a, b) = pair_of_nodes();
+    paid(&a, Some(&hash("aa")), 1000);
+    received(&b, Some(&hash("aa")), WALLET);
     seal(
-        &b,
-        "provider",
-        "input_invoice_issued",
-        &hash("aa"),
-        1000,
+        &a,
+        "orphan-ex",
+        "payer",
+        "input_settlement_observed",
+        Some(&hash("ee")),
+        10,
         None,
     );
-    received(&b, &hash("aa"), 995, 5);
-    let bundle = bundle_of(&b);
-    let records = bundle["records"].as_array().unwrap();
-    assert_eq!(records.len(), 1, "{bundle:#}");
+    let r = check(&a, &b);
+    assert_eq!(r["status"], "INCONCLUSIVE", "{r:#}");
+    assert_eq!(r["settlements_unattributed"], 1);
     assert_eq!(
-        records[0].pointer(&format!("{SETTLEMENT_BLOCK_POINTER}/phase")),
-        Some(&json!("input_settlement_observed"))
+        r["unpaired"],
+        json!([]),
+        "an orphan is never shown as one-sided"
     );
 }
 
 #[test]
-fn no_settlement_and_no_checkpoint_are_refusals() {
-    let db = tempfile::tempdir().unwrap();
-    let b = node(&db, "b");
+fn the_bundle_carries_this_peers_terminal_settlements_only() {
+    let (_da, _db, _a, b) = pair_of_nodes();
+    exchange(&b, "c-ex", "c");
     seal(
         &b,
+        "b-ex",
         "provider",
         "input_invoice_issued",
-        &hash("aa"),
+        Some(&hash("aa")),
         1000,
         None,
     );
+    received(&b, Some(&hash("aa")), WALLET);
+    seal(
+        &b,
+        "c-ex",
+        "provider",
+        "input_settlement_observed",
+        Some(&hash("cc")),
+        70,
+        Some((70, 0)),
+    );
+    let bundle = bundle_for(&b, "a");
+    let records = bundle["records"].as_array().unwrap();
+    assert_eq!(records.len(), 1, "{bundle:#}");
+    let block = records[0].pointer(SETTLEMENT_BLOCK_POINTER).unwrap();
+    assert_eq!(block["phase"], "input_settlement_observed");
+    assert_eq!(block["payment_hash"], json!(hash("aa")));
+}
+
+#[test]
+fn the_records_chosen_are_the_records_bundled_even_if_one_is_sealed_between() {
+    let (_da, _db, _a, b) = pair_of_nodes();
+    received(&b, Some(&hash("aa")), WALLET);
+    let ids = select(b.ledger_dir(), &key(&b), "a").unwrap().ids;
+    cut(&b);
+    // Sealed after the selection and after the checkpoint: not carried, and
+    // no refusal for want of a checkpoint over it.
+    received(&b, Some(&hash("bb")), WALLET);
+    let bundle = bundle(b.ledger_dir(), &key(&b), &ids).unwrap();
+    assert_eq!(bundle["records"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn no_settlement_and_no_checkpoint_are_refusals() {
+    let (_da, _db, _a, b) = pair_of_nodes();
+    let none = select(b.ledger_dir(), &key(&b), "a").unwrap().ids;
     assert!(matches!(
-        bundle(b.ledger_dir(), &key(&b)),
+        bundle(b.ledger_dir(), &key(&b), &none),
         Err(Failure::Refused(Refusal::NoSettlement))
     ));
-    received(&b, &hash("aa"), 995, 5);
+    received(&b, Some(&hash("aa")), WALLET);
+    let ids = select(b.ledger_dir(), &key(&b), "a").unwrap().ids;
     assert!(matches!(
-        bundle(b.ledger_dir(), &key(&b)),
+        bundle(b.ledger_dir(), &key(&b), &ids),
         Err(Failure::Refused(Refusal::NotCheckpointed))
     ));
 }
 
 #[test]
-fn a_bundle_under_an_unaccepted_or_own_key_is_not_used() {
-    let db = tempfile::tempdir().unwrap();
-    let b = node(&db, "b");
-    received(&b, &hash("aa"), 995, 5);
-    let bundle = bundle_of(&b);
-    assert!(verify(&bundle, |_| None).is_err());
-    assert!(verify(&bundle, accepting(key(&b))).is_ok());
+fn this_nodes_own_bundle_is_refused_even_when_its_key_is_listed_as_a_peer() {
+    let (_da, _db, a, _b) = pair_of_nodes();
+    paid(&a, Some(&hash("aa")), 1000);
+    let own = bundle_for(&a, "b");
+    let reg = registry("b", &key(&a));
+    assert!(books(&a, Some(&reg), &BTreeMap::new(), &own).is_err());
 }
 
 #[test]
-fn a_tampered_record_is_not_used() {
-    let db = tempfile::tempdir().unwrap();
-    let b = node(&db, "b");
-    received(&b, &hash("aa"), 995, 5);
-    let mut bundle = bundle_of(&b);
+fn a_bundle_under_a_key_no_peer_is_accepted_for_is_refused() {
+    let (_da, _db, a, b) = pair_of_nodes();
+    received(&b, Some(&hash("aa")), WALLET);
+    let bundle = bundle_for(&b, "a");
+    assert!(books(&a, None, &BTreeMap::new(), &bundle).is_err());
+}
+
+#[test]
+fn a_tampered_record_is_refused() {
+    let (_da, _db, a, b) = pair_of_nodes();
+    received(&b, Some(&hash("aa")), WALLET);
+    let mut bundle = bundle_for(&b, "a");
     bundle["records"][0]["model_attestation"]["compute_attestation"]["x-mesh-settlement-v1"]
         ["amount_msat"] = json!(1);
-    assert!(verify(&bundle, accepting(key(&b))).is_err());
+    let reg = registry("b", &key(&b));
+    assert!(books(&a, Some(&reg), &BTreeMap::new(), &bundle).is_err());
 }
 
 #[test]
