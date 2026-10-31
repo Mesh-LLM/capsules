@@ -158,7 +158,8 @@ party that maps currencies does so with its own pinned table.
   owner-only `settlement-bundle?peer=<this node's peer id>` route. It is an Evidence Bundle,
   producer-selected and proven against one checkpoint it signed. It carries no invoice, terms or
   exchange record, and nothing about payments with anyone else: a settlement belongs to the peer
-  its exchange's record names. The route is never served to peers; the owner hands the file over.
+  its exchange's record names under the same `exchange_id`, and to no peer when that is none or
+  two. The route is never served to peers; the owner hands the file over.
   `settlement_check` takes it as `counterparty_bundle` and uses it only when it verifies strictly:
   every record is signed, the checkpoint is signed and authenticated, every record is proven under
   it, and every record is under the checkpoint's key. That key must also be accepted for a peer
@@ -171,8 +172,8 @@ party that maps currencies does so with its own pinned table.
     role in both books, or different amounts). A provider observation without the wallet's numbers
     never hides such a contradiction.
   - `PASS`: every hash pairs, no settlement in either book lacks a hash
-    (`settlements_without_payment_hash`), and none of this node's names no peer
-    (`settlements_unattributed`).
+    (`settlements_without_payment_hash`), and every one of this node's belongs to exactly one peer
+    (`settlements_unattributed` counts the rest).
   - `INCONCLUSIVE`: anything else, such as a hash in one book only.
   - `NOT_PRESENT` with no bundle, and `NOT_CHECKED` with a bundle that does not verify, with the
     reason.
@@ -181,6 +182,18 @@ party that maps currencies does so with its own pinned table.
   `public_ledger_count`.
 - **`settlement_records`** counts every settlement record the book holds, and
   **`settlement_records_unread`** counts those the reader could not read.
+
+## Rails with no preimage
+
+The preimage is Lightning's: it is bearer proof that a payment completed, and no other rail this
+plugin may read has one. A card settlement's finality can only be the processor's report, with a
+method such as `processor_reported`, never `preimage_verified`. The observation the adapter reads
+keeps `preimage` optional, so a reader for such a rail leaves it absent and the record shape does
+not change.
+
+A settlement record for a card rail seals no card number, no last four digits, no customer or
+processor account id, and no amount beyond the `(currency, decade)` band. This plugin holds no
+card settlements today; the rule stands for the reader that adds them.
 
 ## Sources
 

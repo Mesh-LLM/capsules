@@ -54,8 +54,8 @@ pub const METHOD: &str = "payment_hash pairs across the two books by role and am
 pub struct Attributed {
     pub ids: Vec<String>,
     /// Terminal settlements whose exchange names no counterparty this node
-    /// can read, so they belong to no peer: never carried, and they keep a
-    /// cross-check from passing.
+    /// can read, or two, so they belong to no peer: never carried, and they
+    /// keep a cross-check from passing.
     pub unattributed: u64,
 }
 
@@ -82,16 +82,36 @@ pub fn settlements_with(index: &LedgerIndex, peers: &[String]) -> std::io::Resul
         else {
             continue;
         };
-        let named: BTreeSet<&str> = index
-            .correlated(&observation.exchange_id)
-            .iter()
-            .filter_map(|&j| index.leaves.get(usize::try_from(j).ok()?))
-            .filter_map(|l| l.counterparty.as_deref())
-            .collect();
-        if named.is_empty() {
-            out.unattributed += 1;
-        } else if named.iter().any(|p| peers.iter().any(|want| want == p)) {
-            out.ids.push(record.digest);
+        // The index correlates nonces too, so each candidate's own
+        // `exchange_id` is read back; an exchange naming two peers belongs to
+        // neither.
+        let mut named: BTreeSet<String> = BTreeSet::new();
+        for &j in index.correlated(&observation.exchange_id) {
+            let Some(peer) = index
+                .leaves
+                .get(usize::try_from(j).unwrap_or(usize::MAX))
+                .and_then(|l| l.counterparty.clone())
+            else {
+                continue;
+            };
+            let binds = view
+                .record_at(j)
+                .and_then(|r| serde_json::from_slice::<Value>(&r.body).ok())
+                .is_some_and(|exchange| {
+                    crate::evidence_panes::record_exchange_id(&exchange)
+                        == Some(observation.exchange_id.as_str())
+                });
+            if binds {
+                named.insert(peer);
+            }
+        }
+        match named.iter().next() {
+            Some(peer) if named.len() == 1 => {
+                if peers.iter().any(|want| want == peer) {
+                    out.ids.push(record.digest);
+                }
+            }
+            _ => out.unattributed += 1,
         }
     }
     Ok(out)
@@ -375,8 +395,15 @@ fn pair(seen: &[(Book, &Observation)]) -> Option<(String, bool)> {
     }
     let mut payers: BTreeSet<(Book, u64)> = BTreeSet::new();
     let mut payees: BTreeSet<(Book, u64)> = BTreeSet::new();
+    let mut payer_books: BTreeSet<Book> = BTreeSet::new();
+    let mut payee_books: BTreeSet<Book> = BTreeSet::new();
     let mut incomplete = false;
     for (book, o) in seen {
+        // Roles come from every observation; amounts only from complete ones.
+        match o.side {
+            Side::Payer => payer_books.insert(*book),
+            Side::Provider => payee_books.insert(*book),
+        };
         match o.side {
             Side::Payer => {
                 payers.insert((*book, o.amount_msat));
@@ -393,8 +420,6 @@ fn pair(seen: &[(Book, &Observation)]) -> Option<(String, bool)> {
             },
         }
     }
-    let payer_books: BTreeSet<Book> = payers.iter().map(|(b, _)| *b).collect();
-    let payee_books: BTreeSet<Book> = payees.iter().map(|(b, _)| *b).collect();
     let payer_amounts: BTreeSet<u64> = payers.iter().map(|(_, a)| *a).collect();
     let payee_amounts: BTreeSet<u64> = payees.iter().map(|(_, a)| *a).collect();
     // A contradiction among the complete observations stands whatever an

@@ -352,3 +352,45 @@ fn the_report_names_why_the_count_was_not_cross_checked() {
     assert_eq!(failed["counterparty_count"]["reason"], "did not verify");
     assert_eq!(failed["public_ledger_count"]["status"], "NOT_CHECKED");
 }
+
+#[test]
+fn an_incomplete_observation_in_the_other_book_does_not_hide_a_role_contradiction() {
+    let (_da, _db, a, b) = pair_of_nodes();
+    // Both books claim to be the payee; only one has the wallet's numbers.
+    seal(
+        &a,
+        "a-ex",
+        "provider",
+        "input_settlement_observed",
+        Some(&hash("aa")),
+        1000,
+        WALLET,
+    );
+    received(&b, Some(&hash("aa")), None);
+    assert_eq!(check(&a, &b)["status"], "FAIL");
+}
+
+#[test]
+fn a_nonce_equal_to_another_exchange_id_does_not_move_a_settlement_to_its_peer() {
+    let (_da, _db, _a, b) = pair_of_nodes();
+    // b's exchange with c carries a client nonce equal to b's exchange id
+    // with a: the settlement under `b-ex` is still a's, never c's.
+    let mut with_c = crate::capsule_emit::tests::sample_exchange("c");
+    with_c.exchange_id = Some("c-ex");
+    with_c.client_nonce = Some("b-ex");
+    b.emit_for_exchange(&with_c).unwrap();
+    received(&b, Some(&hash("aa")), WALLET);
+    let for_c = select(b.ledger_dir(), &key(&b), "c").unwrap();
+    assert_eq!(for_c.ids, Vec::<String>::new());
+    assert_eq!(select(b.ledger_dir(), &key(&b), "a").unwrap().ids.len(), 1);
+}
+
+#[test]
+fn an_exchange_id_two_peers_name_belongs_to_neither() {
+    let (_da, _db, _a, b) = pair_of_nodes();
+    exchange(&b, "b-ex", "c");
+    received(&b, Some(&hash("aa")), WALLET);
+    let for_a = select(b.ledger_dir(), &key(&b), "a").unwrap();
+    assert!(for_a.ids.is_empty());
+    assert_eq!(for_a.unattributed, 1);
+}
