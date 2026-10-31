@@ -156,6 +156,16 @@ impl Entry {
             .is_some_and(|o| !o.completed);
     }
 
+    /// The latest outcome said `open` and a leg came after it, or the legs
+    /// settle the deal now. The second covers a state saved before `late`
+    /// was kept, whose late legs were stored with nothing sealed: an outcome
+    /// says `open` only when the legs did not settle the deal then.
+    fn later_round_due(&self) -> bool {
+        self.latest(deal::TYPE_OUTCOME)
+            .is_some_and(|o| !o.completed)
+            && (self.late || self.settled())
+    }
+
     /// Every invoice seen is paid and the response is in.
     fn settled(&self) -> bool {
         self.delivered_leg.is_some()
@@ -367,14 +377,18 @@ impl Deals {
                 owned.put_in(&mut entry);
             }
             inner.entries.insert(exchange_id.to_string(), entry);
-            // Finished deals go first, oldest first; a deal still to be
-            // closed is never dropped for room.
+            // Reported deals go first, `completed` before `open`, oldest
+            // first; a deal still to be closed, or due a later round, is
+            // never dropped for room.
             while inner.entries.len() > MAX_DEALS {
                 let oldest = inner
                     .entries
                     .iter()
-                    .filter(|(_, e)| e.report.is_some())
-                    .min_by_key(|(_, e)| e.started)
+                    .filter(|(_, e)| e.report.is_some() && !e.later_round_due())
+                    .min_by_key(|(_, e)| {
+                        let completed = e.latest(deal::TYPE_OUTCOME).is_some_and(|o| o.completed);
+                        (!completed, e.started)
+                    })
                     .map(|(k, _)| k.clone());
                 match oldest {
                     Some(k) => inner.entries.remove(&k),
@@ -509,7 +523,7 @@ impl Deals {
                     } else {
                         // PROFILE §6 rule 7: a close `open` may be followed
                         // by a later outcome and close; a terminal one never.
-                        !completed && entry.late
+                        entry.later_round_due()
                     };
                     if !due {
                         return;
@@ -1515,6 +1529,79 @@ mod tests {
         assert_eq!(
             saved[EXCHANGE]["report"],
             deal_capsules(dir.path())[9]["capsule_id"]
+        );
+    }
+
+    /// A state saved by 0.1.6: the late legs were stored after the close
+    /// `open` and nothing more sealed, and there is no `late`. The next start
+    /// seals the one round they settle, and only once.
+    #[test]
+    fn a_deal_left_open_with_settled_legs_by_an_older_build_gets_its_round() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = 1_790_000_000;
+        {
+            let state = open(dir.path());
+            paid_exchange(&state, t);
+            state.deals().tick(&state, t + OPEN_AFTER);
+        }
+        assert_eq!(deal_capsules(dir.path()).len(), 4);
+        let path = ledger(dir.path()).join(STATE_FILE);
+        let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let entry = saved[EXCHANGE].as_object_mut().unwrap();
+        entry.remove("late");
+        entry.insert("paid_legs".into(), json!([hex64('b')]));
+        entry.insert("paid_msat".into(), json!(1000));
+        entry.insert("delivered_leg".into(), json!(hex64('c')));
+        std::fs::write(&path, saved.to_string()).unwrap();
+
+        let state = open(dir.path());
+        state.deals().recover(&state, t + OPEN_AFTER + 100);
+        let mut want = vec!["baseline", "outcome", "close", "report"];
+        want.extend(ROUND);
+        assert_eq!(kinds(dir.path()), want);
+        assert_eq!(nth(dir.path(), 4)["body"]["outcome"], "completed");
+        assert_eq!(nth(dir.path(), 6)["report"]["lifecycle"]["state"], "closed");
+        state.deals().tick(&state, t + OPEN_AFTER + 200);
+        drop(state);
+        let state = open(dir.path());
+        state.deals().recover(&state, t + OPEN_AFTER + 300);
+        assert_eq!(deal_capsules(dir.path()).len(), 7);
+    }
+
+    /// Room is made from `completed` deals before `open` ones, however old.
+    #[test]
+    fn room_is_made_from_completed_deals_before_open_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = open(dir.path());
+        let deals = state.deals();
+        let t = 1_790_000_000;
+        let deal = |id: &str, now: i64| {
+            deals.on_invoice(&state, id, &hex64('a'), 1000, now);
+            deals.on_exchange(&state, id, &sealed_exchange(), now + 1);
+        };
+        deal("ex-open", t);
+        deals.tick(&state, t + OPEN_AFTER);
+        deal("ex-done", t + OPEN_AFTER + 10);
+        deals.on_paid(&state, "ex-done", &hex64('b'), 1000, t + OPEN_AFTER + 20);
+        deals.on_delivered(&state, "ex-done", &hex64('c'), t + OPEN_AFTER + 30);
+        for i in 0..MAX_DEALS - 1 {
+            deals.on_invoice(
+                &state,
+                &format!("ex-{i}"),
+                &hex64('a'),
+                1,
+                t + OPEN_AFTER + 40,
+            );
+        }
+        let saved: Value =
+            serde_json::from_slice(&std::fs::read(ledger(dir.path()).join(STATE_FILE)).unwrap())
+                .unwrap();
+        let saved = saved.as_object().unwrap();
+        assert_eq!(saved.len(), MAX_DEALS);
+        assert!(saved.contains_key("ex-open"), "the open deal is kept");
+        assert!(
+            !saved.contains_key("ex-done"),
+            "the completed one made room"
         );
     }
 
