@@ -130,10 +130,11 @@ tip, so it covers whole-file copies of `capsules.jsonl` only.
 **What `ok` shows, and what it does not.** It shows the copy is the whole file at *that*
 checkpoint. Every reply the node ever gave keeps checking a copy of the file at its own size,
 including a reply under an earlier history's log id, so an older genuine reply paired with a
-shorter copy checks too. Whoever relies on the copy being complete as of some moment checks
-that the checkpoint is from that moment: its time is no earlier than the read, and every record
-the copy is relied on for (for loop step 07, the ask's evidence_request and its outcome) sits
-at a position below the copy's line count.
+shorter copy checks too. Whoever relies on the copy holding certain records checks that every
+one of them (for loop step 07, the ask's evidence_request and its outcome) sits at a position
+below the copy's line count. The checkpoint's time is not a freshness test: it is floored to
+the minute, and an ask reuses the last cut while the file has not grown, so a correct reply
+can be hours older than the ask.
 
 **A filtered extract** (records picked by time, by type or by what they cite) is shown complete
 by keeping the whole-file copy and its reply, then picking the records again from the copy. A
