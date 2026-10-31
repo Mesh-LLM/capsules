@@ -459,6 +459,16 @@ pub fn spawn(
             tokio::select! {
                 _ = ticker.tick() => {
                     run("tick", |s, k, a| s.tick(k, a));
+                    // The other ledger files' checkpoints, each cut when its
+                    // file has grown (`ledger_checkpoints`).
+                    {
+                        let (dir, log_id, signer) =
+                            (keys_dir.clone(), log_id_for_witnesses.clone(), task.signer.clone());
+                        let _ = tokio::task::spawn_blocking(move || {
+                            crate::ledger_checkpoints::cut_all(&dir, &log_id, &signer)
+                        })
+                        .await;
+                    }
                     // Each named witness: its key fetched when none is given,
                     // and one that lags asked again so its row can say why.
                     // Only the named witnesses, and only when one is named.
