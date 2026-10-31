@@ -420,6 +420,12 @@ NO. They record:
 A row that fails stays a record; to refuse such a peer, add it to your deny list. The thresholds
 are placeholders, fixed in this version.
 
+The lists and these rows are decided by capsule-engine's admission evaluator under the base pack
+the plugin ships, `asg/mesh_admission_base/1.0.0` (`policies/admission/mesh-base/`): your deny
+and allow lists are its only rows that can give NO, and the five rows are recorded. With
+`CAPSULES_ADMISSION_DEFAULT=no` the allow row refuses a peer on neither list; otherwise no allow
+list refuses anyone. The decisions are the ones the lists gave before.
+
 The settings are read once at start; restart mesh-llm after changing them. Nothing is fetched
 while a request waits: a peer's card is asked for in the background (at most once an hour per
 peer, and again daily), and the book is re-read every minute. Until then the rows read `not_read`.
@@ -456,7 +462,9 @@ mesh-llm refuses every request (503) until the plugin is back; with `best_effort
 every peer, deny list included.
 
 Each decision is an `admission_decision` record: the verdict, which list or the default
-gave it, each row's result (`pass`, `fail` or `not_read`), the digest of the policy it read, and the history card it read, by a commitment like the peer's. The record never names the peer in clear, since records can
+gave it, each row's result (`pass`, `fail` or `not_read`) with the evaluator's effect and, where
+the row counts, its count and denominator, the digest of the policy it read, the base pack and its
+definition digest, and the history card it read, by a commitment like the peer's. The record never names the peer in clear, since records can
 be shared with others; it names the peer by a commitment only this node's key can open, so a peer
 cannot check a record about itself unless you open it. If the key is lost, so is the way to say
 which peer an old record names. If a decision cannot be sealed, the answer is NO and the log says

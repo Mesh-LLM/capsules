@@ -166,7 +166,7 @@ first=$(decisions | head -n 1)
 echo "first decision: $first"
 echo "$first" | jq -e '.verdict == "GO" and .source == "default"
   and .reads[1] == {"kind": "history_card", "state": "not_read"}
-  and (.rows | length) == 5 and .rows[0] == {"row": "identity", "result": "not_read"}
+  and (.rows | length) == 5 and (.rows[0] | {row, result}) == {"row": "identity", "result": "not_read"}
   and (has("limit") | not)' > /dev/null \
   || { echo "the first decision is not a GO with its rows sealed" >&2; exit 1; }
 
@@ -180,8 +180,8 @@ echo "second decision: $second"
 echo "$second" | jq -e '.verdict == "GO" and .source == "default"
   and .reads[1].kind == "history_card" and .reads[1].derivation == "history_card/1"
   and (.reads[1].commitment.digest | test("^[0-9a-f]{64}$"))
-  and .rows[0] == {"row": "identity", "result": "pass"}
-  and .rows[1] == {"row": "key_age", "result": "fail"}' > /dev/null \
+  and (.rows[0] | {row, result}) == {"row": "identity", "result": "pass"}
+  and (.rows[1] | {row, result}) == {"row": "key_age", "result": "fail"}' > /dev/null \
   || { echo "the second decision is not a GO citing the card" >&2; exit 1; }
 # --- 3. the provider on the deny list: NO, with its rows ---------------------
 # The settings are read at start, so the requester restarts with the list.
@@ -203,7 +203,7 @@ third=$(decisions | sed -n "$((before + 1))p")
 echo "third decision: $third"
 echo "$third" | jq -e '.verdict == "NO" and .source == "deny_list"
   and (.rows | length) == 5 and .reads[1].kind == "history_card"
-  and .rows[4] == {"row": "corroboration", "result": "pass"}' > /dev/null \
+  and (.rows[4] | {row, result}) == {"row": "corroboration", "result": "pass"}' > /dev/null \
   || { echo "the third decision is not a deny-list NO with its rows" >&2; exit 1; }
 
 # The provider's id never appears in clear in the requester's admission records.

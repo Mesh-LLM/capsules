@@ -173,8 +173,10 @@ evidencebook = { version = "0.0.11", features = ["deal"] }
 # Admission's price rule (#105) is decided by capsule-engine's guard with its
 # asg/inference terms pack (capsule-engine#265, `rust/capsule-engine`), the
 # evaluator Muse's Go guard shares vectors with, so the plugin runs no second
-# one. Not on crates.io: pinned by the merge commit.
-capsule-engine = { git = "https://github.com/action-state-group/capsule-engine", rev = "3663fbfcf5292347e98203882efbe0f9542a68fd" }
+# one. Its admission evaluator (`capsule_engine::admission`, capsule-engine#265
+# and #268) decides the base pack (#178). Not on crates.io: pinned by the
+# merge commit.
+capsule-engine = { git = "https://github.com/action-state-group/capsule-engine", rev = "c7701385b87b68c631803e5d0adeee4d617ff5d4" }
 # Class 1 verification of a received half (capsule-emit main moved it here).
 agent-action-capsule = { version = "0.4.1", features = ["strict"] }
 # The witness's own record of this log (`witness_status`): one blocking GET,

@@ -37,10 +37,18 @@
 //! say which peer a record names.
 //!
 //! A record about a peer also carries `rows` (each `pass`, `fail` or
-//! `not_read`, never a count) and, in `reads`, the history card the rows
-//! read, cited by `sha256(salt || artifact digest)`: a card is stranger-safe,
-//! so a clear digest would let anyone who fetches every peer's card say which
-//! peer a record names.
+//! `not_read`) and, in `reads`, the history card the rows read, cited by
+//! `sha256(salt || artifact digest)`: a card is stranger-safe, so a clear
+//! digest would let anyone who fetches every peer's card say which peer a
+//! record names.
+//!
+//! The lists and the rows are decided by capsule-engine's admission evaluator
+//! under the base pack this plugin ships ([`base::pack`], #178): the deny and
+//! allow lists are its two NO rows, and the five rows are `record` rows. Each
+//! sealed row also carries the evaluator's `effect`, and its `count` and
+//! `denominator` where it counts, and `reads` cites the pack as a
+//! `terms_pack` with `role: "base"`, beside the price rule's
+//! (`role: "price"`).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -168,7 +176,9 @@ impl Policy {
         })
     }
 
-    /// The verdict for `peer` (a lowercase 64-hex node id) and what gave it.
+    /// The verdict for `peer` (a lowercase 64-hex node id) and what gave it,
+    /// as #55 states it. The base pack's decision must agree
+    /// ([`Policy::verdict_of`]).
     pub fn decide(&self, peer: &str) -> (Verdict, Source) {
         if self.deny.contains(peer) {
             (Verdict::No, Source::DenyList)
@@ -177,6 +187,40 @@ impl Policy {
         } else {
             (self.default, Source::Default)
         }
+    }
+
+    /// The lists as the base pack's operator rows read them about `peer`.
+    /// Deny is the deny row. The allow row refuses only under a default of
+    /// NO: with a default of GO, a peer on no list is admitted, so the allow
+    /// list refuses no one and is not kept (`None`, which reads pass). With
+    /// no list set the rows read pass, never `not_read`.
+    pub fn operator(&self, peer: &str) -> capsule_engine::admission::Operator {
+        capsule_engine::admission::Operator {
+            deny_listed: self.deny.contains(peer),
+            allow_listed: (self.default == Verdict::No).then(|| self.allow.contains(peer)),
+        }
+    }
+
+    /// The verdict and its source from the base pack's `decision` about
+    /// `peer`, decided with [`Policy::operator`]'s lists. The deny row's NO is
+    /// `deny_list`; the allow row's NO is a default of NO for a peer on no
+    /// list (`default`); a GO is `allow_list` for a listed peer, else
+    /// `default`. Anything else, which the pack cannot yield, or a verdict
+    /// that is not #55's, is `None`.
+    fn verdict_of(
+        &self,
+        peer: &str,
+        decision: &capsule_engine::admission::Decision,
+    ) -> Option<(Verdict, Source)> {
+        use capsule_engine::admission::Verdict as Decided;
+        let decided = match (decision.verdict, decision.source.as_str()) {
+            (Decided::No, "deny_list") => (Verdict::No, Source::DenyList),
+            (Decided::No, "allow_list") => (Verdict::No, Source::Default),
+            (Decided::Go, _) if self.allow.contains(peer) => (Verdict::Go, Source::AllowList),
+            (Decided::Go, _) => (Verdict::Go, Source::Default),
+            _ => return None,
+        };
+        (decided == self.decide(peer)).then_some(decided)
     }
 
     /// The policy as a record cites it: a digest over the lists' commitments
@@ -334,6 +378,8 @@ impl Admission {
         seal: Seal,
         base: Arc<base::Base>,
     ) -> Self {
+        // The embedded pack loads at start, never first on a request.
+        base::pack();
         let price = match price {
             Ok(price) => {
                 let _ = price::set_loaded(price.describe());
@@ -398,16 +444,32 @@ impl Admission {
         if event.get("phase").and_then(Value::as_str) != Some("backend_selected") {
             return OpenAiExchangeDecision::default();
         }
-        let (peer, (mut verdict, mut source)) = match target(event) {
+        let (peer, rows, (mut verdict, mut source)) = match target(event) {
             Target::NotAPeer => return OpenAiExchangeDecision::default(),
             Target::Peer(peer) => {
+                // The lists and the rows: one evaluation of the base pack.
+                let operator = self
+                    .policy
+                    .as_ref()
+                    .map(|policy| policy.operator(&peer))
+                    .unwrap_or_default();
+                let rows = self.base.read(&peer, operator, at, now);
                 let decided = match &self.policy {
-                    Some(policy) => policy.decide(&peer),
+                    Some(policy) => policy.verdict_of(&peer, &rows.decision).unwrap_or_else(|| {
+                        // Unreachable: the pack's NO rows are the lists,
+                        // and nothing else reaches its missing default.
+                        tracing::error!(
+                            verdict = rows.decision.verdict.as_str(),
+                            source = %rows.decision.source,
+                            "the base pack's decision is not the operator's lists'; answering NO"
+                        );
+                        (Verdict::No, Source::UnreadablePolicy)
+                    }),
                     None => (Verdict::No, Source::UnreadablePolicy),
                 };
-                (Some(peer), decided)
+                (Some(peer), Some(rows), decided)
             }
-            Target::Unreadable => (None, (Verdict::No, Source::UnreadableTarget)),
+            Target::Unreadable => (None, None, (Verdict::No, Source::UnreadableTarget)),
         };
         // The price rule runs after the lists, on a peer they admit: one
         // decision, the lists first (#55), then the terms pack (#105).
@@ -428,12 +490,20 @@ impl Admission {
                 }
             }
         }
-        let rows = peer.as_deref().map(|peer| self.base.read(peer, at, now));
         let mut block = self.block(peer.as_deref(), verdict, source, rows.as_ref(), event);
-        // The pack is cited as read only when it ran.
-        if let (Some(rule), Some(price::Read::Checked { .. })) = (&self.price, &priced) {
-            if let Some(Value::Array(reads)) = block.get_mut("reads") {
+        if let Some(Value::Array(reads)) = block.get_mut("reads") {
+            // The price pack is cited as read only when it ran.
+            if let (Some(rule), Some(price::Read::Checked { .. })) = (&self.price, &priced) {
                 reads.push(rule.reads(&self.salt));
+            }
+            // The base pack ran whenever the rows were read.
+            if let Some(rows) = &rows {
+                reads.push(json!({
+                    "kind": "terms_pack",
+                    "role": "base",
+                    "pack": rows.decision.pack.id,
+                    "definition_digest": {"alg": "SHA-256", "digest": rows.decision.pack.digest},
+                }));
             }
         }
         if let Some(read) = &priced {
@@ -496,7 +566,21 @@ impl Admission {
                 base::ROWS
                     .iter()
                     .zip(rows.rows)
-                    .map(|(row, result)| json!({"row": row, "result": result.as_str()}))
+                    .map(|(row, result)| {
+                        let mut sealed = json!({"row": row, "result": result.as_str()});
+                        // The evaluator's own view of the row: what it did,
+                        // and its count and denominator where it counts.
+                        if let Some(decided) = rows.decision.rows.iter().find(|r| r.row == *row) {
+                            sealed["effect"] = json!(decided.effect.as_str());
+                            if let Some(count) = decided.count {
+                                sealed["count"] = json!(count);
+                            }
+                            if let Some(denominator) = decided.denominator {
+                                sealed["denominator"] = json!(denominator);
+                            }
+                        }
+                        sealed
+                    })
                     .collect(),
             );
         }
@@ -677,12 +761,13 @@ mod tests {
         );
         admission.base.set_facts_for_test(
             peer,
-            base::LocalFacts {
-                settled: 1,
-                held_halves: 1,
-                verdicts: 1,
-                adverse: 0,
-            },
+            key,
+            1,
+            1,
+            vec![base::HeldVerdict {
+                at: None,
+                adverse: false,
+            }],
         );
     }
 
@@ -721,29 +806,104 @@ mod tests {
     #[test]
     fn an_adverse_adjudication_is_sealed_as_a_row_and_never_blocks_on_its_own() {
         let at = std::time::Instant::now();
-        let adverse = base::LocalFacts {
-            settled: 3,
-            held_halves: 3,
-            verdicts: 1,
-            adverse: 1,
-        };
+        let adverse = vec![base::HeldVerdict {
+            at: None,
+            adverse: true,
+        }];
         for (default, decision, verdict) in [
             (None, OpenAiAdmissionDecision::Allow, "GO"),
             (Some("no"), OpenAiAdmissionDecision::Deny, "NO"),
         ] {
             let (admission, capsules, _dir) = admission(policy(default));
             all_rows_pass(&admission, STRANGER, at);
-            admission.base.set_facts_for_test(STRANGER, adverse.clone());
+            admission.base.set_facts_for_test(
+                STRANGER,
+                "ab00000000000000000000000000000000000000000000000000000000000006",
+                3,
+                3,
+                adverse.clone(),
+            );
             let answer = admission.answer_at(&selected(&remote(STRANGER)), at, chrono::Utc::now());
             assert_eq!(answer.decision, decision, "the config decides: {default:?}");
             let block = sealed_block(&capsules);
             assert_eq!(block["verdict"], verdict);
             assert_eq!(block["source"], "default");
+            // The evaluator's effect and counts are additive members (#178).
             assert_eq!(
                 block["rows"][3],
-                json!({"row": "disputes", "result": "fail"})
+                json!({"row": "disputes", "result": "fail", "effect": "none", "count": 1, "denominator": 1})
             );
         }
+    }
+
+    /// The base pack decides #55's lists exactly as `Policy::decide` does,
+    /// verdict and source, for every list a peer can be on and both
+    /// defaults, an empty config included (#178).
+    #[test]
+    fn the_base_pack_decides_the_lists_as_55_does() {
+        let at = std::time::Instant::now();
+        let now = chrono::Utc::now();
+        for (allow, deny) in [
+            (None, None),
+            (Some(ALLOWED), None),
+            (None, Some(DENIED)),
+            (Some(ALLOWED), Some(DENIED)),
+            (Some(DENIED), Some(DENIED)),
+        ] {
+            for default in [None, Some("go"), Some("no")] {
+                let policy = Policy::parse(allow, deny, default).unwrap();
+                for peer in [ALLOWED, DENIED, STRANGER] {
+                    let dir = tempfile::tempdir().unwrap();
+                    let base = base::Base::new(dir.path().to_path_buf());
+                    let read = base.read(peer, policy.operator(peer), at, now);
+                    assert_eq!(
+                        policy.verdict_of(peer, &read.decision),
+                        Some(policy.decide(peer)),
+                        "{allow:?} {deny:?} {default:?} {peer}"
+                    );
+                    for id in ["deny_list", "allow_list"] {
+                        let row = read.decision.rows.iter().find(|r| r.row == id).unwrap();
+                        assert_ne!(
+                            row.result,
+                            capsule_engine::admission::RowStatus::NotRead,
+                            "an operator row is never not_read: {id}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_operator_config_is_go_and_cites_the_base_pack() {
+        let unset = Policy::parse(None, None, None).unwrap();
+        let (admission, capsules, _dir) = admission(unset);
+        let answer = admission.answer(&selected(&remote(STRANGER)));
+        assert_eq!(answer.decision, OpenAiAdmissionDecision::Allow);
+        let block = sealed_block(&capsules);
+        assert_eq!(block["verdict"], "GO");
+        assert_eq!(block["source"], "default");
+        let pack = block["reads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["role"] == "base")
+            .unwrap();
+        assert_eq!(
+            pack,
+            &json!({
+                "kind": "terms_pack",
+                "role": "base",
+                "pack": base::PACK_ID,
+                "definition_digest": {"alg": "SHA-256", "digest": base::DEFINITION_DIGEST},
+            })
+        );
+        // Nothing read yet: every row is not_read and decided nothing.
+        for row in block["rows"].as_array().unwrap() {
+            assert_eq!(row["result"], "not_read");
+            assert_eq!(row["effect"], "none");
+        }
+        assert_eq!(block["rows"][2].get("count"), None, "no book read yet");
     }
 
     #[test]
@@ -1146,9 +1306,16 @@ mod tests {
         let answer = admission.answer(&priced(&remote(STRANGER), rates(1, 1)));
         assert_eq!(answer.reason.as_deref(), Some("admission NO (deny_list)"));
         assert!(sealed_block(&capsules).get("price").is_none());
-        assert!(!serde_json::to_string(&sealed_block(&capsules))
+        // The base pack decided the lists (#178); the price pack never ran.
+        let block = sealed_block(&capsules);
+        let packs: Vec<&Value> = block["reads"]
+            .as_array()
             .unwrap()
-            .contains("terms_pack"));
+            .iter()
+            .filter(|r| r["kind"] == "terms_pack")
+            .collect();
+        assert_eq!(packs.len(), 1);
+        assert_eq!(packs[0]["role"], "base");
     }
 
     #[test]
