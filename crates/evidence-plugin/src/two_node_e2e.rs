@@ -625,7 +625,7 @@ fn the_settlement_adapter_counts_every_settlement_record() {
                     .is_some()
             })
             .count();
-        let report = crate::settlement_adapter::report(records, None);
+        let report = crate::settlement_adapter::report(records, None, None);
         assert_eq!(report["settlement_records"], json!(on_disk), "{report:#}");
         assert_eq!(
             report["public_ledger_count"]["status"],

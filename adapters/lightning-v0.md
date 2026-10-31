@@ -22,7 +22,8 @@ node's own book. The tool seals nothing and contacts nobody.
 | mesh-llm, `mesh/crates/mesh-llm-wallet/src/invoice.rs` | same | the invoice's `payment_hash`, and `sha256(preimage) == payment_hash` |
 | Agent Action Capsule, `spec/interop-profile-v0.md` and `spec/adapters/x402-v0.md` | `main` at `40549d239` | the five statuses (§7.1), the `native_check` report (§7.2), and the shape of x402's per-check results (§7) |
 | Agent Action Capsule, `vectors/settlement/cases.json`, and pull request #440 (`spec/standard-history-v0.md` §5.3) | `main` at `40549d239`; #440 open at `a3d1fc08` | a Lightning amount as `assetCode` `BTC`, `assetScale` 11; the card's value band as `(currency, decade)`. #440 is to adopt the signed decade this declaration uses; at `a3d1fc08` it still uses the unsigned whole-part rule |
-| mesh-llm#2654 | draft, head `3899080b` | the `pay.ln.v1` channel and `Message::Settlement { id, bill }` (see [Sources](#sources)) |
+| mesh-llm#2654 | draft, head `4e5ce22d6` | the `pay-lightning` plugin, its `pay.ln.v1` channel, and the host's local channel broadcast (`PluginManager::broadcast_channel_message`); see [Sources](#sources) |
+| loop#183, `steps/06-settle` (`crosscheck`) | merged as `64ebb55` | the rule that pairs a payment hash across two nodes' books by role and amount |
 
 ## (a) The native object
 
@@ -40,7 +41,11 @@ For each paid exchange, the adapter reads these members:
 | `input_invoice_issued`, `output_invoice_issued` | `provider_asserted` | `segment`, `payment_hash`, `amount_msat` |
 | `input_settlement_observed`, `output_settlement_observed` | `wallet_reported`, `settlement: "terminal"` | `segment`, `payment_hash` (may be `null`), `amount_msat`, `fee_msat`, and on the provider side `credited_msat` |
 
-The event never carries the preimage or the BOLT11 string: mesh-llm's own test forbids both.
+A settlement event may also carry the payment's `preimage`, 64 lowercase hex, which the plugin
+seals with the other members. No host sends it today: mesh-llm's own test
+(`event_contract_is_private_stable_and_bounded`) forbids the preimage and the BOLT11 string in
+the event, so passing the preimage is an ask of the source (Mesh-LLM/capsules-plugin#83). The
+event never carries the BOLT11 string.
 
 ## (b) Issuers
 
@@ -105,16 +110,19 @@ was not run.
 | `object_held` | `event_ref` recomputes over the event, rebuilt from the record in a host shape this plugin knows (with and without `role` and `tokens`) | — | the record has no `event_ref` | — | it does not recompute: a host may add members the record does not keep |
 | `invoice_join` | `payment_hash` equals an invoice's for the same exchange, side and segment | invoices are held for the segment and none has that hash | the wallet reported no hash, or no invoice is held for the segment | — | — |
 | `amount` | the settled `amount_msat` equals the joined invoice's | they differ | no invoice to compare with, or the invoice names no amount | — | — |
-| `finality` | the wallet reported the payment terminal; method `wallet_reported` | the settlement is not reported terminal | — | — | — |
-| `preimage` | never, today | — | always: the object carries no preimage | — | — |
+| `finality` | the preimage check passes, method `preimage_verified`; or, with no preimage, the wallet reported the payment terminal, method `wallet_reported` | the preimage check fails, or the settlement is not reported terminal | — | — | — |
+| `preimage` | `sha256(preimage) == payment_hash` | the preimage is not 32 bytes of hex, or does not hash to `payment_hash` | the object carries no preimage (every object today), or names no `payment_hash` | — | — |
 | `payee_credit` | provider side: `credited_msat + fee_msat` equals the amount | the sum differs | the receiving wallet gave no numbers | payer side: the paying wallet does not see the credit | — |
 
 Every invoice also reports its own `object_held`, so a reader can see why an exchange whose
 settlements pass is not `settled`.
 
-**Finality is the wallet's report, not a proof.** On Lightning, a payment is final when the payee
-releases the preimage. The host does not pass the preimage, so a `finality` `PASS` carries the
-method `wallet_reported`, and `preimage` is `NOT_PRESENT`.
+**Finality is a check only when the preimage is held.** On Lightning, a payment is final when the
+payee releases the preimage, and the payer holds it only once the payment completed. A settlement
+whose preimage hashes to its `payment_hash` has `finality` `PASS` by method `preimage_verified`;
+one whose preimage does not fails `finality`, whatever the wallet said. Without a preimage,
+`finality` is the wallet's report (method `wallet_reported`), not a proof. No host passes the
+preimage yet, so today every `finality` `PASS` is `wallet_reported`.
 
 ## Band
 
@@ -143,8 +151,24 @@ party that maps currencies does so with its own pinned table.
 - **`public_ledger_count`** is always `NOT_CHECKED`, with reason `no_public_ledger`. The check of a disclosed count
   compares it with an outside count. Lightning has no public ledger, and
   using the node's own book as that outside count would check the node against itself.
-- **What the count cannot catch:** a node that never seals a settlement. The independent
-  cross-check is the counterparty's book for the same exchanges (Mesh-LLM/capsules-plugin#83).
+- **What the count cannot catch alone:** a node that never seals a settlement. The independent
+  cross-check is the counterparty's book, `counterparty_count`, below.
+- **`counterparty_count`** checks this node's terminal settlements against the counterparty's.
+  The counterparty gives its own terminal settlement records from its owner-only
+  `settlement-bundle` route: an Evidence Bundle, producer-selected, proven against one checkpoint
+  it signed, carrying no invoice, terms or exchange record. `settlement_check` takes it as
+  `counterparty_bundle` and uses it only when it verifies strictly (every record signed, the
+  checkpoint signed and authenticated, every record proven under it, every record under the
+  checkpoint's key) and its key is accepted for a peer and is not this node's own. Hashes then pair
+  under loop#183's rule: a hash pairs when all its payer observations are in one book with one
+  `amount_msat`, all its provider observations are in the other with one
+  `credited_msat + fee_msat`, and the two amounts are equal. Every other hash is listed in
+  `unpaired` with its reason. The result is `FAIL` when both books hold a hash and disagree about
+  it (role or amount), `PASS` when every hash pairs, and `INCONCLUSIVE` otherwise: a hash in one
+  book only may be a payment to a third node, so it is never a failure. It is `NOT_PRESENT` with
+  no bundle and `NOT_CHECKED` with a bundle that does not verify, with the reason. It names the
+  counterparty's key and the peers it is accepted for. It never stands in for
+  `public_ledger_count`.
 - **`settlement_records`** counts every settlement record the book holds, and
   **`settlement_records_unread`** counts those the reader could not read.
 
@@ -153,8 +177,14 @@ party that maps currencies does so with its own pinned table.
 The adapter reads through one reader per source into a rail-neutral observation. Today there is
 one reader, for `payment.lifecycle.v1`.
 
-mesh-llm#2654 (draft) moves Lightning into a `pay-lightning` wallet plugin. As drafted, it removes
-the host's `payment.lifecycle.v1` emitter, and settlement travels between payment plugins as
-`Message::Settlement { id, bill }` on their own `pay.ln.v1` channel. A second reader will be added
-once that path emits a settlement object this plugin can receive. Until then, a node on that path
-holds no settlement records, and `settlement_check` reports none.
+mesh-llm#2654 (draft) moves Lightning into a `pay-lightning` plugin. It removes the host's
+`payment.lifecycle.v1` emitter, and settlement travels between payment plugins on their own
+`pay.ln.v1` channel. At its head the host broadcasts its own messages to the local plugins that
+declare a channel, while a plugin's own channel message goes to the mesh, so no path carries one
+plugin's message to another on the same node.
+
+The reader keys on the event's shape, not on who emits it. On that path the plugin needs no second
+reader if `pay-lightning` emits `payment.lifecycle.v1` with the same members and the host relays a
+plugin's message on that channel to the local plugins declaring it, as it does its own (the ask
+in Mesh-LLM/capsules-plugin#83). Until then, a node on that path holds no settlement records, and
+`settlement_check` reports none.

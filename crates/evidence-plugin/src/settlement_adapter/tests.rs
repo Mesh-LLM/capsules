@@ -82,7 +82,7 @@ fn paid(role: &str, segment: u32, h: Option<&str>, amount: u64) -> Value {
 }
 
 fn one(records: Vec<Value>) -> Value {
-    let r = report(records, Some(EX));
+    let r = report(records, Some(EX), None);
     assert_eq!(r["exchanges"].as_array().unwrap().len(), 1, "{r:#}");
     r["exchanges"][0].clone()
 }
@@ -373,7 +373,7 @@ fn the_report_counts_distinct_settlements_and_never_checks_a_public_ledger() {
         seal(other),
         seal(hashless),
     ];
-    let all = report(records.clone(), None);
+    let all = report(records.clone(), None, None);
     assert_eq!(all["settlement_records"], 4);
     assert_eq!(all["settlement_records_unread"], 0);
     assert_eq!(all["disclosed_count"]["settlements"], 3);
@@ -389,14 +389,14 @@ fn the_report_counts_distinct_settlements_and_never_checks_a_public_ledger() {
     assert_eq!(all["exchanges"][0]["exchange_id"], EX);
     assert!(all["exchanges"][0].get("result").is_none());
 
-    let one = report(records, Some("ex-other"));
+    let one = report(records, Some("ex-other"), None);
     assert_eq!(
         one["disclosed_count"]["settlements"], 3,
         "the count is the book's, not the filter's"
     );
     assert_eq!(one["exchanges"].as_array().unwrap().len(), 1);
 
-    let none = report(Vec::<Value>::new(), Some("missing"));
+    let none = report(Vec::<Value>::new(), Some("missing"), None);
     assert_eq!(none["exchanges"], json!([]));
     assert_eq!(none["disclosed_count"]["settlements"], 0);
 }
@@ -415,7 +415,7 @@ fn one_payment_is_counted_once() {
     );
     again["fee_msat"] = json!(1);
     let records = vec![invoice("payer", 0, &hash("aa"), 1000), first, seal(again)];
-    let r = report(records.clone(), None);
+    let r = report(records.clone(), None, None);
     assert_eq!(r["disclosed_count"]["settlements"], 1);
     assert_eq!(
         book(records)["band"],
@@ -433,7 +433,7 @@ fn both_sides_of_one_payment_count_once() {
         invoice("provider", 0, &hash("aa"), 1000),
         paid("provider", 0, Some(&hash("aa")), 1000),
     ];
-    let r = report(records.clone(), None);
+    let r = report(records.clone(), None, None);
     assert_eq!(r["disclosed_count"]["settlements"], 1);
     let books = one(records)["books"].as_array().unwrap().clone();
     assert_eq!(books.len(), 2);
@@ -461,7 +461,7 @@ fn an_unreadable_settlement_record_is_counted_not_dropped() {
     let mut record = invoice("payer", 0, &hash("aa"), 1000);
     record["model_attestation"]["compute_attestation"]["x-mesh-settlement-v1"]["observed_by"] =
         json!("someone");
-    let r = report(vec![record], None);
+    let r = report(vec![record], None, None);
     assert_eq!(r["settlement_records"], 1);
     assert_eq!(r["settlement_records_unread"], 1);
     assert_eq!(r["exchanges"], json!([]));

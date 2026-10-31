@@ -15,8 +15,9 @@
 //! reported as a `native_check` with the check's name in `detail.check`, as
 //! the x402 declaration reports its checks. `NOT_PRESENT` means the input is
 //! absent; `NOT_CHECKED` means it is present and the check was not run. Every
-//! result names its method; a `finality` PASS names `wallet_reported`, the
-//! wallet's own statement, never a proof.
+//! result names its method. A `finality` PASS names `preimage_verified` when
+//! the settlement's preimage hashes to its `payment_hash`, and otherwise
+//! `wallet_reported`: the wallet's own statement, never a proof.
 //!
 //! **Joining.** A settlement joins an invoice of the same side and segment
 //! by `payment_hash`. A settlement with no hash joins nothing (`NOT_PRESENT`);
@@ -32,7 +33,9 @@
 //!
 //! **Counts.** The disclosed count is this node's distinct terminal
 //! settlements, by `payment_hash`. Lightning has no public ledger to check it
-//! against, so `public_ledger_count` is always `NOT_CHECKED`.
+//! against, so `public_ledger_count` is always `NOT_CHECKED`; the
+//! counterparty's book is the outside count instead (`counterparty_count`,
+//! [`crate::settlement_counterparty`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -542,7 +545,15 @@ pub fn check_exchange(exchange_id: &str, observations: &[&Observation]) -> Value
 ///   ledger, so the node's count is never checked against itself.
 /// - `settlement_records`: every settlement record the book holds, and
 ///   `settlement_records_unread` those the reader could not read.
-pub fn report(records: impl IntoIterator<Item = Value>, exchange_id: Option<&str>) -> Value {
+///
+/// `counterparty`: the other side's verified book
+/// ([`crate::settlement_counterparty`]), or why there is none; it fills
+/// `counterparty_count`.
+pub fn report(
+    records: impl IntoIterator<Item = Value>,
+    exchange_id: Option<&str>,
+    counterparty: Option<Result<crate::settlement_counterparty::Verified, String>>,
+) -> Value {
     let mut settlement_records = 0u64;
     let mut unread = 0u64;
     let mut by_exchange: BTreeMap<String, Vec<Observation>> = BTreeMap::new();
@@ -585,6 +596,17 @@ pub fn report(records: impl IntoIterator<Item = Value>, exchange_id: Option<&str
             check_exchange(id, &held)
         })
         .collect();
+    let counterparty_count = match counterparty {
+        None => crate::settlement_counterparty::not_run(
+            Status::NotPresent,
+            "no counterparty settlement bundle was given",
+        ),
+        Some(Err(why)) => crate::settlement_counterparty::not_run(Status::NotChecked, &why),
+        Some(Ok(verified)) => {
+            let own: Vec<&Observation> = by_exchange.values().flatten().collect();
+            crate::settlement_counterparty::cross_check(&own, &verified)
+        }
+    };
     json!({
         "adapter": LIGHTNING_ADAPTER,
         "disclosed_count": {
@@ -593,6 +615,7 @@ pub fn report(records: impl IntoIterator<Item = Value>, exchange_id: Option<&str
             "method": "distinct terminal settlements in this node's book, by payment_hash",
         },
         "public_ledger_count": {"status": Status::NotChecked.wire(), "reason": "no_public_ledger"},
+        "counterparty_count": counterparty_count,
         "settlement_records": settlement_records,
         "settlement_records_unread": unread,
         "exchanges": exchanges,
@@ -605,6 +628,10 @@ pub struct SettlementCheckArgs {
     /// holds settlement records for.
     #[serde(default)]
     pub exchange_id: Option<String>,
+    /// The counterparty's `settlement-bundle`, to cross-check this node's
+    /// count against its book (`counterparty_count`).
+    #[serde(default)]
+    pub counterparty_bundle: Option<Value>,
 }
 
 /// `settlement_check`: [`report`] over this node's book. Only settlement
@@ -613,7 +640,23 @@ pub async fn handle(
     args: SettlementCheckArgs,
     capsules: std::sync::Arc<crate::capsule_emit::CapsuleState>,
 ) -> mesh_llm_plugin::PluginResult<Value> {
+    let configured = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
+    let announced = crate::peer_keys::announced::snapshot();
     tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let own_key = hex::encode(capsules.signing_key().verifying_key().to_bytes());
+        let counterparty = args.counterparty_bundle.as_ref().map(|bundle| {
+            crate::settlement_counterparty::verify(bundle, |key| {
+                crate::peer_keys::accepted_via(
+                    configured.as_deref(),
+                    &announced,
+                    key,
+                    &own_key,
+                    None,
+                    None,
+                )
+                .map(|accepted| accepted.peers)
+            })
+        });
         let mut records = Vec::new();
         for id in capsules.capsule_ids_in_order() {
             match capsules.lookup(&id) {
@@ -624,7 +667,7 @@ pub async fn handle(
                 Err(e) => return Err(format!("the ledger could not be read: {e}")),
             }
         }
-        Ok(report(records, args.exchange_id.as_deref()))
+        Ok(report(records, args.exchange_id.as_deref(), counterparty))
     })
     .await
     .map_err(|e| {
