@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ReceiptPanel } from '@/features/capsules/components/ReceiptPanel'
 import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
 import { receiptPath } from '@/features/capsules/api/receiptClient'
-import { receiptRequest } from '@/features/capsules/lib/receipt-view'
+import { checkReceiptBundle, receiptCase, receiptRequest, receiptView } from '@/features/capsules/lib/receipt-view'
 import composedAgree from '@/features/capsules/lib/receipt-fixtures/composed-agree.bundle.json'
 import producerSelected from '@/features/capsules/lib/receipt-fixtures/producer-selected.bundle.json'
 
@@ -141,6 +141,152 @@ describe('ReceiptPanel', () => {
       expect(container).toBeEmptyDOMElement()
       cleanup()
     }
+  })
+})
+
+describe('ReceiptPanel states', () => {
+  it('shows a refusal that is not "no record" as "no receipt yet:" with the route\'s reason word for word', async () => {
+    routeAnswers({ state: 'refused', why: 'no signed checkpoint covers the deal yet' })
+    render(<ReceiptPanel row={payerRow} />)
+    await check()
+    expect(await screen.findByText('no receipt yet: no signed checkpoint covers the deal yet')).toBeInTheDocument()
+    expect(screen.queryByText(/Receipt: no record/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/holds no sealed deal/)).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['this node noted no payment received for that exchange', false],
+    ['this node holds no single served record for that exchange', true],
+    ['this node holds no deal for that exchange', true],
+    ['the deal has no report yet', false],
+    ['the payload of deal record abc is not kept', false]
+  ])('maps the refusal "%s" (no record: %s)', async (why, noRecord) => {
+    const view = await receiptView({ kind: 'refused', why })
+    expect(view.kind).toBe(noRecord ? 'no_record' : 'no_receipt_yet')
+  })
+
+  it('lets the owner ask again after a load error', async () => {
+    routeAnswers({}, false, 500)
+    render(<ReceiptPanel row={payerRow} />)
+    await check()
+    await screen.findByText(/could not be loaded here/)
+    routeAnswers({ state: 'bundle', bundle: producerSelected })
+    await userEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    expect(await screen.findByText('Receipt: your receipt only')).toBeInTheDocument()
+  })
+
+  it('announces its result in a live status region and keeps the button mounted', async () => {
+    routeAnswers({ state: 'refused', why: 'the deal has no report yet' })
+    render(<ReceiptPanel row={payerRow} />)
+    const button = screen.getByRole('button', { name: 'Check receipt' })
+    await userEvent.click(button)
+    const status = screen.getByRole('status')
+    await waitFor(() => expect(status).toHaveTextContent('no receipt yet: the deal has no report yet'))
+    expect(button).toBeInTheDocument()
+  })
+
+  it('reads a bundle the runtime cannot read as did-not-verify, not a load error', async () => {
+    routeAnswers({ state: 'bundle', bundle: { not: 'a bundle' } })
+    render(<ReceiptPanel row={payerRow} />)
+    await check()
+    expect(await screen.findByText(/the receipt did not verify: do not rely on it/)).toBeInTheDocument()
+    expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument()
+  })
+
+  it('offers "Save bundle" in the can\'t-check and did-not-verify states, saving the bundle served', async () => {
+    const created: Blob[] = []
+    const urlStub = {
+      createObjectURL: (blob: Blob) => (created.push(blob), 'blob:x'),
+      revokeObjectURL: () => {}
+    }
+    vi.stubGlobal(
+      'URL',
+      Object.assign(function () {}, urlStub)
+    )
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    routeAnswers({ state: 'bundle', bundle: producerSelected })
+    withoutEd25519()
+    render(<ReceiptPanel row={payerRow} />)
+    await check()
+    await userEvent.click(await screen.findByRole('button', { name: 'Save bundle' }))
+    expect(JSON.parse(await created[0].text())).toEqual(producerSelected)
+    cleanup()
+    vi.unstubAllGlobals()
+    vi.stubGlobal(
+      'URL',
+      Object.assign(function () {}, urlStub)
+    )
+
+    const tampered = { ...producerSelected, records: [{ ...producerSelected.records[0], capsule_id: 'f'.repeat(64) }] }
+    routeAnswers({ state: 'bundle', bundle: tampered })
+    render(<ReceiptPanel row={payerRow} />)
+    await check()
+    await userEvent.click(await screen.findByRole('button', { name: 'Save bundle' }))
+    expect(JSON.parse(await created[1].text())).toEqual(tampered)
+  })
+
+  it('does not offer "Save bundle" for a receipt that checked', async () => {
+    routeAnswers({ state: 'bundle', bundle: producerSelected })
+    render(<ReceiptPanel row={payerRow} />)
+    await check()
+    await screen.findByText('Receipt: your receipt only')
+    expect(screen.queryByRole('button', { name: 'Save bundle' })).not.toBeInTheDocument()
+  })
+
+  it('says it cannot check where SHA-256 is unavailable (an insecure origin), with no verdict', async () => {
+    vi.stubGlobal('crypto', undefined)
+    expect((await checkReceiptBundle(producerSelected)).kind).toBe('cannot_check')
+  })
+
+  it('reads anything the runtime throws on as did-not-verify', async () => {
+    expect((await checkReceiptBundle(null)).kind).toBe('did_not_verify')
+  })
+})
+
+describe('receiptCase', () => {
+  /** A context shaped as the runtime reports a composed/v1 block; only the
+   *  fields the case reads are set (a signed fixture cannot be altered
+   *  without breaking its signatures). */
+  const claim = (status: 'pass' | 'fail') => ({ status, findings: [] })
+  const memberClaims = (status: 'pass' | 'fail') => ({
+    graphClosure: claim(status),
+    intervalCoverage: claim('pass'),
+    perRecordMembership: claim('pass')
+  })
+  const agreeing = (over: Record<string, unknown> = {}) => ({
+    malformed: false,
+    status: 'pass',
+    members: [
+      { outcome: 'artifact', bundle: memberClaims('pass') },
+      { outcome: 'artifact', bundle: memberClaims('pass') }
+    ],
+    joins: [{ derived: 'agree', result: 'derived_matches' }],
+    corroboration: [{ result: 'corroborating' }],
+    ...over
+  })
+  const contextOf = (composed: unknown) => ({ extensions: [{ composed }] }) as never
+
+  it('is "both" only for two agreeing, corroborating, passing copies', () => {
+    expect(receiptCase(contextOf(agreeing()))).toBe('both')
+  })
+
+  it.each([
+    ['a join that disagrees', { joins: [{ derived: 'mismatch', result: 'derived_matches' }] }],
+    ['a redundant pair', { corroboration: [{ result: 'redundant' }] }],
+    ['a single artifact', { members: [{ outcome: 'artifact', bundle: memberClaims('pass') }] }],
+    ['no corroboration', { corroboration: [] }],
+    ['a block that did not pass', { status: 'fail' }],
+    [
+      'a copy whose own claims failed',
+      { members: [{ outcome: 'artifact', bundle: memberClaims('fail') }, { outcome: 'artifact' }] }
+    ]
+  ])('is not "both" for %s', (_name, over) => {
+    expect(receiptCase(contextOf(agreeing(over)))).toBe('one_sided')
+  })
+
+  it('is not "both" with no composed block', () => {
+    expect(receiptCase({ extensions: [] } as never)).toBe('one_sided')
   })
 })
 

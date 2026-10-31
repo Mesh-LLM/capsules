@@ -13,6 +13,7 @@ import {
   bundleVerified,
   buildVerifiedBundleContext,
   verificationBanner,
+  VERIFICATION_BANNER_LINES,
   type ComposedResult,
   type VerifiedBundleContext
 } from '@aac-browser'
@@ -25,6 +26,15 @@ export const RECEIPT_NONE = 'no record'
 export const RECEIPT_CANNOT_CHECK = "this browser can't check the receipt"
 export const RECEIPT_CANNOT_CHECK_POINTER =
   'Open the bundle in the offline viewer (capsule-viewer) to check it; this page shows no verdict for it.'
+export const RECEIPT_NOT_YET = 'no receipt yet:'
+/** The route's refusals that mean there is no record at all
+ *  (`deal_receipt::Refusal::NoDeal`, `provider_receipt::Refusal::NoExchange`).
+ *  The route sends no code, only these words; every other refusal is a state
+ *  that can change (a report or checkpoint still to come, a payment not noted). */
+export const NO_RECORD_REASONS: readonly string[] = [
+  'this node holds no deal for that exchange',
+  'this node holds no single served record for that exchange'
+]
 export const RECEIPT_DID_NOT_VERIFY = 'the receipt did not verify: do not rely on it'
 
 /** The bundle, checked in this browser. `case` is only ever one of the two a
@@ -40,10 +50,34 @@ export type CheckedReceipt = {
 
 export type ReceiptView =
   | CheckedReceipt
+  /** The route's refusal that means this node holds no deal / served record. */
   | { kind: 'no_record'; why: string }
-  | { kind: 'cannot_check' }
-  | { kind: 'did_not_verify'; line: string }
+  /** Any other refusal (no report yet, no checkpoint yet, ...): the route's
+   *  own reason, word for word. */
+  | { kind: 'no_receipt_yet'; why: string }
+  /** `bundle` is kept so the owner can save it and check it elsewhere. */
+  | { kind: 'cannot_check'; bundle: unknown }
+  | { kind: 'did_not_verify'; line: string; bundle: unknown }
+  /** The route failed: not a statement about the exchange or the bundle. */
   | { kind: 'error'; message: string }
+
+/** A composed/v1 block that failed, or a carried copy whose own completeness
+ *  claims failed. The runtime's page gate does not read either (the composed
+ *  status and each member's claims are reported apart), so this page does. */
+export function composedFailed(context: VerifiedBundleContext): boolean {
+  return context.extensions.some((extension) => {
+    const composed = extension.composed
+    if (!composed) return false
+    if (composed.malformed || composed.status === 'fail') return true
+    return composed.members.some(
+      (m) =>
+        m.bundle !== undefined &&
+        [m.bundle.graphClosure, m.bundle.intervalCoverage, m.bundle.perRecordMembership].some(
+          (c) => c.status === 'fail'
+        )
+    )
+  })
+}
 
 /** `both` only when the bundle carries a composed/v1 block the runtime
  *  verified in full: two artifact copies, every join derived to `agree` as
@@ -52,6 +86,7 @@ export type ReceiptView =
  *  halves yet (no `ec:deal-reconcile@1`), so this is unreachable from the
  *  plugin's routes today. */
 export function receiptCase(context: VerifiedBundleContext): 'both' | 'one_sided' {
+  if (composedFailed(context)) return 'one_sided'
   const composed = context.extensions
     .map((extension) => extension.composed)
     .find((result): result is Extract<ComposedResult, { malformed: false }> => result?.malformed === false)
@@ -66,22 +101,35 @@ export function receiptCase(context: VerifiedBundleContext): 'both' | 'one_sided
 
 /** Check `bundle` with the runtime and place it in a case. */
 export async function checkReceiptBundle(bundle: unknown): Promise<ReceiptView> {
+  try {
+    return await checkReceiptBundleUnguarded(bundle)
+  } catch {
+    // Anything the runtime throws while reading the bundle is a bundle it
+    // could not read.
+    return { kind: 'did_not_verify', line: VERIFICATION_BANNER_LINES.refused, bundle }
+  }
+}
+
+async function checkReceiptBundleUnguarded(bundle: unknown): Promise<ReceiptView> {
   let context: VerifiedBundleContext
   try {
     context = await buildVerifiedBundleContext(bundle)
   } catch (error) {
-    if (error instanceof Sha256UnavailableError) return { kind: 'cannot_check' }
-    return {
-      kind: 'error',
-      message: error instanceof Error ? error.message : String(error)
-    }
+    if (error instanceof Sha256UnavailableError) return { kind: 'cannot_check', bundle }
+    // The runtime could not read the bundle: it did not verify, which is not
+    // a route failure.
+    return { kind: 'did_not_verify', line: VERIFICATION_BANNER_LINES.refused, bundle }
   }
   // No strict result: this browser has no Ed25519, so the runtime refuses a
   // producer-selected bundle (verification-page.ts bundleVerified).
-  if (context.strict === undefined) return { kind: 'cannot_check' }
+  if (context.strict === undefined) return { kind: 'cannot_check', bundle }
   const banner = verificationBanner(context, [])
-  if (!bundleVerified(context.verification) || banner.state === 'failed') {
-    return { kind: 'did_not_verify', line: banner.line }
+  if (!bundleVerified(context.verification) || banner.state === 'failed' || composedFailed(context)) {
+    return {
+      kind: 'did_not_verify',
+      line: banner.state === 'failed' ? banner.line : VERIFICATION_BANNER_LINES.refused,
+      bundle
+    }
   }
   const records = (bundle as { records?: unknown }).records
   const total = Array.isArray(records) ? records.length : 0
@@ -96,7 +144,11 @@ export async function checkReceiptBundle(bundle: unknown): Promise<ReceiptView> 
 /** Fetch result to the view; a route refusal is "no record", a route failure
  *  is an error line, neither is a verdict on the bundle. */
 export async function receiptView(fetched: ReceiptFetch): Promise<ReceiptView> {
-  if (fetched.kind === 'refused') return { kind: 'no_record', why: fetched.why }
+  if (fetched.kind === 'refused') {
+    return NO_RECORD_REASONS.includes(fetched.why)
+      ? { kind: 'no_record', why: fetched.why }
+      : { kind: 'no_receipt_yet', why: fetched.why }
+  }
   if (fetched.kind === 'unavailable') return { kind: 'error', message: fetched.message }
   return checkReceiptBundle(fetched.bundle)
 }
