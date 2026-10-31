@@ -265,6 +265,8 @@ export type ExchangeStreamRowProps = {
   /** The node Pane B joins to this row's `key:` counterparty
    *  (`identity.node_id`), when it knows one (`resolveRowPeer`). */
   counterpartyNodeId?: string | null
+  /** The other row of this row's twin pair, when the page has it. */
+  otherRow?: ExchangeLedgerRow | null
 }
 
 const shortIdOnly = (id: string) => namePeer(id, NO_PEER_NAMES)
@@ -288,7 +290,8 @@ export function ExchangeStreamRow({
   onAskForHistory,
   peerName = shortIdOnly,
   witnessOff = false,
-  counterpartyNodeId = null
+  counterpartyNodeId = null,
+  otherRow = null
 }: ExchangeStreamRowProps) {
   // Lifted here (not `SecurityChecksView`, which only mounts once `▸
   // checks` is expanded) so a fetch this hook's `.fetch()` triggers can
@@ -764,6 +767,7 @@ export function ExchangeStreamRow({
             highlightedPropertyKey={highlightedCheckKey}
             identity={identity}
             localRecord={localRecord}
+            otherRow={otherRow}
             row={row}
             theirsRecompute={theirsRecompute}
           />

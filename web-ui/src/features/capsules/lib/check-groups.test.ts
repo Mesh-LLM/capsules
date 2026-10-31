@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countMarks, summarizeMarks, markOfCell, type CheckLine } from '@/features/capsules/lib/check-groups'
+import { buildCheckGroups, countMarks, summarizeMarks, markOfCell, type CheckLine } from '@/features/capsules/lib/check-groups'
 import { askedVerdict } from '@/features/capsules/lib/twin-bracket'
 
 const line = (mark: CheckLine['mark']): CheckLine => ({
@@ -57,5 +57,39 @@ describe('askedVerdict — only a ruling this node asked for and holds', () => {
 
   it('infers nothing from differing answers alone', () => {
     expect(askedVerdict([{ twin: { referee_row: null, same_answer: false } } as never])).toBeNull()
+  })
+})
+
+describe('buildCheckGroups — the referee line names a machine only when a row carries its id', () => {
+  const pair = (counterparty: string): never =>
+    ({
+      counterparty,
+      mine: {},
+      theirs: {},
+      twin: {
+        bracket_id: 'b1',
+        same_answer: false,
+        other_row: 'x',
+        referee_row: { state: 'adjudicated', verdict: 'contradicted:peer-9', referee: 'ref-1', tier: 1 }
+      }
+    }) as never
+  const refereeOf = (row: never, otherRow?: never) => {
+    const groups = buildCheckGroups({ row, otherRow, checks: [], commits: [] })
+    const found = groups.flatMap((g) => g.lines).find((l) => l.id === 'referee_verdict')
+    return found?.yours as { text: string; mark: string }
+  }
+
+  it('this row names the party: wrong answer, failed', () => {
+    expect(refereeOf(pair('peer-9'), pair('peer-2'))).toMatchObject({ text: 'wrong answer', mark: 'failed' })
+  })
+
+  it('the other row names the party: agreed', () => {
+    expect(refereeOf(pair('peer-2'), pair('peer-9'))).toMatchObject({ text: 'agreed', mark: 'node' })
+  })
+
+  it('neither row names the party, or the other row is unknown: no one is marked', () => {
+    const none = { text: 'contradicted · not matched to a machine', mark: 'none' }
+    expect(refereeOf(pair('peer-2'), pair('peer-3'))).toMatchObject(none)
+    expect(refereeOf(pair('peer-2'))).toMatchObject(none)
   })
 })

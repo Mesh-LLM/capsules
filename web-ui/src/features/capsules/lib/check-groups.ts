@@ -125,17 +125,19 @@ function captureMark(state: string | undefined): CheckMark {
   return 'none'
 }
 
-function refereeLine(row: PaneCRow): CheckLine {
+function refereeLine(row: PaneCRow, otherRow?: PaneCRow): CheckLine {
   const asked = askedVerdict([row])
   let yours: LineSide
   if (!asked) {
     yours = { kind: 'text', text: row.twin ? 'not checked' : 'not a pair', mark: 'none' }
   } else if (asked.verdict.kind === 'contradicted') {
-    // The ruling names one node: only the row that names it reads wrong
-    // answer, and the other row agreed with the referee.
-    yours = rowNamesNode(row, [], asked.verdict.party)
-      ? { kind: 'text', text: 'wrong answer', mark: 'failed' }
-      : { kind: 'text', text: 'agreed', mark: 'node' }
+    // The ruling names one node. This row reads wrong answer only when it
+    // names that node, and agreed only when the other row of the pair does;
+    // a party neither row carries marks no one.
+    const party = asked.verdict.party
+    if (rowNamesNode(row, [], party)) yours = { kind: 'text', text: 'wrong answer', mark: 'failed' }
+    else if (otherRow && rowNamesNode(otherRow, [], party)) yours = { kind: 'text', text: 'agreed', mark: 'node' }
+    else yours = { kind: 'text', text: 'contradicted · not matched to a machine', mark: 'none' }
   } else {
     const kind = asked.verdict.kind
     yours = {
@@ -156,10 +158,12 @@ function refereeLine(row: PaneCRow): CheckLine {
 
 export function buildCheckGroups(input: {
   row: PaneCRow
+  /** The other row of the pair, when the caller has it. */
+  otherRow?: PaneCRow
   checks: readonly ChecksRow[]
   commits: readonly CommitsToRow[]
 }): CheckGroup[] {
-  const { row, checks, commits } = input
+  const { row, otherRow, checks, commits } = input
   const present = (lines: (CheckLine | null)[]): CheckLine[] => lines.filter((l): l is CheckLine => l !== null)
 
   const coverage = checks.find((r) => r.key === 'capture_coverage')
@@ -240,7 +244,7 @@ export function buildCheckGroups(input: {
       lines: [
         comparedLine(commits, 'model identity', 'model_identity', 'Same model identity'),
         servedLine,
-        refereeLine(row),
+        refereeLine(row, otherRow),
         teeLine
       ]
     },

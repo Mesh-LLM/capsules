@@ -60,7 +60,7 @@ function SignaturePill({ capsuleId }: { capsuleId: string }) {
     return <StatusBadge size="caption" tone="muted">signature not checked</StatusBadge>
   }
   if (record.data.legacy) return <StatusBadge size="caption" tone="warn">legacy, unverified</StatusBadge>
-  if (record.data.verify_ok) return <StatusBadge size="caption" tone="good">Signature checks here</StatusBadge>
+  if (record.data.verify_ok) return <StatusBadge size="caption" tone="good">signature checks here</StatusBadge>
   // verify_ok is also false when the signature is fine but this node's log
   // does not record the verdict: only a reported signature error is a bad one.
   return record.data.signature_error ? (

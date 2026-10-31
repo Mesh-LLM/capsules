@@ -285,6 +285,8 @@ export type SecurityChecksViewProps = {
    *  shared with its chip strip so the two can never disagree (look finding
    *  1). Computed here only when a caller doesn't supply them. */
   checksRows?: readonly ChecksRow[]
+  /** The other row of this row's twin pair, when the caller has it. */
+  otherRow?: ExchangeLedgerRow | null
 }
 
 const NOT_FETCHED_DEFAULT: PeerRecomputeState = {
@@ -301,7 +303,8 @@ export function SecurityChecksView({
   localRecord,
   theirsRecompute = NOT_FETCHED_DEFAULT,
   highlightedPropertyKey = null,
-  checksRows: suppliedChecksRows
+  checksRows: suppliedChecksRows,
+  otherRow = null
 }: SecurityChecksViewProps) {
   const [rawMode, setRawMode] = useState(false)
   const [recordOpen, setRecordOpen] = useState(false)
@@ -315,7 +318,7 @@ export function SecurityChecksView({
   const commitsToRows = buildCommitsToRows(row.raw, localRecord, theirsRecompute)
   const checksRows = suppliedChecksRows ?? buildChecksRows(row.raw, identity, theirsRecompute)
   const theirsColumnNote = sharedTheirsDetail(checksRows)
-  const groups = buildCheckGroups({ row: row.raw, checks: checksRows, commits: commitsToRows })
+  const groups = buildCheckGroups({ row: row.raw, otherRow: otherRow?.raw, checks: checksRows, commits: commitsToRows })
   const headline = summarizeMarks(countMarks(groups.flatMap((group) => group.lines)), true)
 
   const isOpen = (group: CheckGroup) => chosen[group.key] ?? group.lines.some((line) => line.mark === 'failed')

@@ -152,7 +152,7 @@ describe('TwinBracket — the group card', () => {
     const referee = document.querySelector('[data-twin-column="Referee"]') as HTMLElement
     expect(referee).toHaveTextContent('b9979a730e')
     expect(referee).toHaveTextContent('Re-ran the request. Verdict a9a0ca668223')
-    expect(await within(referee).findByText('Signature checks here')).toBeInTheDocument()
+    expect(await within(referee).findByText('signature checks here')).toBeInTheDocument()
     expect(document.querySelector('[data-twin-footnote]')).toHaveTextContent(
       'This verdict was asked for by you. It stays here and is never combined with other results.'
     )
@@ -180,7 +180,7 @@ describe('TwinBracket — the group card', () => {
     })
     renderCard([twinRow('a', { twin }), twinRow('b', { twin })])
     expect(await screen.findByText('signature not checked')).toBeInTheDocument()
-    expect(screen.queryByText('Signature checks here')).not.toBeInTheDocument()
+    expect(screen.queryByText('signature checks here')).not.toBeInTheDocument()
     expect(screen.getAllByText('Referee: agreed')).toHaveLength(2)
     expect(screen.queryByText('Swap caught')).not.toBeInTheDocument()
   })
