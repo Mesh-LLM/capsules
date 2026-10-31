@@ -5,7 +5,7 @@
 // peer-fetch carrier exists -- same gap `peer_history_cell` documents) and
 // per-event integrity markers like `changed_without_saying`/owner-binding
 // on Pane B (those exist only on Pane A's own history view today). Both
-// render as an honest "not yet checked" band via `theirChainSummary`
+// render as an honest "not yet checked" band
 // rather than an invented mark or event.
 import type { CapsuleRecord } from '@/features/capsules/api/types'
 import type { PaneBRow, PaneCRow } from '@/features/capsules/api/sidecarTypes'

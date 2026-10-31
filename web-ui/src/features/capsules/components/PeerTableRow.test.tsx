@@ -15,7 +15,7 @@ import {
   PEER_TAB_HARNESS_MESH_PEERS
 } from '@/features/capsules/lib/peer-fixtures'
 import { deriveMeshStatus } from '@/features/capsules/lib/peer-mesh-status'
-import { dealtWithRowView, SELF_REPORTED_NOTE } from '@/features/capsules/lib/peer-row-view'
+import { dealtWithRowView } from '@/features/capsules/lib/peer-row-view'
 import { PEER_DRAWER, PEER_PAYMENTS_TOOLTIP } from '@/features/capsules/lib/tooltip-copy'
 
 const [CLEAN_ROW, ALARMED_ROW] = HARNESS_PANE_B_PAYLOAD.rows
@@ -42,8 +42,6 @@ describe('PeerTableRow — dealt-with peers', () => {
     // The witnessed column is gone.
     expect(screen.queryByText('not shown yet')).not.toBeInTheDocument()
     expect(screen.getByText('8 Sep')).toBeInTheDocument()
-    // Said once in the table legend, never on each row (UX §2).
-    expect(screen.queryByText(SELF_REPORTED_NOTE)).not.toBeInTheDocument()
     expect(screen.queryByText(/⚠/)).not.toBeInTheDocument()
     expect(screen.queryByText(/online/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Route here' })).not.toBeInTheDocument()

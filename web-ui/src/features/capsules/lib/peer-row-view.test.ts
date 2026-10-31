@@ -26,9 +26,7 @@ import {
   periodRangeText,
   peerSortKey,
   PEER_COLUMN_INFO,
-  SELF_REPORTED_DETAIL,
   sortPeerRows,
-  theirChainSummary,
   unattributedExchangesLine,
   withYouCounts,
   withYouCountsText
@@ -161,43 +159,6 @@ describe('adjudicationSummary honesty invariants', () => {
       verdicts: { state: 'present', text: '', tally: { corroborated: 0, contradicted: 0, inconclusive: 0 } }
     })
     expect(adjudicationSummary(row).notChecked).toBe(true)
-  })
-})
-
-describe('theirChainSummary — never presents your own chain as theirs', () => {
-  it('labels the common NOT_CHECKED case honestly, without the word "pending"', () => {
-    const row = baseRow({
-      history: {
-        state: 'NOT_CHECKED',
-        text: null,
-        mine_for_reference: { history: { state: 'verified', text: '', history_depth: 9, checkpoint_count: 9 } }
-      }
-    })
-    const chain = theirChainSummary(row)
-    expect(chain.state).toBe('NOT_CHECKED')
-    expect(chain.ownChainForReferenceOnly).toBe(true)
-    expect(chain.text.toLowerCase()).not.toMatch(/\bpending\b/)
-  })
-
-  it('only claims "unbroken" when a real peer-fetch verified history_summary backs it', () => {
-    const row = baseRow({
-      history: {
-        state: 'verified',
-        text: '',
-        history_summary: { verified_bundles: 5, checkpoint_count: 41 }
-      }
-    })
-    const chain = theirChainSummary(row)
-    expect(chain.text).toContain('41')
-    expect(chain.text).toMatch(/^Unbroken/)
-    expect(chain.ownChainForReferenceOnly).toBe(false)
-  })
-
-  it('reports a failed verification honestly, never as unbroken', () => {
-    const row = baseRow({ history: { state: 'failed', text: 'fetch verification failed: chain diverged' } })
-    const chain = theirChainSummary(row)
-    expect(chain.text).not.toMatch(/^Unbroken/)
-    expect(chain.text).toMatch(/failed/i)
   })
 })
 
@@ -517,7 +478,7 @@ describe('dealtWithRowView — honest degradation', () => {
   })
 })
 
-describe('Item 4 — Peers column (i) copy + self-reported detail: evidence, never a score', () => {
+describe('Item 4 — Peers column (i) copy: evidence, never a score', () => {
   it('Left something out says what it counts, out of how many', () => {
     expect(PEER_COLUMN_INFO.leftOut).toContain('same request, answer and model as yours')
     expect(PEER_COLUMN_INFO.leftOut).toContain('out of all your exchanges with them')
@@ -533,12 +494,6 @@ describe('Item 4 — Peers column (i) copy + self-reported detail: evidence, nev
       expect(info.length).toBeGreaterThan(0)
       expect(info).not.toMatch(new RegExp(`\\b(score|rating|proven|${STANDING_WORD}|judgement|ranking)\\b`, 'i'))
     }
-  })
-
-  it('the self-reported detail states the identity is self-reported and not independently attested', () => {
-    expect(SELF_REPORTED_DETAIL).toMatch(/self-reported/i)
-    expect(SELF_REPORTED_DETAIL).toMatch(/only the records they signed, checked on this machine, count as evidence/i)
-    expect(SELF_REPORTED_DETAIL).not.toMatch(/\b(score|rating|proven|halves|recomputed)\b/i)
   })
 })
 

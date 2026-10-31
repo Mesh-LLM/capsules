@@ -8,7 +8,7 @@ import { deriveRightCellState } from '@/features/capsules/lib/exchange-row-state
 import type { PeerMeshStatus } from '@/features/capsules/lib/peer-mesh-status'
 import { parseVerdict } from '@/features/capsules/lib/adjudication-view'
 import { peerSettlementText } from '@/features/capsules/lib/settlement-view'
-import { PEER_ATTENTION, PEER_COLUMN_TOOLTIPS, SELF_REPORTED_TOOLTIP } from '@/features/capsules/lib/tooltip-copy'
+import { PEER_ATTENTION, PEER_COLUMN_TOOLTIPS } from '@/features/capsules/lib/tooltip-copy'
 
 export const STATE_NOT_CHECKED = 'NOT_CHECKED'
 export const STATE_CONTRADICTED = 'contradicted'
@@ -202,50 +202,6 @@ export function adjudicationSummaryText(summary: AdjudicationSummary): string {
 }
 
 // ---------------------------------------------------------------------------
-// Their chain (secondary) -- you verified it's unbroken/unforked, never its
-// contents. Never summed with with-you facts.
-// ---------------------------------------------------------------------------
-
-export type ChainSummary = {
-  text: string
-  state: string
-  /** True when this cell has no peer-fetch data and is only carrying this
-   *  node's OWN chain as `mine_for_reference` -- the UI must label that
-   *  clearly as "for reference", never present it as the peer's. */
-  ownChainForReferenceOnly: boolean
-}
-
-export function theirChainSummary(row: PaneBRow): ChainSummary {
-  const cell = row.history
-  const state = cell?.state ?? STATE_NOT_CHECKED
-
-  if (state === STATE_VERIFIED && cell?.history_summary) {
-    const checkpointCount = cell.history_summary.checkpoint_count
-    const bundles = cell.history_summary.verified_bundles
-    return {
-      text: `Unbroken — you verified their chain (their count: ${checkpointCount ?? '?'} checkpoint(s), ${bundles ?? '?'} bundle(s)).`,
-      state,
-      ownChainForReferenceOnly: false
-    }
-  }
-  if (state === STATE_FAILED) {
-    return {
-      text: 'Verification failed — could not confirm their chain is unbroken.',
-      state,
-      ownChainForReferenceOnly: false
-    }
-  }
-  if (state === STATE_REFUSED) {
-    return { text: 'Peer refused to share their chain.', state, ownChainForReferenceOnly: false }
-  }
-  return {
-    text: "Not yet checked — this view has no way to fetch the peer's own chain yet.",
-    state: STATE_NOT_CHECKED,
-    ownChainForReferenceOnly: Boolean(cell?.mine_for_reference)
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Confirmed by the other side -- routed through the ONE gate
 //, the SAME predicate Pane C uses. A peer's
 // pushed halves arrive correlated + provenance-carrying in
@@ -432,12 +388,6 @@ export function sortPeerRows<T>(rows: readonly T[], keyOf: (row: T) => readonly 
     return aRank - bRank || aLatency - bLatency
   })
 }
-
-export const SELF_REPORTED_NOTE = 'self-reported — not independently attested'
-
-/** The full sentence behind the `self-reported` chip's (i) -- the terse chip
- *  on the row's face, the fuller honest statement on hover. */
-export const SELF_REPORTED_DETAIL = SELF_REPORTED_TOOLTIP
 
 // ---------------------------------------------------------------------------
 // Witness -- no pane exposes a peer-scoped witness registration count today

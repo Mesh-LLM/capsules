@@ -3,9 +3,8 @@
 // console's own `GET /api/status` (`peers[]`: `id` is the node's 10-hex short
 // id, `hostname` what that node says it is called), read through the same
 // cached `useStatusQuery` the Peers tab and the owner link already use, so
-// naming a peer costs no extra request. A hostname is self-reported, like
-// every peer name on this page (`SELF_REPORTED_NOTE`); the short id beside it
-// is what the records name. With no hostname, the short id alone.
+// naming a peer costs no extra request. A hostname is self-reported;
+// the short id beside it is what the records name. With no hostname, the short id alone.
 import { useMemo } from 'react'
 import { useStatusQuery } from '@/features/network/api/use-status-query'
 import { useDataMode } from '@/lib/data-mode'

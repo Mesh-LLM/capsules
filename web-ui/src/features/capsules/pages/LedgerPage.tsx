@@ -246,10 +246,14 @@ function PeersSection({
   })
   const meshStatus = usePeerMeshStatusIndex(PEER_TAB_HARNESS_MESH_PEERS, PEER_TAB_HARNESS_MESH_MODELS)
   const peerName = usePeerNames()
-  // The drawer's history ask: the same request and the same judging as the Exchanges row's.
+  // The drawer's history ask: the same request and judging as the Exchanges
+  // row's, and a verified result goes into the same browser memory
+  // (`history-memory.ts`), shown on that peer's newest Exchanges row.
   const askPeerHistory = async (nodeId: string): Promise<HistoryOutcome> => {
     const askedAt = new Date().toISOString()
-    return judgeHistoryReply(await askForHistory(nodeId), askedAt)
+    const outcome = judgeHistoryReply(await askForHistory(nodeId), askedAt)
+    rememberVerifiedHistory(loadVerifiedHistories(), nodeId, outcome)
+    return outcome
   }
   const effectiveRecordsById = harnessMode ? PEER_TAB_HARNESS_LEDGER_RECORDS : recordsById
 

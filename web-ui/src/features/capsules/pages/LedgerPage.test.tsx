@@ -2004,6 +2004,16 @@ describe('LedgerPageContent — a peer known only from your records', () => {
     vi.clearAllMocks()
   })
 
+  it('a history check that passes in the peer drawer is remembered like the Exchanges row’s', async () => {
+    await renderNodeOnlyPeer(null)
+    const user = userEvent.setup()
+    await user.click(await screen.findByLabelText(/^Open peer inspector for /))
+    await user.click(await screen.findByRole('button', { name: 'Ask a peer for their history' }))
+    expect(await screen.findByText(/Their history checks out/)).toBeInTheDocument()
+    const stored = JSON.parse(window.localStorage.getItem(HISTORY_MEMORY_KEY) ?? '{}')
+    expect(stored[NODE]).toMatchObject({ kind: 'verified', checkpoints: 2 })
+  })
+
   it('names the signing key this node knows for it (here only configured), claiming no source', async () => {
     const announcedKeyFor = await renderNodeOnlyPeer('e'.repeat(64))
     expect(

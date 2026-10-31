@@ -85,10 +85,6 @@ export const PEER_DRAWER = {
 
 export const PEER_NEEDS_A_LOOK_LABEL = 'Needs a look'
 
-/** The peer's self-reported identity note. */
-export const SELF_REPORTED_TOOLTIP =
-  'This identity is self-reported: it’s what the peer says about itself. Only the records they signed, checked on this machine, count as evidence.'
-
 /** Peer attention badges -- the specific thing, counted, replacing the old
  *  generic ⚠ alarm chip. Each is one sentence naming exactly that. */
 export const PEER_ATTENTION = {

@@ -340,7 +340,6 @@ describe('tooltip census -- the copy itself', () => {
     const face: string[] = [
       ...Object.values(COPY.HERO_TOOLTIPS),
       ...Object.values(COPY.PEER_COLUMN_TOOLTIPS),
-      COPY.SELF_REPORTED_TOOLTIP,
       ...Object.values(COPY.PEER_ATTENTION).flatMap((entry) => [entry.tooltip(1), entry.tooltip(2)]),
       ...Object.values(COPY.ROW_STATE_TOOLTIPS),
       ...Object.values(COPY.CLOSED_CELL_TOOLTIPS),
