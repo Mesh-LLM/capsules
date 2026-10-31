@@ -198,9 +198,10 @@ export function buildSetupSteps(
           ? 'Right now your records can only be checked against themselves. A witness you don’t run is what lets someone else prove a rewrite.'
           : 'This node did not report its checkpoint status. That is not the same as having none — the status was not reported, so nothing can be concluded either way.',
       guards: 'rewrote the record',
-      // Only when the node says no witness is set: "on" or unknown has nothing to turn on.
+      // Same rule as the Rewrote-the-record card: offered when the witness is off or
+      // not reported; a witness that is on has nothing to turn on.
       action:
-        registration.witnessState === 'off'
+        registration.witnessState === 'off' || registration.witnessState === 'unknown'
           ? { kind: 'link', label: 'Turn on', href: '/configuration/plugins' }
           : undefined
     },

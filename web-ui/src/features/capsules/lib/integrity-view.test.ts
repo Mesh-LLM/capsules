@@ -45,12 +45,13 @@ describe('buildSetupSteps — three steps named after the attack they guard agai
     expect(steps[1].action).toEqual({ kind: 'command', label: 'mesh-llm auth init' })
   })
 
-  it('"Turn on" shows only when the node says no witness is set, not when one is on or unknown', () => {
+  it('"Turn on" shows when the witness is off or not reported, as on the Rewrote-the-record card, not when one is on', () => {
     const action = (card: Record<string, unknown> | null) => buildSetupSteps(card, null)[0].action
     expect(action({ checkpoint_count: 1, witness_configured: false })).toMatchObject({ label: 'Turn on' })
     expect(action({ checkpoint_count: 1, witness_configured: true })).toBeUndefined()
-    expect(action({ checkpoint_count: 1 })).toBeUndefined()
-    expect(action(null)).toBeUndefined()
+    expect(action({ checkpoint_count: 1 })).toMatchObject({ label: 'Turn on' })
+    expect(action({ checkpoint_count: 1, witnesses: [{ checked: true }], witness_configured: false })).toBeUndefined()
+    expect(action({ checkpoint_count: 1, witness_configured: true, witnessed_checkpoint_count: 0 })).toBeUndefined()
   })
 
   it('an exchange list that was not read is "not checked", never "none yet"', () => {
