@@ -4,6 +4,13 @@
 
 ### Changed
 
+- **The Witnesses field suggests a witness.** The field declares the `set-value` renderer and shows
+  `https://witness.agentactioncapsule.org` greyed as a placeholder (it answers
+  `GET /anchor/authority-pubkey` with `pubkey_hex` and `key_id`, which the plugin reads). A console
+  that has the renderer shows a Set button; one that does not shows the plain field. Nothing is
+  stored until the user sets a value, so there is still no default witness and the plugin contacts
+  none until one is named.
+
 - **Configuration page regrouped.** The plugin's settings are declared in three groups, "What
   you show others", "When answers differ" and "Keeping records", with the labels and one-line
   descriptions of the Configuration design, and a single rising row order, so a console that

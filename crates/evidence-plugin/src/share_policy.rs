@@ -29,6 +29,10 @@ pub const RECORD_AT_COMPLETION_KEY: &str = "share_record_at_completion";
 pub const HISTORY_SEGMENTS_KEY: &str = "share_history_segments";
 pub const ADJUDICATIONS_KEY: &str = "share_adjudications";
 pub const WITNESS_KEY: &str = "witness";
+
+/// Shown greyed in the Witnesses field as a suggestion. Not a default: the
+/// plugin contacts no witness until the user clicks Set (or types one).
+pub const SUGGESTED_WITNESS_URL: &str = "https://witness.agentactioncapsule.org";
 /// The rest of Standard Service History (`served_summary/1` and other
 /// derivations) to a requester that is not this node's counterparty.
 /// Checkpoints and `history_card/1` are stranger-safe and not gated by it.
@@ -387,6 +391,13 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                 "Witness services to offer this node's checkpoints to: each one's URL, and its public key if you have it. Empty is off (the default): there is no default witness, and the plugin contacts none until you add one. The Evidence page shows what each witness holds. Takes effect when mesh-llm is restarted.",
             )
                 .label("Witnesses")
+                // The console shows this greyed with a Set button (the generic
+                // `set-value` renderer); nothing is stored until Set is clicked,
+                // so there is still no default witness. The URL answers
+                // `GET /anchor/authority-pubkey` with `pubkey_hex` and `key_id`,
+                // which is what `witness_status::fetch_key` reads.
+                .placeholder(SUGGESTED_WITNESS_URL)
+                .renderer_id("set-value")
                 .category(RECORDS_CATEGORY_ID, RECORDS_CATEGORY_LABEL, RECORDS_CATEGORY_SUMMARY, 2)
                 .order(10),
         )
@@ -852,6 +863,14 @@ mod tests {
             .map(|p| (p.key.as_str(), p.required))
             .collect();
         assert_eq!(props, [("endpoint", true), ("public_key", false)]);
+        // The suggestion is a hint, not a default: still nothing stored.
+        let presentation = witness.presentation.as_ref().unwrap();
+        assert_eq!(
+            presentation.placeholder.as_deref(),
+            Some(SUGGESTED_WITNESS_URL)
+        );
+        assert_eq!(presentation.renderer_id.as_deref(), Some("set-value"));
+        assert_eq!(witness.default_json, None);
     }
 
     #[test]
