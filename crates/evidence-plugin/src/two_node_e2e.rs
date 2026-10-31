@@ -1013,3 +1013,64 @@ fn each_ask_is_sealed_before_it_is_sent_and_an_unanswered_one_ends_in_absence() 
     assert!(time(&statement["recorded_at"]) >= closed, "{statement:#}");
     open_ledger(&run.requester.ledger_dir()).expect("the requester's ledger reloads");
 }
+
+/// What a node's `history-page` route served while the run was live, saved by
+/// the script as `history-page-<name>.json` (Mesh-LLM/capsules-plugin#122),
+/// and its `reply` parsed.
+fn history_page(name: &str) -> (Value, Value) {
+    let page = join_output(&format!("history-page-{name}.json"));
+    let reply = serde_json::from_str(page["reply"].as_str().expect("`reply` is text"))
+        .unwrap_or_else(|e| panic!("history-page-{name}: `reply` is not JSON: {e}"));
+    (page, reply)
+}
+
+/// The `history-page` route on live nodes gave each node's own answer under
+/// its own key: the requester, before its first checkpoint, a refusal it
+/// signed for the stranger's history card request, and later the card; the
+/// provider, which shares its Service History, that History. The History page
+/// built from each `reply` and opened offline is checked by
+/// `web-ui/src/features/capsules/lib/history-page.e2e.test.ts`, which the
+/// script runs next. This checks what that page does not: the refusal's and
+/// the card's signatures, and that the key is the node's own.
+#[test]
+#[ignore = "needs the data directories of a real two-node run (scripts/e2e-two-node.sh)"]
+fn the_history_page_route_served_each_nodes_own_answer() {
+    let run = Run::from_env();
+    let (_, card_request) = crate::doctor::probe_requests()
+        .into_iter()
+        .find(|(name, _)| *name == crate::doctor::PROBE_HISTORY_CARD)
+        .expect("doctor asks for the history card");
+    let no_witness_keys = std::collections::BTreeMap::new();
+    let verified = |reply: &Value, node: &Node| {
+        crate::evidence_answer::verify_response(
+            &card_request,
+            reply,
+            &node.signing_key().verifying_key(),
+            &no_witness_keys,
+        )
+    };
+
+    let (fresh, refusal) = history_page("fresh");
+    assert_eq!(fresh["form"], crate::history_page::FORM_HISTORY_CARD);
+    assert_eq!(fresh["outcome"], "refused", "{fresh:#}");
+    assert_eq!(fresh["node_key_id"], json!(run.requester.key_id()));
+    let check = verified(&refusal, &run.requester);
+    assert_eq!(check["state"], "refusal", "{check:#}");
+
+    let (card_page, card) = history_page("requester");
+    assert_eq!(card_page["form"], crate::history_page::FORM_HISTORY_CARD);
+    assert_eq!(card_page["outcome"], "answered", "{card_page:#}");
+    assert_eq!(card_page["node_key_id"], json!(run.requester.key_id()));
+    assert_eq!(card["responder"], card_page["node_key_id"]);
+    let check = verified(&card, &run.requester);
+    assert_eq!(check["state"], "artifact", "{check:#}");
+
+    let (service_page, service_history) = history_page("provider");
+    assert_eq!(
+        service_page["form"],
+        crate::history_page::FORM_SERVICE_HISTORY
+    );
+    assert_eq!(service_page["outcome"], "answered", "{service_page:#}");
+    assert_eq!(service_page["node_key_id"], json!(run.provider.key_id()));
+    assert_eq!(service_history["responder"], service_page["node_key_id"]);
+}

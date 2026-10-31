@@ -133,6 +133,14 @@ in `crates/evidence-plugin/src/two_node_e2e.rs` run over what each node wrote:
   `evidence_response` citing it, which verified for exactly the sealed
   request's digest; and an ask to a node not on the mesh ends, once its
   window closes, in a `recorded_absence` citing that request.
+- the History page from a live node: while the nodes run, the script saves
+  what each node's `history-page` route serves (the requester before its first
+  checkpoint, a refusal; later its card; the provider, its Service History).
+  `two_node_e2e.rs` checks the refusal and the card verify under the
+  requester's own key and the Service History names the provider's, and
+  `web-ui/src/features/capsules/lib/history-page.e2e.test.ts` builds the
+  History page from each `reply`, opens it offline, and checks it verifies
+  (or shows the refusal) and hands back the served bytes unchanged.
 - the real-host tests (`tests/host_runtime_e2e.rs`, see
   [docs/REAL-HOST-VERIFICATION.md](docs/REAL-HOST-VERIFICATION.md)) pass, and
   fail on a build that serves a blocked model.
