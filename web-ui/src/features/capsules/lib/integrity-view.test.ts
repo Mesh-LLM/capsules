@@ -38,11 +38,27 @@ describe('buildSetupSteps — three steps named after the attack they guard agai
       'denying your own records',
       'left something out'
     ])
-    expect(steps.map((step) => step.status)).toEqual(['Off · your choice', 'Not linked', 'none yet'])
+    expect(steps.map((step) => step.status)).toEqual(['off · your choice', 'not linked', 'none yet'])
     expect(steps[0].body).toMatch(/can only be checked against themselves/)
     expect(steps[1].body).toMatch(/your own claim about who you are, nothing more/)
     expect(steps[0].action).toEqual({ kind: 'link', label: 'Turn on', href: '/configuration/plugins' })
     expect(steps[1].action).toEqual({ kind: 'command', label: 'mesh-llm auth init' })
+  })
+
+  it('"Turn on" shows only when the node says no witness is set, not when one is on or unknown', () => {
+    const action = (card: Record<string, unknown> | null) => buildSetupSteps(card, null)[0].action
+    expect(action({ checkpoint_count: 1, witness_configured: false })).toMatchObject({ label: 'Turn on' })
+    expect(action({ checkpoint_count: 1, witness_configured: true })).toBeUndefined()
+    expect(action({ checkpoint_count: 1 })).toBeUndefined()
+    expect(action(null)).toBeUndefined()
+  })
+
+  it('an exchange list that was not read is "not checked", never "none yet"', () => {
+    const step = buildSetupSteps({ checkpoint_count: 0 }, null, { total: null, received: 0 })[2]
+    expect(step.status).toBe('not checked')
+    expect(step.tone).toBe('muted')
+    expect(step.done).toBe(false)
+    expect(step.body).not.toMatch(/no exchanges yet/)
   })
 
   it('step 3 is a status carrying its denominator, never a to-do', () => {
@@ -63,20 +79,20 @@ describe('buildSetupSteps — three steps named after the attack they guard agai
     expect(buildSetupSteps(null, null)[0].body).toMatch(/did not report its checkpoint status/)
     expect(buildSetupSteps({ checkpoint_count: 2 }, null)[0].status).toBe('not checked')
     expect(buildSetupSteps({ checkpoint_count: 2, witness_configured: true }, null)[0].status).toBe(
-      'On · none holds one yet'
+      'on · none holds one yet'
     )
   })
 
   it('D1: a local checkpoint with ZERO witnesses is never "held" — the exact overclaim', () => {
     const steps = buildSetupSteps({ checkpoint_count: 3, witnesses: [], witness_configured: false }, null)
     expect(steps[0].done).toBe(false)
-    expect(steps[0].status).toBe('Off · your choice')
+    expect(steps[0].status).toBe('off · your choice')
     expect(steps[0].body).toMatch(/lets someone else prove a rewrite/)
   })
 
   it('step 1 flips to held ONLY once a witness actually holds a checkpoint, and drops its body and action', () => {
     const steps = buildSetupSteps({ checkpoint_count: 3, witnesses: [{ checked: true }] }, null)
-    expect(steps[0]).toMatchObject({ done: true, status: 'Held by a witness', body: null, action: undefined })
+    expect(steps[0]).toMatchObject({ done: true, status: 'held by a witness', body: null, action: undefined })
   })
 
   it('step 1, the witness line and the Exchanges headline all derive from the ONE checkpointRegistration fact', () => {
@@ -89,14 +105,14 @@ describe('buildSetupSteps — three steps named after the attack they guard agai
 
     const witnessed = { checkpoint_count: 5, witnesses: [{ checked: true }] }
     expect(checkpointRegistration(witnessed).registered).toBe(true)
-    expect(buildSetupSteps(witnessed, null)[0].status).toBe('Held by a witness')
+    expect(buildSetupSteps(witnessed, null)[0].status).toBe('held by a witness')
     expect(buildRegistrationCopy(witnessed)?.witnessSummary).toMatch(/^Held by 1 witness/)
   })
 
   it('step 2 says what binding established once the live owner is verified -- never "bound" alone', () => {
     const steps = buildSetupSteps(null, { status: 'verified', verified: true })
     expect(steps[1].done).toBe(true)
-    expect(steps[1].status).toBe('Linked (self-asserted)')
+    expect(steps[1].status).toBe('linked (self-asserted)')
     expect(steps[1].action).toBeUndefined()
     expect(steps[1].body).toBe(
       'Your records are signed by this node’s key, linked to your owner account (self-asserted).'
@@ -106,7 +122,7 @@ describe('buildSetupSteps — three steps named after the attack they guard agai
   it('an owner the host did NOT verify is not linked -- every non-verified status the host sends', () => {
     for (const status of ['unsigned', 'expired', 'invalid_signature', 'revoked_owner', 'untrusted_owner']) {
       expect(ownerLinked({ status, verified: false })).toBe(false)
-      expect(buildSetupSteps(null, { status, verified: false })[1].status).toBe('Not linked')
+      expect(buildSetupSteps(null, { status, verified: false })[1].status).toBe('not linked')
     }
     expect(ownerLinked({ status: 'verified', verified: true })).toBe(true)
   })
@@ -159,7 +175,7 @@ describe('checkpointRegistration — the witness state', () => {
     expect(live.witnessedCheckpointCount).toBe(1)
     expect(buildSetupSteps({ checkpoint_count: 3, witnesses: [], witnessed_checkpoint_count: 1 }, null)[0]).toMatchObject({
       done: true,
-      status: 'Held · not the latest'
+      status: 'held · not the latest'
     })
   })
 
@@ -317,7 +333,7 @@ describe('records strip — heading, badge and breakdown, every count with its d
   it('the breakdown adds the last checkpoint time only when the node gave one', () => {
     expect(recordsStripBreakdown(9, 4, 0, 0, null)).toBe('9 yours · 4 received')
     expect(recordsStripBreakdown(9, 4, 0, 0, '2026-09-10T16:28:00Z')).toBe(
-      `9 yours · 4 received · last checkpoint ${formatExchangeTimestamp('2026-09-10T16:28:00Z')}`
+      `9 yours · 4 received · last checkpoint no later than ${formatExchangeTimestamp('2026-09-10T16:28:00Z')}`
     )
   })
 

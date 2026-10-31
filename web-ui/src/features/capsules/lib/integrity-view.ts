@@ -9,7 +9,7 @@
 // `owner_card_index` are the pre-existing aspirational `card` fields
 // (`capsule_panes_native.rs::build_pane_a` returns `card: null` today --
 // see that file's module docs on what this native reader does and does not
-// compute yet). `registered_no_later_than` and `asked_peer_at` below are
+// compute yet). `registered_no_later_than` below is
 // new fields in the SAME discipline: read if a future backend populates
 // them, degrade to the honest "not set up" state otherwise, never
 // fabricated. Owner identity is NOT read from `card` -- it comes from the
@@ -52,7 +52,7 @@ const ownerBound = ownerLinked
 // ---------------------------------------------------------------------------
 
 /** Where this node's checkpoints stand with a witness, the one fact the hero
- *  line, the witness tile, the registration copy and the setup step read:
+ *  line, the registration copy and the setup step read:
  *  - `latest`: a witness holds the latest checkpoint;
  *  - `earlier`: a witness holds an earlier checkpoint, not the latest yet
  *    (a checkpoint cut between two offers to the witness);
@@ -160,7 +160,7 @@ export type SetupStep = {
 /** How many exchanges this node holds, and for how many the other side's
  *  record arrived. Both from the same exchange rows, so the pill and the
  *  tile carry one denominator. */
-export type ReceivedCounts = { total: number; received: number }
+export type ReceivedCounts = { total: number | null; received: number }
 
 export function buildSetupSteps(
   card: JsonRecord | null | undefined,
@@ -172,13 +172,16 @@ export function buildSetupSteps(
   const registration = checkpointRegistration(card)
   const bound = ownerBound(owner)
   const held = registration.witnessedCheckpointCount > 0
-  const allReceived = exchanges.total > 0 && exchanges.received >= exchanges.total
+  // `total: null` = the exchange list was not read, which is not the same as
+  // having no exchanges.
+  const total = exchanges.total
+  const allReceived = total !== null && total > 0 && exchanges.received >= total
 
   const witnessPill: Record<WitnessState, string> = {
-    latest: 'Held by a witness',
-    earlier: 'Held · not the latest',
-    pending: 'On · none holds one yet',
-    off: 'Off · your choice',
+    latest: 'held by a witness',
+    earlier: 'held · not the latest',
+    pending: 'on · none holds one yet',
+    off: 'off · your choice',
     unknown: 'not checked'
   }
 
@@ -195,13 +198,17 @@ export function buildSetupSteps(
           ? 'Right now your records can only be checked against themselves. A witness you don’t run is what lets someone else prove a rewrite.'
           : 'This node did not report its checkpoint status. That is not the same as having none — the status was not reported, so nothing can be concluded either way.',
       guards: 'rewrote the record',
-      action: held ? undefined : { kind: 'link', label: 'Turn on', href: '/configuration/plugins' }
+      // Only when the node says no witness is set: "on" or unknown has nothing to turn on.
+      action:
+        registration.witnessState === 'off'
+          ? { kind: 'link', label: 'Turn on', href: '/configuration/plugins' }
+          : undefined
     },
     {
       key: 'identity',
       title: 'Bind your records to a key you own',
       done: bound,
-      status: bound ? 'Linked (self-asserted)' : 'Not linked',
+      status: bound ? 'linked (self-asserted)' : 'not linked',
       tone: bound ? 'good' : 'pending',
       // "bound" alone overclaims -- the done state says what it is.
       body: bound
@@ -216,12 +223,14 @@ export function buildSetupSteps(
       key: 'ask_peer',
       title: 'Get the other side’s record',
       done: allReceived,
-      status: exchanges.total === 0 ? 'none yet' : `${exchanges.received} of ${exchanges.total} received`,
-      tone: exchanges.total === 0 ? 'muted' : allReceived ? 'good' : 'pending',
+      status: total === null ? 'not checked' : total === 0 ? 'none yet' : `${exchanges.received} of ${total} received`,
+      tone: total === null || total === 0 ? 'muted' : allReceived ? 'good' : 'pending',
       body:
-        exchanges.total === 0
-          ? 'Every exchange produces two signed records, one per side. There are no exchanges yet.'
-          : `Every exchange produces two signed records, one per side. You hold both for ${exchanges.received} of ${exchanges.total}.`,
+        total === null
+          ? 'Every exchange produces two signed records, one per side. This page has not read the exchange list.'
+          : total === 0
+            ? 'Every exchange produces two signed records, one per side. There are no exchanges yet.'
+            : `Every exchange produces two signed records, one per side. You hold both for ${exchanges.received} of ${total}.`,
       guards: 'left something out',
       action: { kind: 'exchanges', label: 'See in Exchanges' }
     }
@@ -348,7 +357,8 @@ export function recordsStripBreakdown(
   lastCheckpointAt: string | null
 ): string {
   let text = sealedBreakdownText(own, receivedNotes, routingChoices, paymentRecords)
-  if (lastCheckpointAt) text += ` · last checkpoint ${formatExchangeTimestamp(lastCheckpointAt)}`
+  // `registered_no_later_than` is a bound, not the moment it was cut.
+  if (lastCheckpointAt) text += ` · last checkpoint no later than ${formatExchangeTimestamp(lastCheckpointAt)}`
   return text
 }
 

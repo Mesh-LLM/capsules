@@ -28,11 +28,6 @@ export const HERO_TOOLTIPS = {
 export const OWNER_LINKED_PHRASE = 'linked to your owner account (self-asserted)'
 export const OWNER_NOT_LINKED_PHRASE = 'not linked to an owner'
 
-/** Record push is on by default (#68) but a node may turn it off, so their
- *  record arriving by itself is never promised. */
-export const THEIR_RECORD_ARRIVES_IF_PUSHED =
-  'Their record arrives on its own only if their node sends records (on by default, unless its operator turned it off). Otherwise, ask for it on the exchange row.'
-
 /** p2 item 5: why an action is disabled -- said on hover, never a silent grey. */
 export const SAMPLE_DATA_UNAVAILABLE = 'Not available on sample data.'
 

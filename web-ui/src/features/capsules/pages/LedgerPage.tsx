@@ -1384,6 +1384,13 @@ function CloseCard({
   )
 }
 
+/** A tile count with its denominator; "not checked" where the exchange list
+ *  was not read, "none yet" where there are no exchanges. */
+function tileCount(count: number, total: number | null): string {
+  if (total === null) return 'not checked'
+  return total > 0 ? `${count} of ${total}` : 'none yet'
+}
+
 function IntegritySection({ onGoToExchanges }: { onGoToExchanges?: () => void } = {}) {
   const { mode } = useDataMode()
   const harnessMode = mode === 'harness'
@@ -1463,8 +1470,14 @@ function IntegritySection({ onGoToExchanges }: { onGoToExchanges?: () => void } 
       .join(' ') || null
 
   // One denominator for the pill and the tiles: every exchange this node holds.
-  const exchangeTotal = paneCRows.length
-  const receivedCount = paneCRows.filter((row) => row.theirs?.state === 'present').length
+  // Null while the exchange list is loading or failed -- "not checked", never
+  // "none yet".
+  const exchangeTotal = paneCQuery.isSuccess ? paneCRows.length : null
+  // Their record counts as received when this node holds it and the gate
+  // judged it (closed or contradicted): the same gate the tiles use. A
+  // pushed half arrives as `present-unverified`, and `theirs.state ===
+  // 'present'` only says they hold a record citing ours.
+  const receivedCount = closedByOtherSideCount + contradictedCount
   const setupSteps = buildSetupSteps(card ?? null, owner, { total: exchangeTotal, received: receivedCount })
   const registrationCopy = buildRegistrationCopy(card ?? null)
   const registration = checkpointRegistration(card ?? null)
@@ -1531,7 +1544,7 @@ function IntegritySection({ onGoToExchanges }: { onGoToExchanges?: () => void } 
             info={INTEGRITY_TILE_INFO.confirmedByOtherSide}
             label="Confirmed by the other side"
             sub="Their signed record matches yours."
-            value={exchangeTotal > 0 ? `${closedByOtherSideCount} of ${exchangeTotal}` : 'none yet'}
+            value={tileCount(closedByOtherSideCount, exchangeTotal)}
           />
           <IntegrityStatCard
             alert={contradictedCount > 0}
@@ -1539,7 +1552,7 @@ function IntegritySection({ onGoToExchanges }: { onGoToExchanges?: () => void } 
             label="Disagreements"
             sub="Different request, answer, model or server."
             tone="bad"
-            value={exchangeTotal > 0 ? `${contradictedCount} of ${exchangeTotal}` : 'none yet'}
+            value={tileCount(contradictedCount, exchangeTotal)}
           />
           <CloseCard counts={closeCounts} payments={paneCQuery.data?.payments} unjoined={unjoinedPayments} />
         </div>
@@ -1551,7 +1564,7 @@ function IntegritySection({ onGoToExchanges }: { onGoToExchanges?: () => void } 
         />
 
         {/* Finding 7 -- each thing said once: an unwitnessed checkpoint is
-           already stated by step 1's status and the witness tile, so the
+           already stated by step 1's status, so the
            summary line renders only once a witness actually holds one. */}
         {registrationCopy ? (
           <div className="flex flex-col gap-0.5">

@@ -12,13 +12,15 @@
 //      never a number the page doesn't hold
 //   6. The exceptions-first line above the table, and the Ledger badge's
 //      "This node's copy" rename
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LedgerPageContent } from '@/features/capsules/pages/LedgerPage'
 import { setPluginHost } from '@/plugin-host/host'
 import { createStandaloneHost } from '@/plugin-host/standalone-host'
+import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
+import { fixtureMineCell, fixtureTheirsCell } from '@/features/capsules/lib/pushed-half-fixtures'
 import { CHAIN_BAR_INFO, INTEGRITY_TILE_INFO } from '@/features/capsules/lib/integrity-view'
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import { HERO_DESCRIPTION } from '@/features/capsules/lib/tooltip-copy'
@@ -1311,7 +1313,7 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
     await user.click(screen.getByRole('tab', { name: /integrity/i }))
 
     const step = (await screen.findByTestId('setup-steps')).querySelector('[data-step="checkpoints"]') as HTMLElement
-    expect(within(step).getByText('Off · your choice')).toBeInTheDocument()
+    expect(within(step).getByText('off · your choice')).toBeInTheDocument()
     expect(within(step).getByText('Guards against: rewrote the record')).toBeInTheDocument()
     expect(within(step).getByRole('link', { name: 'Turn on' })).toHaveAttribute('href', '/configuration/plugins')
   })
@@ -1399,7 +1401,7 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
     expect(screen.getByText(`witnessed no later than ${formatExchangeTimestamp('2026-09-10')}`)).toBeInTheDocument()
     // Step 1 no longer shows the "can only be checked against themselves" sentence once done.
     expect(screen.queryByText(/can only be checked against themselves/)).not.toBeInTheDocument()
-    expect(screen.getByText('Held by a witness')).toBeInTheDocument()
+    expect(screen.getByText('held by a witness')).toBeInTheDocument()
   })
 
   it('shows the once-per-node facts (retention, capture boundary, identity) exactly once, never per row', async () => {
@@ -1423,7 +1425,7 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
     expect(await screen.findByText('Owner: linked (self-asserted) — not bound to a person.')).toBeInTheDocument()
     // The setup checklist's step 2 flips too -- same live owner data, saying
     // what binding established (UX §4).
-    expect(screen.getByText('Linked (self-asserted)')).toBeInTheDocument()
+    expect(screen.getByText('linked (self-asserted)')).toBeInTheDocument()
     expect(
       screen.getByText('Your records are signed by this node’s key, linked to your owner account (self-asserted).')
     ).toBeInTheDocument()
@@ -1464,7 +1466,7 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
     // never "off", and there is no separate "Checkpointed locally" line.
     expect(screen.getAllByText('not checked').length).toBeGreaterThan(0)
     expect(screen.queryByText(/witness: off/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/Off · your choice/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/off · your choice/)).not.toBeInTheDocument()
     const details = screen.getByTestId('integrity-details')
     expect(details.tagName).toBe('DETAILS')
     expect(details).not.toHaveAttribute('open')
@@ -1479,20 +1481,27 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
       witness_checkpoint_supplied: false,
       card: { checkpoint_count: 0 }
     })
-    const exchange = (key: string, theirs: 'present' | 'absent') => ({
+    // Pushed halves arrive as `present-unverified` with the record attached;
+    // a bare `present` only says they hold a record citing ours.
+    const exchange = (key: string, theirs: PaneCRow['theirs']) => ({
       exchange_key: key,
       role_tag: 'ASKED',
       header_state: 'ok',
       properties: null,
       has_issue: false,
-      mine: { state: 'present', capsule_id: `${key}-m` },
-      theirs: { state: theirs, capsule_id: theirs === 'present' ? `${key}-t` : null },
-      unilateral: theirs === 'absent',
+      mine: fixtureMineCell(`${key}-m`),
+      theirs,
+      unilateral: theirs.state === 'absent',
       timestamp: null
     })
     vi.mocked(fetchPaneCList).mockResolvedValue({
-      rows: [exchange('a', 'present'), exchange('b', 'absent')],
-      row_count: 2,
+      rows: [
+        exchange('a', fixtureTheirsCell('agrees', { capsuleId: 'a'.repeat(64) })),
+        exchange('b', fixtureTheirsCell('disagrees', { capsuleId: 'b'.repeat(64) })),
+        exchange('c', { state: 'present', capsule_id: 'c'.repeat(64) }),
+        exchange('d', { state: 'absent', capsule_id: null })
+      ],
+      row_count: 4,
       default_sort: '',
       filters: [],
       next_after_seq: null,
@@ -1502,8 +1511,14 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
     const { container } = render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /integrity/i }))
 
-    const step = (await screen.findByText('1 of 2 received')).closest('li') as HTMLElement
-    expect(within(step).getByText(/You hold both for 1 of 2/)).toBeInTheDocument()
+    // Step 3 and the tiles read the same gate: the agreeing and the
+    // disagreeing pushed halves are held (2 of 4); the bare `present` row and
+    // the absent one are not.
+    const step = (await screen.findByText('2 of 4 received')).closest('li') as HTMLElement
+    expect(within(step).getByText(/You hold both for 2 of 4/)).toBeInTheDocument()
+    const tile = (label: string) => screen.getByText(label).closest('.panel-shell') as HTMLElement
+    expect(tile('Confirmed by the other side')).toHaveTextContent('1 of 4')
+    expect(tile('Disagreements')).toHaveTextContent('1 of 4')
     expect(within(step).getByRole('button', { name: 'See in Exchanges' })).toBeInTheDocument()
     expect(screen.queryByText(/ask for their record/i)).not.toBeInTheDocument()
     // The footer says what this page does and does not check.
@@ -1515,6 +1530,28 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
     // "See in Exchanges" switches tabs.
     await user.click(within(step).getByRole('button', { name: 'See in Exchanges' }))
     expect(screen.getByRole('tab', { name: /exchanges/i })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('a failed exchange list reads "not checked" on step 3 and both tiles, never "none yet"', async () => {
+    const { fetchPaneA, fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
+    vi.mocked(fetchPaneA).mockResolvedValue({
+      rows: [],
+      operator: null,
+      witness_checkpoint_supplied: false,
+      card: { checkpoint_count: 0 }
+    })
+    vi.mocked(fetchPaneCList).mockRejectedValue(new Error('pane c unavailable'))
+    const user = userEvent.setup()
+    render(<LedgerPageContent />, { wrapper: makeWrapper() })
+    await user.click(screen.getByRole('tab', { name: /integrity/i }))
+
+    const steps = await screen.findByTestId('setup-steps')
+    const step3 = steps.querySelector('[data-step="ask_peer"]') as HTMLElement
+    await waitFor(() => expect(within(step3).getByText('not checked')).toBeInTheDocument())
+    expect(within(step3).queryByText('none yet')).not.toBeInTheDocument()
+    const tile = (label: string) => screen.getByText(label).closest('.panel-shell') as HTMLElement
+    expect(tile('Confirmed by the other side')).toHaveTextContent('not checked')
+    expect(tile('Disagreements')).toHaveTextContent('not checked')
   })
 
   it('offers a range-wide "Save evidence file" action, distinct from the Exchanges one', async () => {
