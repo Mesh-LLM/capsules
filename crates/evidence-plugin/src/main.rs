@@ -33,6 +33,7 @@ mod exchange_text;
 mod history_page;
 mod host_status;
 mod ledger_fetch_bridge;
+mod leg_catch_up;
 mod lifecycle_channel;
 mod mesh_evidence_bridge;
 mod network_join;
@@ -731,13 +732,92 @@ async fn push_settlement_legs(
         )
         .await
         {
-            Ok(()) => tracing::debug!(peer = %push.peer, "pushed settlement terms leg"),
+            Ok(reply) => {
+                tracing::debug!(peer = %push.peer, "pushed settlement terms leg");
+                note_covered_leg(capsules, &push.capsule, &push.peer, &reply);
+            }
             Err(error) => {
                 tracing::warn!(%error, peer = %push.peer, "settlement terms leg push failed; held for retry");
                 capsules.settlement_legs().requeue(&push);
             }
         }
     }
+}
+
+/// Note a pushed terms leg as covered when the provider's reply names the
+/// inclusion it holds for it, so the catch-up ([`leg_catch_up`]) never sends
+/// it again.
+fn note_covered_leg(capsules: &CapsuleState, capsule: &Value, peer: &str, reply: &Value) {
+    if let Err(error) = leg_catch_up::note_reply(capsules.ledger_dir(), capsule, peer, reply) {
+        tracing::warn!(%error, %peer, "a covered terms leg was not noted; the catch-up may send it again");
+    }
+}
+
+/// Start the catch-up of this node's earlier terms legs that went out
+/// uncovered ([`leg_catch_up`]), once per process: at the first handler with
+/// a host context once this node's own peer id is known, the checkpoint
+/// cadence is on and pushing is. It runs in its own task, so the host's
+/// ordered channel handling never waits on a provider.
+fn start_leg_catch_up(
+    context: &mesh_llm_plugin::PluginContext<'_>,
+    capsules: &Arc<CapsuleState>,
+    checkpoints: Option<&checkpoint_cadence::CheckpointHandle>,
+    self_peer: &self_peer::SelfPeer,
+) {
+    let (Some(checkpoints), Some(self_id)) = (checkpoints, self_peer.current()) else {
+        return;
+    };
+    if share_policy::record_at_completion_is_off() || !leg_catch_up::claim_run() {
+        return;
+    }
+    let (mut context, capsules, checkpoints) =
+        (context.owned(), capsules.clone(), checkpoints.clone());
+    tokio::spawn(async move {
+        let ledger_dir = capsules.ledger_dir().to_path_buf();
+        let plan = tokio::task::spawn_blocking(move || {
+            leg_catch_up::plan(&ledger_dir, leg_catch_up::MAX_PER_RUN)
+        })
+        .await
+        .unwrap_or_default();
+        for capsule_id in &plan.unknown_peer {
+            tracing::info!(%capsule_id, "terms leg not pushed again: its serving peer is not in this node's records");
+        }
+        let (mut covered, due) = (0usize, plan.due.len());
+        for leg in plan.due {
+            // Only a covered push adds anything: the provider holds the leg.
+            let Some(coverage) = push_coverage(Some(&checkpoints), &leg.capsule, &leg.peer).await
+            else {
+                continue;
+            };
+            match record_push_bridge::push_capsule_to_peer(
+                &mut context,
+                &leg.peer,
+                &self_id,
+                &leg.capsule,
+                Some(&coverage),
+                &[],
+                None,
+            )
+            .await
+            {
+                Ok(reply) => {
+                    note_covered_leg(&capsules, &leg.capsule, &leg.peer, &reply);
+                    covered += 1;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, peer = %leg.peer, "terms leg catch-up push failed; the next run tries again");
+                }
+            }
+        }
+        if due > 0 || !plan.unknown_peer.is_empty() {
+            tracing::info!(
+                due,
+                covered,
+                unknown_peer = plan.unknown_peer.len(),
+                "terms leg catch-up done"
+            );
+        }
+    });
 }
 
 /// A checkpoint covering `capsule` (this node's own record, about to be
@@ -815,7 +895,7 @@ async fn push_at_completion_if_configured(
     )
     .await
     {
-        Ok(()) => {
+        Ok(_) => {
             tracing::info!(%peer_id, "pushed sealed capsule to counterparty at completion");
         }
         Err(error) => {
@@ -1767,6 +1847,7 @@ async fn main() -> anyhow::Result<()> {
             let splits = splits_for_handler.clone();
             Box::pin(async move {
                 drain_split_pushes(context, &capsules, &splits, checkpoints.as_ref(), &self_peer).await;
+                start_leg_catch_up(context, &capsules, checkpoints.as_ref(), &self_peer);
                 if message.channel == split_stage::SKIPPY_STAGE_CHANNEL {
                     handle_stage_event(context, &message.body, &capsules, &splits, checkpoints.as_ref(), &self_peer)
                         .await;
