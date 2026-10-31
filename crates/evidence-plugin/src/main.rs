@@ -1000,10 +1000,7 @@ async fn handle_stage_event(
         tracing::warn!(%coordinator, "stage record not pushed: this node's own peer id is unknown");
         return;
     };
-    let coverage = match checkpoints {
-        Some(handle) => handle.coverage_for(&sealed.capsule_id).await.ok(),
-        None => None,
-    };
+    let coverage = push_coverage(checkpoints, &sealed.capsule, &coordinator).await;
     if let Err(error) = record_push_bridge::push_capsule_to_peer(
         context,
         &coordinator,
