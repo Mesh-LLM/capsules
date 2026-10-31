@@ -7,6 +7,16 @@ each exchange, and whether this node's log still verifies. It installs and
 runs on an unmodified mesh-llm release (0.77 or newer). No other runtime is
 needed.
 
+## Not yet released
+
+- **`served_summary/1` is no longer answered.** Now that the weekly Service History cells are
+  published, the summary minus those cells would reveal a withheld week's count. Every requester is
+  refused it: `derivation_unsupported`, or `policy_declined` (as for any gated derivation) from a
+  non-counterparty while `share_standard_history` is off. The commitment lists
+  `service_history/1` in its place, and `share_standard_history` covers `service_history/1` and no
+  longer `served_summary/1`.
+  A 0.1.8 or older peer's `served_summary/1` answer is no longer checked here.
+
 ## What's new in 0.1.8
 
 **Upgrading from 0.1.7 needs nothing installed on the other node.** For a pushed terms leg to
@@ -36,16 +46,6 @@ shipped); an older one keeps the leg bare.
   witness and stores it only when you set it.
 
 Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules-plugin/blob/main/CHANGELOG.md).
-
-## Not yet released
-
-- **`served_summary/1` is no longer answered.** Now that the weekly Service History cells are
-  published, the summary minus those cells would reveal a withheld week's count. Every requester is
-  refused it: `derivation_unsupported`, or `policy_declined` (as for any gated derivation) from a
-  non-counterparty while `share_standard_history` is off. The commitment lists
-  `service_history/1` in its place, and `share_standard_history` covers `service_history/1` and no
-  longer `served_summary/1`.
-  A 0.1.7 or older peer's `served_summary/1` answer is no longer checked here.
 
 ## What's new in 0.1.7
 
