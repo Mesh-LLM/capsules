@@ -1797,7 +1797,7 @@ describe('LedgerPageContent — real twin bracket + Twins-only filter', () => {
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
-    expect(await screen.findByTestId('twin-bracket-twin-abc')).toHaveTextContent('Side-by-side check · twin-abc · same request, two machines')
+    expect(await screen.findByTestId('twin-bracket-twin-abc')).toHaveTextContent('Same request, two machines · twin-abc')
     expect(screen.getByRole('group', { name: 'Exchange twin-exch-0' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Exchange twin-exch-1' })).toBeInTheDocument()
     expect(

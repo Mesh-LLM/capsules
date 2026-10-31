@@ -1,35 +1,31 @@
-// The TWIN bracket wrapper (v3 §5): a header
-// naming the bracket, the two (or more) real two-sided rows it brackets
-// (passed as `children`, already-rendered `ExchangeStreamRow`s -- this
-// component adds chrome around them, it does not re-derive their content),
-// and a COMPARISON block below.
+// The side-by-side group card for a twin pair (v3 §5): it names what the pair
+// is ("Same request, two machines"), shows the three parties (the two machines
+// and the referee) and gives the verdict in one line each. The two real
+// two-sided rows it brackets are passed as `children` -- already-rendered
+// `ExchangeStreamRow`s -- and stay exactly as they are; only this card is new.
 //
-// OBSERVE-ONLY (item 4): no verdict renders here, ever -- not PASS, not
-// FAIL, not "identical." The header status is always the honest
-// "no verdict" state, and the COMPARISON block states plainly that
-// adjudication is not yet enabled. This stays true even once real
-// parameters/digests are wired (see `twin-bracket.ts`) -- computing an
-// equality verdict from a digest match is a deliberate product decision, not a
-// default this component reaches on its own.
+// OBSERVE-ONLY: a machine is never called wrong on this page's own say-so.
+// Every verdict word comes from a ruling this node asked a referee for and
+// holds sealed (`twin-bracket.ts` `askedVerdict`); the byte-for-byte line is
+// the two sealed answer fingerprints compared, and says "pending" while one
+// is missing. Nothing here is a score.
 import { useState } from 'react'
 import ReactDiffViewer from 'react-diff-viewer-continued'
+import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ui/StatusBadge'
+import { cn } from '@/lib/cn'
+import { fetchVerdictRecord } from '@/features/capsules/api/verdictClient'
 import type { ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
 import { saveTextFile } from '@/features/capsules/lib/exchange-export'
+import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import { InfoHover } from '@/features/capsules/components/InfoHover'
 import { VerdictRecordDialog } from '@/features/capsules/components/VerdictRecordDialog'
 import { HoverChip } from '@/features/capsules/components/HoverChip'
 import { notAdjudicatedLine, twinRefereeRow } from '@/features/capsules/lib/referee-row'
-import { TWIN_NO_VERDICT_TOOLTIP, TWIN_TOOLTIPS, TWIN_VERDICT_TOOLTIPS } from '@/features/capsules/lib/tooltip-copy'
-import {
-  TWIN_ANSWER_LABEL,
-  twinAnswerState,
-  twinComparisonParametersLine,
-  TWIN_PAIR_SENTENCE,
-  twinResponseTexts,
-  twinVerdict
-} from '@/features/capsules/lib/twin-bracket'
+import { TWIN_NO_VERDICT_TOOLTIP, TWIN_TOOLTIPS } from '@/features/capsules/lib/tooltip-copy'
+import { TWIN_PAIR_SENTENCE, twinComparisonParametersLine, twinResponseTexts } from '@/features/capsules/lib/twin-bracket'
+import { buildTwinGroupCard, cardId, type CardTone } from '@/features/capsules/lib/twin-group-card'
 
 const diffViewerStyles = {
   diffContainer: {
@@ -48,24 +44,27 @@ const diffViewerStyles = {
   }
 }
 
-const TWIN_VERDICT_TONE = {
-  corroborated: 'good',
-  contradicted: 'bad',
-  inconclusive: 'muted',
-  not_comparable: 'muted'
-} as const
+const TONE: Record<CardTone, 'good' | 'bad' | 'muted'> = { good: 'good', bad: 'bad', muted: 'muted' }
 
-function twinVerdictLabel(verdict: NonNullable<ReturnType<typeof twinVerdict>['verdict']>): string {
-  switch (verdict.kind) {
-    case 'corroborated':
-      return 'referee: corroborated'
-    case 'contradicted':
-      return `referee: contradicted ${verdict.party.slice(0, 10)}…`
-    case 'inconclusive':
-      return 'referee: inconclusive'
-    case 'not_comparable':
-      return 'not comparable'
+/** The referee's signature, as the plugin checks it when this card asks for
+ *  the verdict record. Mounted only when a verdict record exists. */
+function SignaturePill({ capsuleId }: { capsuleId: string }) {
+  const record = useQuery({
+    queryKey: ['capsules', 'verdict-record', capsuleId],
+    queryFn: () => fetchVerdictRecord(capsuleId),
+    retry: false,
+    staleTime: 60_000
+  })
+  if (record.isPending) return <StatusBadge size="caption" tone="muted">Checking the signature…</StatusBadge>
+  if (record.isError || !record.data) {
+    return <StatusBadge size="caption" tone="muted">Signature not checked</StatusBadge>
   }
+  if (record.data.legacy) return <StatusBadge size="caption" tone="warn">Legacy, unverified</StatusBadge>
+  return record.data.verify_ok ? (
+    <StatusBadge size="caption" tone="good">Signature checks here</StatusBadge>
+  ) : (
+    <StatusBadge size="caption" tone="bad">Signature does not check</StatusBadge>
+  )
 }
 
 export type TwinBracketProps = {
@@ -77,13 +76,12 @@ export type TwinBracketProps = {
 export function TwinBracket({ bracketId, rows, children }: TwinBracketProps) {
   const [compareOpen, setCompareOpen] = useState(false)
   const [verdictOpen, setVerdictOpen] = useState(false)
+  const card = buildTwinGroupCard(rows)
   const parametersLine = twinComparisonParametersLine(rows)
-  const disclosure = TWIN_PAIR_SENTENCE
   const [textA, textB] = twinResponseTexts(rows)
   const canCompare = textA !== null && textB !== null
-  const answer = twinAnswerState(rows)
-  const { verdict, capsuleId } = twinVerdict(rows)
   const notAdjudicated = notAdjudicatedLine(twinRefereeRow(rows)) ?? 'No ruling yet.'
+  const { capsuleId } = card.referee
 
   const handleSave = () => {
     saveTextFile(
@@ -100,102 +98,137 @@ export function TwinBracket({ bracketId, rows, children }: TwinBracketProps) {
   return (
     <div
       aria-label={`Twin comparison ${bracketId}`}
-      className="flex flex-col border-2 border-[var(--color-accent)]/40"
+      className={cn('flex flex-col border-2', card.swapCaught ? 'border-bad/60' : 'border-[var(--color-accent)]/40')}
+      data-swap-caught={card.swapCaught ? 'true' : undefined}
       data-testid={`twin-bracket-${bracketId}`}
       role="group"
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-soft bg-panel-strong/60 px-3 py-1.5">
-        <p className="type-caption inline-flex items-center gap-1 font-medium text-fg-dim">
-          Side-by-side check · <span className="font-mono">{bracketId.length > 12 ? `${bracketId.slice(0, 12)}…` : bracketId}</span> · same request, two machines
-          <InfoHover census="twin:header" describes="the side-by-side check" label={TWIN_TOOLTIPS.header} />
-        </p>
-        <span className="inline-flex items-center gap-1">
-          {/* A checked fact (the two sealed answer-text digests), never a verdict. */}
-          <HoverChip census={`twin:answer:${answer}`} label={TWIN_TOOLTIPS[answer]}>
-            <span className="inline-flex" tabIndex={0}>
-              <StatusBadge size="caption" tone={answer === 'different' ? 'warn' : 'muted'}>
-                {TWIN_ANSWER_LABEL[answer]}
-              </StatusBadge>
+      <div className="flex flex-col gap-2 border-b border-border-soft bg-panel-strong/60 px-3 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="type-caption inline-flex flex-wrap items-center font-medium text-fg-dim">
+            <span className="text-foreground">Same request, two machines</span>
+            <span className="whitespace-pre"> · </span>
+            <span className="font-mono" title={bracketId}>
+              {bracketId.length > 12 ? `${bracketId.slice(0, 12)}…` : bracketId}
             </span>
-          </HoverChip>
-          {verdict === null ? (
-            <>
+            <span className="whitespace-pre"> · </span>
+            <time dateTime={rows[0]?.timestamp ?? undefined}>{formatExchangeTimestamp(rows[0]?.timestamp ?? null)}</time>
+            <InfoHover census="twin:header" describes="the side-by-side check" label={TWIN_TOOLTIPS.header} />
+          </p>
+          {card.swapCaught ? (
+            <StatusBadge dot size="caption" tone="bad">
+              Swap caught
+            </StatusBadge>
+          ) : !card.referee.asked ? (
+            <span className="inline-flex items-center gap-1">
               <StatusBadge size="caption" tone="muted">
                 not adjudicated
               </StatusBadge>
               <InfoHover census="twin:no_verdict" describes="the not adjudicated badge" label={TWIN_NO_VERDICT_TOOLTIP} />
-            </>
-          ) : (
-            <HoverChip census={`twin:verdict:${verdict.kind}`} label={TWIN_VERDICT_TOOLTIPS[verdict.kind]}>
-              <span className="inline-flex" tabIndex={0}>
-                <StatusBadge size="caption" tone={TWIN_VERDICT_TONE[verdict.kind]}>
-                  {twinVerdictLabel(verdict)}
+            </span>
+          ) : null}
+        </div>
+
+        <p className="text-xs text-fg-dim" data-twin-sentence="true">
+          {card.model ? `${card.model} asked for on both. ` : ''}Any difference in the answers means one machine isn’t
+          serving what it says.
+        </p>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" data-twin-columns="true">
+          {card.machines.map((machine) => (
+            <div
+              className="flex flex-col gap-1 rounded border border-border-soft px-2 py-1.5"
+              data-twin-column={machine.label}
+              key={machine.label}
+            >
+              <p className="type-caption font-mono uppercase tracking-wide text-fg-faint">{machine.label}</p>
+              <p className="font-mono text-xs text-foreground" title={machine.id ?? undefined}>
+                {cardId(machine.id)}
+              </p>
+              <p className="text-xs text-fg-dim">{machine.facts}</p>
+              {machine.pill ? (
+                <StatusBadge size="caption" tone={TONE[machine.pill.tone]}>
+                  {machine.pill.text}
                 </StatusBadge>
-              </span>
-            </HoverChip>
-          )}
-        </span>
+              ) : null}
+            </div>
+          ))}
+          <div className="flex flex-col gap-1 rounded border border-border-soft px-2 py-1.5" data-twin-column="Referee">
+            <p className="type-caption font-mono uppercase tracking-wide text-fg-faint">Referee</p>
+            {card.referee.asked ? (
+              <>
+                <p className="font-mono text-xs text-foreground" title={card.referee.id ?? undefined}>
+                  {cardId(card.referee.id)}
+                </p>
+                <p className="text-xs text-fg-dim">
+                  Re-ran the request.{' '}
+                  {capsuleId ? (
+                    <>
+                      Verdict <span className="font-mono">{capsuleId.slice(0, 12)}…</span>
+                    </>
+                  ) : (
+                    'Verdict id not recorded.'
+                  )}
+                </p>
+                {capsuleId ? <SignaturePill capsuleId={capsuleId} /> : null}
+              </>
+            ) : (
+              <p className="text-xs text-fg-dim">{notAdjudicated}</p>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="flex flex-col divide-y divide-border-soft">{children}</div>
 
       <div className="flex flex-col gap-1.5 border-t border-border-soft bg-panel-strong/40 px-3 py-2">
-        <p className="type-caption text-fg-dim">What was compared</p>
+        <p className="type-caption inline-flex flex-wrap items-center gap-1 text-fg-dim" data-twin-compare-line="true">
+          <HoverChip census={`twin:answer:${card.answerState}`} label={TWIN_TOOLTIPS[card.answerState]}>
+            <span className="inline-flex" tabIndex={0}>
+              {card.compareLine}
+            </span>
+          </HoverChip>
+        </p>
         {parametersLine ? (
           <p className="type-caption inline-flex items-center gap-1 text-fg-faint">
             {parametersLine}
             <InfoHover census="twin:parameters" describes="the settings line" label={TWIN_TOOLTIPS.parameters} />
           </p>
         ) : null}
-        {/* OBSERVE-ONLY -- this line NEVER renders "identical"/"differs" or
-           any other computed verdict, only the honest state of adjudication
-           itself. */}
-        {verdict === null ? (
-          <p className="type-caption text-fg-faint">{notAdjudicated}</p>
-        ) : (
-          <p className="type-caption flex flex-wrap items-center gap-x-2 text-fg-faint">
-            {/* Not "signed": the signature is checked only when the record is
-               opened (View the verdict), so the line doesn't claim it. */}
-            <span>Referee's verdict: {capsuleId ? `${capsuleId.slice(0, 12)}…` : 'id not recorded'}</span>
-            {capsuleId ? (
-              <>
-                <button
-                  className="underline underline-offset-2 hover:text-foreground"
-                  onClick={() => setVerdictOpen(true)}
-                  type="button"
-                >
-                  View the verdict
-                </button>
-                {verdictOpen ? (
-                  <VerdictRecordDialog capsuleId={capsuleId} onOpenChange={setVerdictOpen} open={verdictOpen} />
-                ) : null}
-              </>
-            ) : null}
+        <p className="type-caption text-fg-faint">{TWIN_PAIR_SENTENCE}</p>
+        {card.referee.asked ? (
+          <p className="type-caption text-fg-faint" data-twin-footnote="true">
+            This verdict was asked for by you. It stays here and is never combined with other results.
           </p>
-        )}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="type-caption text-fg-faint">{disclosure}</p>
-          <div className="flex items-center gap-1">
-            <HoverChip
-              census="twin:compare"
-              label={canCompare ? TWIN_TOOLTIPS.compare : 'Neither side has answer text to compare yet.'}
+        ) : null}
+        <div className="flex flex-wrap items-center justify-end gap-1">
+          {capsuleId ? (
+            <Button onClick={() => setVerdictOpen(true)} size="sm" type="button" variant="outline">
+              Open the verdict
+            </Button>
+          ) : null}
+          {verdictOpen && capsuleId ? (
+            <VerdictRecordDialog capsuleId={capsuleId} onOpenChange={setVerdictOpen} open={verdictOpen} />
+          ) : null}
+          <HoverChip
+            census="twin:compare"
+            label={canCompare ? TWIN_TOOLTIPS.compare : 'Neither side has answer text to compare yet.'}
+          >
+            <Button
+              disabled={!canCompare}
+              onClick={() => setCompareOpen((open) => !open)}
+              size="sm"
+              type="button"
+              variant="outline"
             >
-              <Button
-                disabled={!canCompare}
-                onClick={() => setCompareOpen((open) => !open)}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                {compareOpen ? 'Compare ▾' : 'Compare ▸'}
-              </Button>
-            </HoverChip>
-            <HoverChip census="twin:save" label={TWIN_TOOLTIPS.save}>
-              <Button onClick={handleSave} size="sm" type="button" variant="outline">
-                Save both records
-              </Button>
-            </HoverChip>
-          </div>
+              {compareOpen ? 'Compare ▾' : 'Compare ▸'}
+            </Button>
+          </HoverChip>
+          <HoverChip census="twin:save" label={TWIN_TOOLTIPS.save}>
+            <Button onClick={handleSave} size="sm" type="button" variant="outline">
+              Save both records
+            </Button>
+          </HoverChip>
         </div>
         {compareOpen && canCompare ? (
           <div className="mt-1 overflow-hidden rounded border border-border-soft">
