@@ -264,8 +264,6 @@ export const WITNESS_OFF = 'witness off — your choice'
 export const INTEGRITY_TILE_TOOLTIPS = {
   sealed:
     'Records this node sealed into its log, not counting padding. Sealed means a record can’t change unnoticed; it doesn’t make the contents true.',
-  sharedWithWitness:
-    'How many of your checkpoints a witness you don’t run is holding. Off by your choice until you turn one on.',
   confirmedByOtherSide: 'Exchanges saved on this node that the other side confirmed with their own signed record, checked on this machine.',
   contradicted:
     'Exchanges where your record and theirs disagree: a different request, answer, model or server, or their record not matching its own id.'

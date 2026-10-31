@@ -4,135 +4,114 @@ import {
   buildSetupSteps,
   CAPTURE_BOUNDARY_FACT,
   CHAIN_BAR_INFO,
-  chainStripCaption,
-  CHECKPOINTED_NOT_REGISTERED_STATUS,
+  coverageBadge,
   checkpointRegistration,
   CONTINUITY_NOT_ESTABLISHED,
   continuityFact,
   coveredRecordCount,
+  recordsStripBreakdown,
+  recordsStripHeading,
   sealedBreakdownText,
   identityFact,
   INTEGRITY_TILE_INFO,
   RETENTION_FACT,
   witnessKeyProblems,
   witnessRestartNote,
-  witnessRows,
-  witnessTileNote
+  witnessRows
 } from '@/features/capsules/lib/integrity-view'
-import { WITNESS_OFF } from '@/features/capsules/lib/tooltip-copy'
 import { ownerLinked } from '@/features/capsules/lib/integrity-view'
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import type { RecomputedIdentity } from '@/features/capsules/lib/recompute-identity'
 import { buildChecksRows } from '@/features/capsules/lib/security-checks-view'
 import { STANDING_WORD } from '@/features/capsules/lib/banned-terms'
 
-describe('buildSetupSteps — ledger-ux-from-the-user §6, three steps in value order', () => {
-  it('renders all three steps "not set up" / "none received yet" on a bare node (checkpoint_count REPORTED 0)', () => {
-    // A bare node's host reports `checkpoint_count: 0` (capsule_panes_native's
-    // build_pane_a always supplies the card) -- genuinely none yet, "not set up".
-    const steps = buildSetupSteps({ checkpoint_count: 0 }, null)
+describe('buildSetupSteps — three steps named after the attack they guard against', () => {
+  it('reads a bare node truthfully: witness off, owner not linked, no exchanges yet', () => {
+    const steps = buildSetupSteps({ checkpoint_count: 0, witness_configured: false }, null)
     expect(steps.map((step) => step.title)).toEqual([
-      'Have a witness hold your checkpoints',
-      'Bind an owner identity',
+      'Have an outside witness hold your checkpoints',
+      'Bind your records to a key you own',
       'Get the other side’s record'
     ])
-    expect(steps.every((step) => !step.done)).toBe(true)
-    expect(steps[0].status).toBe('not set up')
-    expect(steps[1].status).toBe('not linked to an owner')
-    expect(steps[2].status).toBe('none received yet')
-    // Each explains what it buys and what it does not.
-    expect(steps[0].body).toMatch(/does not make your records true/)
-    expect(steps[1].body).toMatch(/only your own claim about who you are/)
-    expect(steps[1].body).not.toMatch(/prove|`/)
-    expect(steps[2].body).toMatch(/arrives on its own only if their node sends records/)
-    expect(steps[2].body).not.toMatch(/corroboration|half/i)
-    // The retired "never asked" framing is gone -- a half can arrive by push.
-    expect(steps[2].status).not.toMatch(/never asked/)
+    expect(steps.map((step) => step.guards)).toEqual([
+      'rewrote the record',
+      'denying your own records',
+      'left something out'
+    ])
+    expect(steps.map((step) => step.status)).toEqual(['Off · your choice', 'Not linked', 'none yet'])
+    expect(steps[0].body).toMatch(/can only be checked against themselves/)
+    expect(steps[1].body).toMatch(/your own claim about who you are, nothing more/)
+    expect(steps[0].action).toEqual({ kind: 'link', label: 'Turn on', href: '/configuration/plugins' })
+    expect(steps[1].action).toEqual({ kind: 'command', label: 'mesh-llm auth init' })
   })
 
-  it('step 3 reflects the push-confirmed reality: a nonzero confirmed count marks it done, without repeating the tile’s count (finding 7)', () => {
-    // The rung must not read "never asked" while
-    // the tile reads CLOSED-BY-OTHER-SIDE N -- halves arrived by push.
-    const steps = buildSetupSteps({ checkpoint_count: 0 }, null, 3)
-    expect(steps[2].done).toBe(true)
-    expect(steps[2].status).toBe('received')
-    expect(steps[2].status).not.toMatch(/\d/)
-    expect(steps[2].body).toBeNull()
+  it('step 3 is a status carrying its denominator, never a to-do', () => {
+    const some = buildSetupSteps({ checkpoint_count: 0 }, null, { total: 4, received: 3 })[2]
+    expect(some.status).toBe('3 of 4 received')
+    expect(some.done).toBe(false)
+    expect(some.body).toBe('Every exchange produces two signed records, one per side. You hold both for 3 of 4.')
+    expect(some.action).toEqual({ kind: 'exchanges', label: 'See in Exchanges' })
+    expect(`${some.title} ${some.status} ${some.body}`).not.toMatch(/\bask\b/i)
+
+    const all = buildSetupSteps({ checkpoint_count: 0 }, null, { total: 4, received: 4 })[2]
+    expect(all.status).toBe('4 of 4 received')
+    expect(all.done).toBe(true)
   })
 
-  it('checkpoints step reads a NULL card as "status not reported", NOT a false "not set up"', () => {
-    // The costliest false absence: a null card means the host did not REPORT a
-    // checkpoint count -- it must never render as "none exists". Four states,
-    // never two: null -> not reported; 0 -> not set up; >0 unwitnessed ->
-    // checkpointed locally; witnessed -> registered.
-    const notReported = buildSetupSteps(null, null)
-    expect(notReported[0].status).toBe('status not reported')
-    expect(notReported[0].done).toBe(false)
-    expect(notReported[0].body).toMatch(/did not report its checkpoint status/)
-    expect(notReported[0].body).not.toMatch(/does not make your records true/)
-
-    const genuinelyNone = buildSetupSteps({ checkpoint_count: 0 }, null)
-    expect(genuinelyNone[0].status).toBe('not set up')
-
-    const checkpointedOnly = buildSetupSteps({ checkpoint_count: 2 }, null)
-    expect(checkpointedOnly[0].status).toBe(CHECKPOINTED_NOT_REGISTERED_STATUS)
+  it('the witness pill says "not checked" when the node did not say whether one is set, never "off"', () => {
+    expect(buildSetupSteps(null, null)[0]).toMatchObject({ status: 'not checked', tone: 'muted', done: false })
+    expect(buildSetupSteps(null, null)[0].body).toMatch(/did not report its checkpoint status/)
+    expect(buildSetupSteps({ checkpoint_count: 2 }, null)[0].status).toBe('not checked')
+    expect(buildSetupSteps({ checkpoint_count: 2, witness_configured: true }, null)[0].status).toBe(
+      'On · none holds one yet'
+    )
   })
 
-  it('D1: a local checkpoint with ZERO witnesses NEVER reads "witnessed" — the exact §7 overclaim', () => {
-    // The live shot: rung 1 said "registered" while the same pane said
-    // "Registered with 0 witnesses" and Exchanges said "not registered".
-    // Local checkpointing is NOT registration.
-    const steps = buildSetupSteps({ checkpoint_count: 3, witnesses: [] }, null)
+  it('D1: a local checkpoint with ZERO witnesses is never "held" — the exact overclaim', () => {
+    const steps = buildSetupSteps({ checkpoint_count: 3, witnesses: [], witness_configured: false }, null)
     expect(steps[0].done).toBe(false)
-    expect(steps[0].status).toBe('checkpointed locally · no witness')
-    expect(steps[0].status).not.toBe('witnessed')
-    // The step still explains what registration would buy -- the reader is
-    // exactly the person deciding whether to do it.
-    expect(steps[0].body).toMatch(/does not make your records true/)
+    expect(steps[0].status).toBe('Off · your choice')
+    expect(steps[0].body).toMatch(/lets someone else prove a rewrite/)
   })
 
-  it('step 1 flips to "witnessed" ONLY once a witness actually holds a checkpoint, and drops its explanatory body', () => {
+  it('step 1 flips to held ONLY once a witness actually holds a checkpoint, and drops its body and action', () => {
     const steps = buildSetupSteps({ checkpoint_count: 3, witnesses: [{ checked: true }] }, null)
-    expect(steps[0].done).toBe(true)
-    expect(steps[0].status).toBe('witnessed')
-    expect(steps[0].body).toBeNull()
+    expect(steps[0]).toMatchObject({ done: true, status: 'Held by a witness', body: null, action: undefined })
   })
 
-  it('rung 1, the witness line, and the Exchanges headline fact all derive from the ONE checkpointRegistration fact', () => {
-    // Three surfaces, one derivation -- they can never disagree again.
+  it('step 1, the witness line and the Exchanges headline all derive from the ONE checkpointRegistration fact', () => {
     const unwitnessed = { checkpoint_count: 5, witnesses: [] }
     const registration = checkpointRegistration(unwitnessed)
     expect(registration.registered).toBe(false)
     expect(registration.checkpointedLocally).toBe(true)
-    expect(buildSetupSteps(unwitnessed, null)[0].status).toContain('no witness')
+    expect(buildSetupSteps(unwitnessed, null)[0].done).toBe(false)
     expect(buildRegistrationCopy(unwitnessed)?.witnessSummary).toContain('no witness')
 
     const witnessed = { checkpoint_count: 5, witnesses: [{ checked: true }] }
     expect(checkpointRegistration(witnessed).registered).toBe(true)
-    expect(buildSetupSteps(witnessed, null)[0].status).toBe('witnessed')
+    expect(buildSetupSteps(witnessed, null)[0].status).toBe('Held by a witness')
     expect(buildRegistrationCopy(witnessed)?.witnessSummary).toMatch(/^Held by 1 witness/)
   })
 
-  it('step 2 says what binding established once the live owner is verified -- never "bound" alone (UX §4)', () => {
+  it('step 2 says what binding established once the live owner is verified -- never "bound" alone', () => {
     const steps = buildSetupSteps(null, { status: 'verified', verified: true })
     expect(steps[1].done).toBe(true)
-    expect(steps[1].status).toBe('linked (self-asserted)')
+    expect(steps[1].status).toBe('Linked (self-asserted)')
+    expect(steps[1].action).toBeUndefined()
     expect(steps[1].body).toBe(
       'Your records are signed by this node’s key, linked to your owner account (self-asserted).'
     )
   })
 
-  it('p2 item 3: an owner the host did NOT verify is not linked -- every non-verified status the host sends', () => {
-    // The look: status.owner was { status: "unsigned", verified: false } and
-    // Integrity said "linked", while the checks panel said not bound.
+  it('an owner the host did NOT verify is not linked -- every non-verified status the host sends', () => {
     for (const status of ['unsigned', 'expired', 'invalid_signature', 'revoked_owner', 'untrusted_owner']) {
       expect(ownerLinked({ status, verified: false })).toBe(false)
-      expect(buildSetupSteps(null, { status, verified: false })[1].status).toBe('not linked to an owner')
+      expect(buildSetupSteps(null, { status, verified: false })[1].status).toBe('Not linked')
     }
     expect(ownerLinked({ status: 'verified', verified: true })).toBe(true)
   })
 
-  it('p2 item 3: the checks panel binding fact and Integrity step 2 say the same thing from the same owner', () => {
+  it('the checks panel binding fact and Integrity step 2 agree from the same owner', () => {
     const binding = (linked: boolean) =>
       buildChecksRows(
         {
@@ -153,22 +132,15 @@ describe('buildSetupSteps — ledger-ux-from-the-user §6, three steps in value 
         .find((r) => r.key === 'identity_authority')
         ?.facts?.find((f) => f.factLabel === 'binding')?.cell
     const unsigned = { status: 'unsigned', verified: false }
-    expect(binding(ownerLinked(unsigned))?.detail).toBe(buildSetupSteps(null, unsigned)[1].status)
+    expect(buildSetupSteps(null, unsigned)[1].done).toBe(false)
+    expect(binding(ownerLinked(unsigned))?.state).not.toBe('PASS')
     const verified = { status: 'verified', verified: true }
     expect(binding(ownerLinked(verified))?.state).toBe('PASS')
     expect(buildSetupSteps(null, verified)[1].body).toContain(binding(ownerLinked(verified))?.detail as string)
   })
 
-  it('step 2 stays "not linked to an owner" when the wire carries no owner at all', () => {
-    const steps = buildSetupSteps(null, undefined)
-    expect(steps[1].done).toBe(false)
-  })
-
-  it('step 3 flips to "asked <date>" once the card carries an ask record', () => {
-    const steps = buildSetupSteps({ asked_peer_at: '2026-09-12' }, null)
-    expect(steps[2].done).toBe(true)
-    expect(steps[2].status).toBe('asked 2026-09-12')
-    expect(steps[2].body).toBeNull()
+  it('step 2 stays not linked when the wire carries no owner at all', () => {
+    expect(buildSetupSteps(null, undefined)[1].done).toBe(false)
   })
 })
 
@@ -185,10 +157,9 @@ describe('checkpointRegistration — the witness state', () => {
     expect(live.registered).toBe(false)
     expect(live.witnessState).toBe('earlier')
     expect(live.witnessedCheckpointCount).toBe(1)
-    expect(witnessTileNote(live.witnessState)).toBe('the latest checkpoint is not held yet')
     expect(buildSetupSteps({ checkpoint_count: 3, witnesses: [], witnessed_checkpoint_count: 1 }, null)[0]).toMatchObject({
       done: true,
-      status: 'witnessed'
+      status: 'Held · not the latest'
     })
   })
 
@@ -199,10 +170,6 @@ describe('checkpointRegistration — the witness state', () => {
     expect(state({ witness_configured: true })).toBe('pending')
     expect(state({})).toBe('unknown')
     expect(state({ witnesses: [{ checked: true }], witness_configured: false })).toBe('latest')
-    expect(witnessTileNote('off')).toBe(WITNESS_OFF)
-    expect(witnessTileNote('pending')).not.toMatch(/off/)
-    expect(witnessTileNote('latest')).toBeUndefined()
-    expect(witnessTileNote('unknown')).toBeUndefined()
   })
 })
 
@@ -323,42 +290,45 @@ describe('coveredRecordCount — coverage in records, never padding leaves', () 
 
   it('so a padded checkpoint never reads unsealed records as sealed', () => {
     const covered = coveredRecordCount({ covered_leaf_count: 8, covered_record_count: 2 })
-    expect(chainStripCaption(3, 1, covered)).not.toMatch(/^All 3/)
+    expect(coverageBadge(3, 1, covered)).toBe('2 of 3 in a checkpoint')
   })
 })
 
-describe('chainStripCaption — leaf pluralization + the three absence states', () => {
-  it('partial coverage says how many of how many, and how many are unshaded (never "leaves")', () => {
-    // 3rd arg is the covered-leaf count; 2nd is the checkpoint-LINE count.
-    expect(chainStripCaption(5, 1, 1)).toBe(
-      '1 of 5 records are sealed into a checkpoint · 4 since the last checkpoint are unshaded'
-    )
-    expect(chainStripCaption(5, 1, 4)).toBe(
-      '4 of 5 records are sealed into a checkpoint · 1 since the last checkpoint is unshaded'
-    )
+describe('records strip — heading, badge and breakdown, every count with its denominator', () => {
+  it('the heading counts sealed records and checkpoints', () => {
+    expect(recordsStripHeading(13, 5)).toBe('Your records · 13 sealed · 5 checkpoints')
+    expect(recordsStripHeading(1, 1)).toBe('Your records · 1 sealed · 1 checkpoint')
   })
 
-  it('full coverage reads "All N records are sealed into a checkpoint" (UX §4)', () => {
-    expect(chainStripCaption(1, 1, 1)).toBe('The 1 record is sealed into a checkpoint')
+  it('full coverage reads "All N in a checkpoint"; partial says how many of how many', () => {
+    expect(coverageBadge(13, 5, 13)).toBe('All 13 in a checkpoint')
+    expect(coverageBadge(5, 1, 4)).toBe('4 of 5 in a checkpoint')
+    expect(coverageBadge(1, 1, 1)).toBe('1 of 1 in a checkpoint')
   })
 
-  it('renders the covered-leaf count, NOT the checkpoint-line count', () => {
-    // The bug: a SINGLE checkpoint line covering 8 leaves read "1 leaves"
-    // because the caption printed checkpoint_count. It must print the covered
-    // leaf count (8), against the live-ledger reshoot: mmr_size 15 -> 8 leaves.
-    expect(chainStripCaption(8, 1, 8)).toBe('All 8 records are sealed into a checkpoint')
+  it('says "not checked" where the node reported nothing, never a false "none"', () => {
+    expect(recordsStripHeading(2, null)).toBe('Your records · 2 sealed · checkpoints not checked')
+    expect(coverageBadge(2, null, null)).toBe('checkpoints not checked')
+    expect(coverageBadge(5, 2, null)).toBe('coverage not checked')
+    expect(coverageBadge(1, 0, null)).toBe('0 of 1 in a checkpoint')
+    expect(coverageBadge(0, 0, null)).toBe('no records yet')
   })
 
-  it('says so honestly when a checkpoint exists but no covered-leaf count was reported', () => {
-    // Never reprint the checkpoint-line count as if it were a leaf count.
-    expect(chainStripCaption(5, 2, null)).toBe(
-      'records sealed into a checkpoint (count not reported) · records since the last checkpoint are unshaded'
+  it('the breakdown adds the last checkpoint time only when the node gave one', () => {
+    expect(recordsStripBreakdown(9, 4, 0, 0, null)).toBe('9 yours · 4 received')
+    expect(recordsStripBreakdown(9, 4, 0, 0, '2026-09-10T16:28:00Z')).toBe(
+      `9 yours · 4 received · last checkpoint ${formatExchangeTimestamp('2026-09-10T16:28:00Z')}`
     )
   })
 
-  it('keeps the three-state absence handling: null card is "not reported", never a false "no checkpoint yet"', () => {
-    expect(chainStripCaption(2, null, null)).toBe('2 entries, all sealed · checkpoint status not reported')
-    expect(chainStripCaption(1, 0, null)).toBe('1 entry, all sealed · no checkpoint yet · no witness holds any of it')
+  it('no strip text uses the word "chain"', () => {
+    const texts = [
+      recordsStripHeading(3, 1),
+      coverageBadge(3, 1, 3),
+      recordsStripBreakdown(1, 1, 1, 1, '2026-09-10T16:28:00Z'),
+      CHAIN_BAR_INFO
+    ]
+    expect(texts.join(' ')).not.toMatch(/chain/i)
   })
 })
 
@@ -371,7 +341,6 @@ describe('Item 4 — Integrity tile + chain-bar (i) copy: evidence, never a scor
     }
     // The witness tile names the witness; the closed tile names their signed
     // record, checked on this machine.
-    expect(INTEGRITY_TILE_INFO.sharedWithWitness).toMatch(/witness/i)
     expect(INTEGRITY_TILE_INFO.confirmedByOtherSide).toMatch(/their own signed record, checked on this machine/)
   })
 
@@ -415,10 +384,10 @@ describe('once-per-node facts — never fabricated, never per-row', () => {
   })
 
   it('the Sealed tile reconciles records with exchanges (finding 3)', () => {
-    expect(sealedBreakdownText(5, 3)).toBe('5 yours · 3 received from the other side')
+    expect(sealedBreakdownText(5, 3)).toBe('5 yours · 3 received')
     // A block and its undo are sealed, counted apart from exchanges.
-    expect(sealedBreakdownText(5, 3, 2)).toBe('5 yours · 3 received from the other side · 2 routing choices')
-    expect(sealedBreakdownText(5, 3, 1)).toBe('5 yours · 3 received from the other side · 1 routing choice')
+    expect(sealedBreakdownText(5, 3, 2)).toBe('5 yours · 3 received · 2 routing choices')
+    expect(sealedBreakdownText(5, 3, 1)).toBe('5 yours · 3 received · 1 routing choice')
   })
 })
 

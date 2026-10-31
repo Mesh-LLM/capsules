@@ -103,20 +103,20 @@ import {
   buildSetupSteps,
   CAPTURE_BOUNDARY_FACT,
   CHAIN_BAR_INFO,
-  chainStripCaption,
+  coverageBadge,
   checkpointCoverageByRecord,
   checkpointRegistration,
   coveredRecordCount,
   continuityFact,
   identityFact,
   ownerLinked,
-  sealedBreakdownText,
+  recordsStripBreakdown,
+  recordsStripHeading,
   INTEGRITY_TILE_INFO,
   RETENTION_FACT,
   witnessKeyProblems,
   witnessRestartNote,
   witnessRows,
-  witnessTileNote,
   type SetupStep
 } from '@/features/capsules/lib/integrity-view'
 import { HARNESS_PANE_A_PAYLOAD, HARNESS_PANE_C_PAYLOAD } from '@/features/capsules/lib/exchange-fixtures'
@@ -1192,60 +1192,62 @@ function ExchangesSection({
 // prominence treatment is allowed here.
 // ---------------------------------------------------------------------------
 
-/** The chain strip: a bar of this node's sealed entries, shading the
- *  checkpoint-covered range when a checkpoint exists. */
+/** The records strip: a heading with the sealed and checkpoint counts, a
+ *  badge saying how many of them a checkpoint covers, and a bar shading
+ *  that covered share. */
 function ChainStrip({
   sealedCount,
   checkpointCount,
-  coveredLeafCount
+  coveredRecords,
+  breakdown
 }: {
   sealedCount: number
   checkpointCount: number | null
-  coveredLeafCount: number | null
+  coveredRecords: number | null
+  breakdown: string
 }) {
   const hasCheckpoint = checkpointCount !== null && checkpointCount > 0
-  // Shade the covered-LEAF range, not the checkpoint-LINE count. Fall back to
-  // no shading when the host did not report a covered-leaf count -- never shade
-  // a wrong width off the line count.
-  const coveredCount = hasCheckpoint && coveredLeafCount !== null ? Math.min(coveredLeafCount, sealedCount) : 0
+  // Shade the covered-RECORD range. No shading when the host did not report
+  // it -- never a width guessed from the checkpoint-line count.
+  const coveredCount = hasCheckpoint && coveredRecords !== null ? Math.min(coveredRecords, sealedCount) : 0
   const coveredPct = sealedCount > 0 ? (coveredCount / sealedCount) * 100 : 0
 
   return (
-    <div className="flex flex-col gap-1">
-      <p className="type-caption inline-flex items-center gap-1 font-mono text-fg-faint">
-        Your chain
-        {/* The full checkpoint-coverage explanation moves behind the (i); the
-           caption below stays terse. */}
-        <InfoHover census="integrity:chain_strip" describes="the chain coverage bar" label={CHAIN_BAR_INFO} />
-      </p>
-      <div className="flex items-center gap-2">
-        <span className="font-mono text-xs text-fg-faint">1</span>
-        <div
-          className="relative h-4 flex-1 overflow-hidden rounded bg-panel-strong/40"
-          role="img"
-          aria-label={`Sealed chain, ${sealedCount} entries`}
-        >
-          {sealedCount > 0 ? (
-            <>
-              <div className="absolute inset-y-0 left-0 bg-foreground/70" style={{ width: `${coveredPct}%` }} />
-              <div className="absolute inset-y-0 bg-foreground/25" style={{ left: `${coveredPct}%`, right: 0 }} />
-            </>
-          ) : null}
-        </div>
-        <span className="font-mono text-xs text-fg-faint">{sealedCount}</span>
+    <div className="flex flex-col gap-1.5" data-testid="records-strip">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="type-caption inline-flex items-center gap-1 font-mono uppercase text-fg-faint">
+          {recordsStripHeading(sealedCount, checkpointCount)}
+          <InfoHover census="integrity:chain_strip" describes="the coverage bar" label={CHAIN_BAR_INFO} />
+        </p>
+        <span className="rounded border border-border-soft px-1.5 py-0.5 text-xs font-medium text-foreground">
+          {coverageBadge(sealedCount, checkpointCount, coveredRecords)}
+        </span>
       </div>
-      {/* Three-state absence handling + leaf pluralization live in
-         `chainStripCaption` (integrity-view.ts) so both are unit-tested. The
-         leaf figure is the covered-leaf count, NOT the checkpoint-line count. */}
-      <p className="type-caption text-fg-dim">{chainStripCaption(sealedCount, checkpointCount, coveredLeafCount)}</p>
+      <div
+        className="relative h-4 overflow-hidden rounded bg-panel-strong/40"
+        role="img"
+        aria-label={`${sealedCount} sealed records`}
+      >
+        {sealedCount > 0 ? (
+          <>
+            <div className="absolute inset-y-0 left-0 bg-foreground/70" style={{ width: `${coveredPct}%` }} />
+            <div className="absolute inset-y-0 bg-foreground/25" style={{ left: `${coveredPct}%`, right: 0 }} />
+          </>
+        ) : null}
+      </div>
+      <p className="type-caption text-fg-dim">{breakdown}</p>
     </div>
   )
 }
 
 type IntegrityStatCardProps = {
   readonly label: string
-  readonly value: number
+  /** A count with its denominator ("4 of 4"), or "none yet" where there is
+   *  nothing to count. */
+  readonly value: number | string
   readonly tone?: 'default' | 'bad'
+  /** The value is a problem (colors it). */
+  readonly alert?: boolean
   /** The honest explanation of what this tile counts and what evidence backs
    *  it -- moved off the tile face and behind the (i) glyph. */
   readonly info: string
@@ -1256,8 +1258,8 @@ type IntegrityStatCardProps = {
 
 /** One first-person stat card. A zero renders in the exact same size/weight
  *  as any other value -- never muted, never apologetic (Accept criterion). */
-function IntegrityStatCard({ label, value, tone = 'default', info, sub }: IntegrityStatCardProps) {
-  const valueColor = tone === 'bad' && value > 0 ? 'var(--color-bad)' : 'var(--color-foreground)'
+function IntegrityStatCard({ label, value, tone = 'default', alert = false, info, sub }: IntegrityStatCardProps) {
+  const valueColor = tone === 'bad' && alert ? 'var(--color-bad)' : 'var(--color-foreground)'
   return (
     <div className="panel-shell min-w-0 rounded-[var(--radius-lg)] border border-border bg-panel px-[var(--panel-x)] py-[var(--panel-y)]">
       <span className="type-label inline-flex min-w-0 items-center gap-1 text-fg-faint">
@@ -1275,23 +1277,61 @@ function IntegrityStatCard({ label, value, tone = 'default', info, sub }: Integr
   )
 }
 
-/** The setup checklist (ledger-ux-from-
- *  the-user §6) -- three steps in value order, replacing the incoherent
- *  "registered with 0 witnesses" line a new node used to show. Each step
- *  states what it buys and what it does not; once done, the explanatory
- *  sentence drops and only the status word remains. */
-function SetupChecklist({ steps }: { steps: readonly SetupStep[] }) {
+const STEP_PILL_CLASS: Record<SetupStep['tone'], string> = {
+  good: 'border-border-soft text-foreground',
+  pending: 'border-amber-500/50 text-amber-500',
+  muted: 'border-border-soft text-fg-faint'
+}
+
+/** The three steps, in value order. Each is named after the attack it
+ *  guards against, with a status pill and at most one action. Step 3 is a
+ *  status: its action only points at the Exchanges tab. */
+function SetupChecklist({
+  steps,
+  onGoToExchanges
+}: {
+  steps: readonly SetupStep[]
+  onGoToExchanges?: () => void
+}) {
   return (
-    <div className="flex flex-col gap-3 rounded border border-border-soft bg-panel-strong/40 p-3">
+    <ol className="flex flex-col gap-3 rounded border border-border-soft bg-panel-strong/40 p-3" data-testid="setup-steps">
       {steps.map((step, index) => (
-        <div className="flex flex-col gap-0.5" key={step.key}>
-          <p className="type-caption font-mono text-fg-faint">
-            {index + 1} · {step.title} — <span className="font-medium text-foreground">{step.status}</span>
-          </p>
+        <li className="flex flex-col gap-1" data-step={step.key} key={step.key}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-medium text-foreground">
+              {index + 1} · {step.title}
+            </p>
+            <span className={`rounded border px-1.5 py-0.5 text-xs font-medium ${STEP_PILL_CLASS[step.tone]}`}>
+              {step.status}
+            </span>
+          </div>
           {step.body ? <p className="type-caption text-fg-dim">{step.body}</p> : null}
-        </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="type-caption text-fg-faint">Guards against: {step.guards}</p>
+            {step.action?.kind === 'link' ? (
+              <a
+                className="rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-panel-strong"
+                href={step.action.href}
+              >
+                {step.action.label}
+              </a>
+            ) : step.action?.kind === 'command' ? (
+              <code className="rounded border border-border-soft px-2 py-0.5 font-mono text-xs text-foreground">
+                {step.action.label}
+              </code>
+            ) : step.action?.kind === 'exchanges' && onGoToExchanges ? (
+              <button
+                className="rounded border border-border px-2 py-0.5 text-xs text-foreground hover:bg-panel-strong"
+                onClick={onGoToExchanges}
+                type="button"
+              >
+                {step.action.label}
+              </button>
+            ) : null}
+          </div>
+        </li>
       ))}
-    </div>
+    </ol>
   )
 }
 
@@ -1344,7 +1384,7 @@ function CloseCard({
   )
 }
 
-function IntegritySection() {
+function IntegritySection({ onGoToExchanges }: { onGoToExchanges?: () => void } = {}) {
   const { mode } = useDataMode()
   const harnessMode = mode === 'harness'
   const query = useQuery({
@@ -1379,11 +1419,10 @@ function IntegritySection() {
 
   // Extract from the card if present
   const checkpointCount = typeof card?.checkpoint_count === 'number' ? card.checkpoint_count : null
-  // The covered-LEAF count (host-inverted from the checkpoint's MMR node count),
-  // distinct from `checkpoint_count` (the number of checkpoint lines). The chain
-  // strip caption/shading read THIS, so a 1-line checkpoint over 8 leaves reads
-  // "8 leaves", never "1 leaves".
-  const coveredLeafCount = typeof card?.covered_leaf_count === 'number' ? card.covered_leaf_count : null
+  // How many RECORDS the latest checkpoint covers (not its padding leaves, and
+  // not `checkpoint_count`, the number of checkpoint lines).
+  const coveredRecords = coveredRecordCount(card)
+  const lastCheckpointAt = typeof card?.registered_no_later_than === 'string' ? card.registered_no_later_than : null
   const continuity = typeof card?.continuity === 'string' ? card.continuity : null
 
   // L4.2 — owner-added-later headline
@@ -1423,7 +1462,10 @@ function IntegritySection() {
       .filter(Boolean)
       .join(' ') || null
 
-  const setupSteps = buildSetupSteps(card ?? null, owner, closedByOtherSideCount)
+  // One denominator for the pill and the tiles: every exchange this node holds.
+  const exchangeTotal = paneCRows.length
+  const receivedCount = paneCRows.filter((row) => row.theirs?.state === 'present').length
+  const setupSteps = buildSetupSteps(card ?? null, owner, { total: exchangeTotal, received: receivedCount })
   const registrationCopy = buildRegistrationCopy(card ?? null)
   const registration = checkpointRegistration(card ?? null)
 
@@ -1431,7 +1473,10 @@ function IntegritySection() {
     <Card>
       <CardHeader className="flex-row items-start justify-between gap-2">
         <div>
-          <CardTitle className="text-sm">Chain integrity</CardTitle>
+          <CardTitle className="text-sm">Will your records hold up later, to someone else?</CardTitle>
+          <p className="mt-1 text-xs text-fg-dim">
+            Sealing stops a quiet edit on this machine. These three steps make it stand up outside it.
+          </p>
           {/* L4.2 — owner-added-later notice */}
           {ownerAddedAt && ownerCardIndex !== null ? (
             <p className="text-xs text-fg-dim mt-1">
@@ -1460,31 +1505,43 @@ function IntegritySection() {
         </HoverChip>
       </CardHeader>
       <CardContent className="flex flex-col gap-4 pt-0 text-sm text-fg-dim">
-        <ChainStrip checkpointCount={checkpointCount} coveredLeafCount={coveredLeafCount} sealedCount={sealedCount} />
+        <ChainStrip
+          breakdown={recordsStripBreakdown(
+            ownExchangeCount,
+            receivedNoteCount,
+            routingChoiceCount,
+            paymentRecordCount,
+            lastCheckpointAt
+          )}
+          checkpointCount={checkpointCount}
+          coveredRecords={coveredRecords}
+          sealedCount={sealedCount}
+        />
+
+        <SetupChecklist onGoToExchanges={onGoToExchanges} steps={setupSteps} />
+
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <IntegrityStatCard
             info={INTEGRITY_TILE_INFO.sealed}
             label="Sealed"
-            sub={sealedBreakdownText(ownExchangeCount, receivedNoteCount, routingChoiceCount, paymentRecordCount)}
+            sub="Can’t change unnoticed. Doesn’t make it true."
             value={sealedCount}
           />
           <IntegrityStatCard
-            info={INTEGRITY_TILE_INFO.sharedWithWitness}
-            label="Shared with a witness"
-            sub={witnessTileNote(registration.witnessState)}
-            value={registration.witnessedCheckpointCount}
-          />
-          <IntegrityStatCard
             info={INTEGRITY_TILE_INFO.confirmedByOtherSide}
-            label="Saved as confirmed"
-            value={closedByOtherSideCount}
+            label="Confirmed by the other side"
+            sub="Their signed record matches yours."
+            value={exchangeTotal > 0 ? `${closedByOtherSideCount} of ${exchangeTotal}` : 'none yet'}
           />
           <IntegrityStatCard
+            alert={contradictedCount > 0}
             info={INTEGRITY_TILE_INFO.contradicted}
             label="Disagreements"
+            sub="Different request, answer, model or server."
             tone="bad"
-            value={contradictedCount}
+            value={exchangeTotal > 0 ? `${contradictedCount} of ${exchangeTotal}` : 'none yet'}
           />
+          <CloseCard counts={closeCounts} payments={paneCQuery.data?.payments} unjoined={unjoinedPayments} />
         </div>
 
         <WitnessList
@@ -1492,10 +1549,6 @@ function IntegritySection() {
           problems={witnessKeyProblems(card ?? null)}
           rows={witnessRows(card ?? null)}
         />
-
-        <CloseCard counts={closeCounts} payments={paneCQuery.data?.payments} unjoined={unjoinedPayments} />
-
-        <SetupChecklist steps={setupSteps} />
 
         {/* Finding 7 -- each thing said once: an unwitnessed checkpoint is
            already stated by step 1's status and the witness tile, so the
@@ -1508,6 +1561,11 @@ function IntegritySection() {
             ) : null}
           </div>
         ) : null}
+
+        <p className="type-caption text-fg-faint" data-testid="integrity-footer">
+          This page reads the node’s own status and doesn’t re-check it. Open an exchange to see checks redone in
+          your browser.
+        </p>
 
         <p className="inline-flex flex-wrap items-center gap-1">
           {continuity ? (
@@ -1784,7 +1842,7 @@ export function LedgerPageContent({ focusExchangeKey }: { focusExchangeKey?: str
               {
                 value: 'integrity',
                 label: 'Integrity',
-                content: <IntegritySection />
+                content: <IntegritySection onGoToExchanges={() => setActiveTab('exchanges')} />
               }
             ]}
             value={activeTab}

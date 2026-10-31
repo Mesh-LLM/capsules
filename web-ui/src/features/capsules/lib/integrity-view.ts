@@ -23,9 +23,6 @@ import {
   CHAIN_STRIP_TOOLTIP,
   INTEGRITY_TILE_TOOLTIPS,
   OWNER_LINKED_PHRASE,
-  OWNER_NOT_LINKED_PHRASE,
-  THEIR_RECORD_ARRIVES_IF_PUSHED,
-  WITNESS_OFF
 } from '@/features/capsules/lib/tooltip-copy'
 
 /** `StatusPayload.owner` / `PeerInfo['owner']` verbatim (`lib/api/
@@ -127,27 +124,8 @@ export function checkpointRegistration(card: JsonRecord | null | undefined): Che
   }
 }
 
-/** The witness tile's line under its count, by the same fact. */
-export function witnessTileNote(state: WitnessState): string | undefined {
-  switch (state) {
-    case 'earlier':
-      return 'the latest checkpoint is not held yet'
-    case 'pending':
-      return 'witness on — none holds a checkpoint yet'
-    case 'off':
-      return WITNESS_OFF
-    default:
-      return undefined
-  }
-}
-
 /** Step 2's done state (UX §4): what binding actually established. */
 export const OWNER_LINKED_SENTENCE = `Your records are signed by this node’s key, ${OWNER_LINKED_PHRASE}.`
-
-/** The honest rung-1/witness-line copy for a checkpoint no witness holds. */
-// Finding 7: "witness: off" is the witness tile's to say ("off — your
-// choice"); the step says only what this step's state is.
-export const CHECKPOINTED_NOT_REGISTERED_STATUS = 'checkpointed locally · no witness'
 
 // ---------------------------------------------------------------------------
 // Setup checklist (ledger-ux-from-the-user-2026-09-09 §6) -- three steps in
@@ -161,80 +139,91 @@ export type SetupStep = {
   key: 'checkpoints' | 'identity' | 'ask_peer'
   title: string
   done: boolean
-  /** Status word shown next to the title -- "not set up" / "registered" /
-   *  "never asked" / "asked <date>". */
+  /** The status pill's words. Where this page has no source for a value the
+   *  pill says "not checked", never a guess. */
   status: string
-  /** What it buys and what it does not -- omitted once done, since the
-   *  explanatory sentence is written for someone deciding whether to do
-   *  the step, not for someone who already has. */
+  /** How the pill is toned: `good` holds, `pending` is the open step,
+   *  `muted` is unknown. */
+  tone: 'good' | 'pending' | 'muted'
+  /** What it buys and what it does not. */
   body: string | null
-  /** One thing to do next, when there is one: a link, never a fake button. */
-  action?: { label: string; href: string }
+  /** The attack this step guards against, said after "Guards against:". */
+  guards: string
+  /** One thing to do next, when there is one. Step 3 is a status, so it
+   *  only points at where to look, never at a task. */
+  action?:
+    | { kind: 'link'; label: string; href: string }
+    | { kind: 'command'; label: string }
+    | { kind: 'exchanges'; label: string }
 }
+
+/** How many exchanges this node holds, and for how many the other side's
+ *  record arrived. Both from the same exchange rows, so the pill and the
+ *  tile carry one denominator. */
+export type ReceivedCounts = { total: number; received: number }
 
 export function buildSetupSteps(
   card: JsonRecord | null | undefined,
   owner: StatusOwner | null | undefined,
-  /** Halves that arrived by push and closed
-   *  through the ONE gate (`IntegritySection`'s own `closedByOtherSideCount`,
-   *  the same tile figure). Corroboration can arrive by push, not only by an
-   *  ask this node sent -- so a nonzero count marks the "ask a peer" step done,
-   *  worded to match the tile, never left reading "never asked" while the tile
-   *  reads CLOSED. Defaults to 0 (the pre-push-path behaviour). */
-  closedByOtherSideCount = 0
+  exchanges: ReceivedCounts = { total: 0, received: 0 }
 ): SetupStep[] {
-  // Four honest states, never two
-  // (D1): `null` = the host did not REPORT a count (not evidence of absence
-  // -- distinct from a real zero); `0` = reported, and genuinely none yet;
-  // `> 0` with NO witness = checkpointed LOCALLY, which is NOT registration;
-  // witnessed = registered. Only the last may say "registered" -- the same
-  // ONE fact `buildRegistrationCopy` and the Exchanges headline derive from.
+  // `null` = the host did not REPORT a count (not evidence of absence --
+  // distinct from a real zero). Only `off` may say the witness is off.
   const registration = checkpointRegistration(card)
   const bound = ownerBound(owner)
-  const askedPeerAt = typeof card?.asked_peer_at === 'string' ? card.asked_peer_at : null
+  const held = registration.witnessedCheckpointCount > 0
+  const allReceived = exchanges.total > 0 && exchanges.received >= exchanges.total
+
+  const witnessPill: Record<WitnessState, string> = {
+    latest: 'Held by a witness',
+    earlier: 'Held · not the latest',
+    pending: 'On · none holds one yet',
+    off: 'Off · your choice',
+    unknown: 'not checked'
+  }
 
   return [
     {
       key: 'checkpoints',
-      title: 'Have a witness hold your checkpoints',
-      done: registration.witnessedCheckpointCount > 0,
-      status: registration.witnessedCheckpointCount > 0
-        ? 'witnessed'
-        : registration.checkpointedLocally
-          ? CHECKPOINTED_NOT_REGISTERED_STATUS
-          : registration.reported
-            ? 'not set up'
-            : 'status not reported',
-      body: registration.witnessedCheckpointCount > 0
+      title: 'Have an outside witness hold your checkpoints',
+      done: held,
+      status: witnessPill[registration.witnessState],
+      tone: held ? 'good' : registration.witnessState === 'unknown' ? 'muted' : 'pending',
+      body: held
         ? null
         : registration.reported
-          ? 'Right now your records are checkable only against themselves. A witness you don’t run holding a checkpoint is what makes a later rewrite detectable by someone else. It does not make your records true.'
-          : 'This node did not report its checkpoint status. That is not the same as having none — the status was not reported, so nothing can be concluded either way.'
+          ? 'Right now your records can only be checked against themselves. A witness you don’t run is what lets someone else prove a rewrite.'
+          : 'This node did not report its checkpoint status. That is not the same as having none — the status was not reported, so nothing can be concluded either way.',
+      guards: 'rewrote the record',
+      action: held ? undefined : { kind: 'link', label: 'Turn on', href: '/configuration/plugins' }
     },
     {
       key: 'identity',
-      title: 'Bind an owner identity',
+      title: 'Bind your records to a key you own',
       done: bound,
-      status: bound ? 'linked (self-asserted)' : OWNER_NOT_LINKED_PHRASE,
-      // UX §4: "bound" alone overclaims -- the done state says what it is.
+      status: bound ? 'Linked (self-asserted)' : 'Not linked',
+      tone: bound ? 'good' : 'pending',
+      // "bound" alone overclaims -- the done state says what it is.
       body: bound
         ? OWNER_LINKED_SENTENCE
-        : 'Binding your records to a key you hold (mesh-llm auth init) makes a later denial harder. It is only your own claim about who you are.'
+        : 'Makes it harder to later deny these are yours. It is your own claim about who you are, nothing more.',
+      guards: 'denying your own records',
+      action: bound ? undefined : { kind: 'command', label: 'mesh-llm auth init' }
     },
     {
+      // A status, not a task: asking for a missing record happens on the
+      // Exchanges row whose half did not arrive.
       key: 'ask_peer',
       title: 'Get the other side’s record',
-      // A half that arrived by push and closed through the gate corroborates
-      // just as an asked-for half does -- the step is done either way.
-      done: closedByOtherSideCount > 0 || askedPeerAt !== null,
-      // Finding 7: the count is the "Saved as confirmed" tile's to
-      // say; the step says only that it's done.
-      status:
-        closedByOtherSideCount > 0 ? 'received' : askedPeerAt !== null ? `asked ${askedPeerAt}` : 'none received yet',
+      done: allReceived,
+      status: exchanges.total === 0 ? 'none yet' : `${exchanges.received} of ${exchanges.total} received`,
+      tone: exchanges.total === 0 ? 'muted' : allReceived ? 'good' : 'pending',
       body:
-        closedByOtherSideCount > 0 || askedPeerAt !== null
-          ? null
-          : THEIR_RECORD_ARRIVES_IF_PUSHED
+        exchanges.total === 0
+          ? 'Every exchange produces two signed records, one per side. There are no exchanges yet.'
+          : `Every exchange produces two signed records, one per side. You hold both for ${exchanges.received} of ${exchanges.total}.`,
+      guards: 'left something out',
+      action: { kind: 'exchanges', label: 'See in Exchanges' }
     }
   ]
 }
@@ -321,42 +310,46 @@ export function coveredRecordCount(card: JsonRecord | null | undefined): number 
   return typeof covered === 'number' ? covered : null
 }
 
-export function chainStripCaption(
+/** The strip's heading: how many records are sealed and how many checkpoints
+ *  exist. A count the node did not report reads "not checked". */
+export function recordsStripHeading(sealedCount: number, checkpointCount: number | null): string {
+  const checkpoints =
+    checkpointCount === null
+      ? 'checkpoints not checked'
+      : `${checkpointCount} ${checkpointCount === 1 ? 'checkpoint' : 'checkpoints'}`
+  return `Your records · ${sealedCount} sealed · ${checkpoints}`
+}
+
+/** The badge beside the heading: how many of the sealed records a checkpoint
+ *  covers, always with the denominator. Null coverage is "not checked", never
+ *  a false "none". */
+export function coverageBadge(
   sealedCount: number,
   checkpointCount: number | null,
-  // The covered-LEAF count from the card (`covered_leaf_count`, inverted from
-  // the checkpoint's MMR node count by the host) -- NOT `checkpointCount`, which
-  // is the number of checkpoint LINES. The old caption rendered the line count
-  // as a leaf count (a live "covered by checkpoint (1 leaves)" for a 1-line,
-  // 8-leaf checkpoint). Null when the host did not report a covered-leaf count.
-  coveredLeafCount: number | null = null
+  coveredRecords: number | null
 ): string {
-  if (checkpointCount !== null && checkpointCount > 0) {
-    // A checkpoint exists. Report the covered-LEAF count when the host gave one
-    // ("1 leaf" / "N leaves" -- never "1 leaves", D1
-    // minor). If it did not, say so honestly rather than
-    // reprint the checkpoint-line count as if it were leaves.
-    if (coveredLeafCount !== null) {
-      // UX §4: "All 8 records are sealed into a checkpoint." -- a tree word
-      // ("leaves") never reaches the face.
-      if (coveredLeafCount >= sealedCount) {
-        return sealedCount === 1
-          ? 'The 1 record is sealed into a checkpoint'
-          : `All ${sealedCount} records are sealed into a checkpoint`
-      }
-      const since = sealedCount - coveredLeafCount
-      return `${coveredLeafCount} of ${sealedCount} records are sealed into a checkpoint · ${since} since the last checkpoint ${since === 1 ? 'is' : 'are'} unshaded`
-    }
-    return 'records sealed into a checkpoint (count not reported) · records since the last checkpoint are unshaded'
-  }
-  const entries = `${sealedCount} entr${sealedCount === 1 ? 'y' : 'ies'}, all sealed`
-  // Not reported by the host -- NEVER a false "none exists". A null count
-  // (host did not compute/report a checkpoint_count) must not read as "no
-  // checkpoint yet"; that conflation is the bug the three states guard
-  // against -- Integrity is the highest-cost tab for a false absence.
-  return checkpointCount === null
-    ? `${entries} · checkpoint status not reported`
-    : `${entries} · no checkpoint yet · no witness holds any of it`
+  if (sealedCount === 0) return 'no records yet'
+  if (checkpointCount === null) return 'checkpoints not checked'
+  if (checkpointCount === 0) return `0 of ${sealedCount} in a checkpoint`
+  if (coveredRecords === null) return 'coverage not checked'
+  const covered = Math.min(coveredRecords, sealedCount)
+  return covered === sealedCount && sealedCount > 1
+    ? `All ${sealedCount} in a checkpoint`
+    : `${covered} of ${sealedCount} in a checkpoint`
+}
+
+/** The strip's line under the bar: where the sealed records came from, and
+ *  when the last checkpoint was cut (omitted when the node gave no time). */
+export function recordsStripBreakdown(
+  own: number,
+  receivedNotes: number,
+  routingChoices: number,
+  paymentRecords: number,
+  lastCheckpointAt: string | null
+): string {
+  let text = sealedBreakdownText(own, receivedNotes, routingChoices, paymentRecords)
+  if (lastCheckpointAt) text += ` · last checkpoint ${formatExchangeTimestamp(lastCheckpointAt)}`
+  return text
 }
 
 // ---------------------------------------------------------------------------
@@ -419,7 +412,7 @@ export function sealedBreakdownText(
   routingChoices = 0,
   paymentRecords = 0
 ): string {
-  let text = `${own} yours · ${receivedNotes} received from the other side`
+  let text = `${own} yours · ${receivedNotes} received`
   if (routingChoices > 0) text += ` · ${routingChoices} ${routingChoices === 1 ? 'routing choice' : 'routing choices'}`
   if (paymentRecords > 0) text += ` · ${paymentRecords} payment records`
   return text
