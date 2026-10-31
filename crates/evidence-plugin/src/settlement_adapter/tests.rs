@@ -82,7 +82,7 @@ fn paid(role: &str, segment: u32, h: Option<&str>, amount: u64) -> Value {
 }
 
 fn one(records: Vec<Value>) -> Value {
-    let r = report(records, Some(EX));
+    let r = report(records, Some(EX), None);
     assert_eq!(r["exchanges"].as_array().unwrap().len(), 1, "{r:#}");
     r["exchanges"][0].clone()
 }
@@ -373,7 +373,7 @@ fn the_report_counts_distinct_settlements_and_never_checks_a_public_ledger() {
         seal(other),
         seal(hashless),
     ];
-    let all = report(records.clone(), None);
+    let all = report(records.clone(), None, None);
     assert_eq!(all["settlement_records"], 4);
     assert_eq!(all["settlement_records_unread"], 0);
     assert_eq!(all["disclosed_count"]["settlements"], 3);
@@ -389,14 +389,14 @@ fn the_report_counts_distinct_settlements_and_never_checks_a_public_ledger() {
     assert_eq!(all["exchanges"][0]["exchange_id"], EX);
     assert!(all["exchanges"][0].get("result").is_none());
 
-    let one = report(records, Some("ex-other"));
+    let one = report(records, Some("ex-other"), None);
     assert_eq!(
         one["disclosed_count"]["settlements"], 3,
         "the count is the book's, not the filter's"
     );
     assert_eq!(one["exchanges"].as_array().unwrap().len(), 1);
 
-    let none = report(Vec::<Value>::new(), Some("missing"));
+    let none = report(Vec::<Value>::new(), Some("missing"), None);
     assert_eq!(none["exchanges"], json!([]));
     assert_eq!(none["disclosed_count"]["settlements"], 0);
 }
@@ -415,7 +415,7 @@ fn one_payment_is_counted_once() {
     );
     again["fee_msat"] = json!(1);
     let records = vec![invoice("payer", 0, &hash("aa"), 1000), first, seal(again)];
-    let r = report(records.clone(), None);
+    let r = report(records.clone(), None, None);
     assert_eq!(r["disclosed_count"]["settlements"], 1);
     assert_eq!(
         book(records)["band"],
@@ -433,7 +433,7 @@ fn both_sides_of_one_payment_count_once() {
         invoice("provider", 0, &hash("aa"), 1000),
         paid("provider", 0, Some(&hash("aa")), 1000),
     ];
-    let r = report(records.clone(), None);
+    let r = report(records.clone(), None, None);
     assert_eq!(r["disclosed_count"]["settlements"], 1);
     let books = one(records)["books"].as_array().unwrap().clone();
     assert_eq!(books.len(), 2);
@@ -461,7 +461,7 @@ fn an_unreadable_settlement_record_is_counted_not_dropped() {
     let mut record = invoice("payer", 0, &hash("aa"), 1000);
     record["model_attestation"]["compute_attestation"]["x-mesh-settlement-v1"]["observed_by"] =
         json!("someone");
-    let r = report(vec![record], None);
+    let r = report(vec![record], None, None);
     assert_eq!(r["settlement_records"], 1);
     assert_eq!(r["settlement_records_unread"], 1);
     assert_eq!(r["exchanges"], json!([]));
@@ -488,4 +488,71 @@ fn bands_are_signed_decades_of_the_amount_in_btc() {
     // The largest amount a record can carry (JCS's 2^53-1), and u64::MAX.
     assert_eq!(band((1u64 << 53) - 1), btc(4));
     assert_eq!(band(u64::MAX), btc(8));
+}
+
+/// A settlement whose event carries the payment's preimage: the hash the
+/// invoice commits to is checked, and finality rests on it, not the wallet.
+fn paid_with_preimage(preimage: &[u8; 32], payment_hash: &str) -> Value {
+    let mut event = host_event(
+        "payer",
+        "input_settlement_observed",
+        Some(0),
+        Some(payment_hash),
+        1000,
+    );
+    event["preimage"] = json!(hex::encode(preimage));
+    seal(event)
+}
+
+fn method<'a>(book: &'a Value, i: usize, name: &str) -> &'a str {
+    book["settlements"][i]["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["detail"]["check"] == name)
+        .unwrap()["method"]
+        .as_str()
+        .unwrap()
+}
+
+#[test]
+fn a_preimage_that_hashes_to_the_payment_hash_makes_finality_a_check() {
+    use sha2::{Digest, Sha256};
+    let preimage = [7u8; 32];
+    let h = hex::encode(Sha256::digest(preimage));
+    let b = book(vec![
+        invoice("payer", 0, &h, 1000),
+        paid_with_preimage(&preimage, &h),
+    ]);
+    assert_eq!(chk(&b, 0, "preimage"), "PASS", "{b:#}");
+    assert_eq!(chk(&b, 0, "finality"), "PASS");
+    assert_eq!(method(&b, 0, "finality"), PREIMAGE_FINALITY_METHOD);
+    assert_eq!(
+        chk(&b, 0, "object_held"),
+        "PASS",
+        "event_ref covers the preimage"
+    );
+    assert_eq!(settled(&b), "PASS");
+}
+
+#[test]
+fn a_preimage_that_does_not_hash_to_the_payment_hash_fails_finality() {
+    let h = hash("aa");
+    let b = book(vec![
+        invoice("payer", 0, &h, 1000),
+        paid_with_preimage(&[7u8; 32], &h),
+    ]);
+    assert_eq!(chk(&b, 0, "preimage"), "FAIL", "{b:#}");
+    assert_eq!(chk(&b, 0, "finality"), "FAIL");
+    assert_eq!(settled(&b), "FAIL");
+}
+
+#[test]
+fn a_settlement_without_a_preimage_keeps_the_wallets_word() {
+    let b = book(vec![
+        invoice("payer", 0, &hash("aa"), 1000),
+        paid("payer", 0, Some(&hash("aa")), 1000),
+    ]);
+    assert_eq!(chk(&b, 0, "preimage"), "NOT_PRESENT");
+    assert_eq!(method(&b, 0, "finality"), FINALITY_METHOD);
 }

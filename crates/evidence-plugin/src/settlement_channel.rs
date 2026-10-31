@@ -154,6 +154,12 @@ pub struct PaymentLifecycleEvent {
     /// provider: deducted on receipt). Absent from hosts that do not pass it.
     #[serde(default)]
     pub fee_msat: Option<u64>,
+    /// A terminal settlement's Lightning preimage, 64 lowercase hex. No host
+    /// sends it yet (Mesh-LLM/capsules-plugin#83): it is post-payment proof
+    /// that the invoice was paid, checked by the settlement adapter as
+    /// `sha256(preimage) == payment_hash`.
+    #[serde(default)]
+    pub preimage: Option<String>,
 }
 
 impl PaymentLifecycleEvent {
@@ -174,6 +180,7 @@ impl PaymentLifecycleEvent {
             tokens: self.tokens,
             credited_msat: self.credited_msat,
             fee_msat: self.fee_msat,
+            preimage: self.preimage.as_deref(),
         }
     }
 }
@@ -254,7 +261,10 @@ pub fn parse_and_check(bytes: &[u8]) -> Result<PaymentLifecycleEvent, Settlement
 /// - `*_settlement_observed`: `wallet_reported` with a segment; the payment
 ///   hash may be `null`;
 /// - `input_*` phases are segment 0, `output_*` phases a non-zero segment;
-/// - `tokens` appears on `delivered` only.
+/// - `tokens` appears on `delivered` only;
+/// - `preimage`, when present, is on a settlement event with a payment hash,
+///   as 64 lowercase hex. Whether it hashes to `payment_hash` is the
+///   adapter's check, not a refusal here: a mismatch is sealed and reported.
 ///
 /// An event with no `role` is the payer's.
 fn check_combination(event: &PaymentLifecycleEvent) -> Result<(), SettlementEventError> {
@@ -288,6 +298,16 @@ fn check_combination(event: &PaymentLifecycleEvent) -> Result<(), SettlementEven
     if !settlement_phase && (event.credited_msat.is_some() || event.fee_msat.is_some()) {
         return impossible("wallet amounts are carried by settlement events only");
     }
+    if let Some(preimage) = &event.preimage {
+        if !settlement_phase || event.payment_hash.is_none() {
+            return impossible(
+                "a preimage is carried by a settlement event with a payment_hash only",
+            );
+        }
+        if !is_lower_hex_32(preimage) {
+            return impossible("a preimage is 64 lowercase hex");
+        }
+    }
     if role == Role::Payer && event.credited_msat.is_some() {
         return impossible("credited_msat is the receiving (provider) wallet's");
     }
@@ -318,6 +338,11 @@ fn check_combination(event: &PaymentLifecycleEvent) -> Result<(), SettlementEven
         }
     }
     Ok(())
+}
+
+/// 32 bytes as 64 lowercase hex digits.
+pub(crate) fn is_lower_hex_32(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Build a checked event body the way the host does: blank `event_ref`,
@@ -968,6 +993,42 @@ mod tests {
         assert_ne!(
             payer_event.exchange_id,
             provider["exchange_id"].as_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_preimage_rides_only_on_a_hashed_settlement_as_lowercase_hex() {
+        let with = |event: &Value, preimage: &str| {
+            let mut e = event.clone();
+            e["preimage"] = json!(preimage);
+            e["event_ref"] = json!("");
+            e["event_ref"] = json!(jcs::json_digest(&e).unwrap());
+            parse_and_check(&bytes(&e))
+        };
+        let settled = settled_input();
+        let ok = with(&settled, &"0f".repeat(32)).unwrap();
+        assert_eq!(ok.preimage.as_deref(), Some("0f".repeat(32).as_str()));
+        assert_eq!(ok.observation().preimage, Some("0f".repeat(32).as_str()));
+        assert!(
+            with(&settled, &"0F".repeat(32)).is_err(),
+            "uppercase refused"
+        );
+        assert!(with(&settled, "0f").is_err(), "short refused");
+        let invoice = host_shaped_event(
+            "ex-1",
+            Phase::InputInvoiceIssued,
+            Some(0),
+            Some(&"ab".repeat(32)),
+            10,
+        );
+        assert!(
+            with(&invoice, &"0f".repeat(32)).is_err(),
+            "not on an invoice"
+        );
+        let hashless = host_shaped_event("ex-1", Phase::InputSettlementObserved, Some(0), None, 10);
+        assert!(
+            with(&hashless, &"0f".repeat(32)).is_err(),
+            "not without a payment_hash"
         );
     }
 }

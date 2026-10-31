@@ -65,6 +65,7 @@ mod service_history;
 mod settings;
 mod settlement_adapter;
 mod settlement_channel;
+mod settlement_counterparty;
 mod settlement_legs;
 mod share_policy;
 mod sharing_effective;
@@ -1313,12 +1314,13 @@ fn with_evidence_operations(
             .description(
                 "Check the Lightning settlement objects this node holds for a paid exchange, under \
                  the lightning-v0 adapter declaration: each check (object held, invoice join, \
-                 amount, finality as the wallet reported it, preimage, payee credit) as PASS, \
+                 amount, finality by preimage or as the wallet reported it, preimage, payee credit) as PASS, \
                  FAIL, NOT_PRESENT, NOT_CHECKED or INCONCLUSIVE with its method, the declared \
                  predicate settled, and each exchange's value band. Also reports the disclosed \
                  count (distinct settlements by payment hash); the public-ledger count is \
-                 NOT_CHECKED, as Lightning has none. Never a score. Seals nothing and contacts \
-                 nobody.",
+                 NOT_CHECKED, as Lightning has none. Given the counterparty's settlement-bundle, \
+                 cross-checks the count against its book by payment hash, role and amount. \
+                 Never a score. Seals nothing and contacts nobody.",
             )
             .input::<settlement_adapter::SettlementCheckArgs>()
             .handle({
@@ -1724,6 +1726,11 @@ async fn main() -> anyhow::Result<()> {
         checkpoints.clone(),
     );
     let plugin = provider_receipt::with_route(
+        plugin,
+        capsules_for_routing_choice.clone(),
+        checkpoints.clone(),
+    );
+    let plugin = settlement_counterparty::with_route(
         plugin,
         capsules_for_routing_choice.clone(),
         checkpoints.clone(),

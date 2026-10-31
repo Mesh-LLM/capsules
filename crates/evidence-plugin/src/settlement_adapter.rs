@@ -15,8 +15,9 @@
 //! reported as a `native_check` with the check's name in `detail.check`, as
 //! the x402 declaration reports its checks. `NOT_PRESENT` means the input is
 //! absent; `NOT_CHECKED` means it is present and the check was not run. Every
-//! result names its method; a `finality` PASS names `wallet_reported`, the
-//! wallet's own statement, never a proof.
+//! result names its method. A `finality` PASS names `preimage_verified` when
+//! the settlement's preimage hashes to its `payment_hash`, and otherwise
+//! `wallet_reported`: the wallet's own statement, never a proof.
 //!
 //! **Joining.** A settlement joins an invoice of the same side and segment
 //! by `payment_hash`. A settlement with no hash joins nothing (`NOT_PRESENT`);
@@ -32,7 +33,9 @@
 //!
 //! **Counts.** The disclosed count is this node's distinct terminal
 //! settlements, by `payment_hash`. Lightning has no public ledger to check it
-//! against, so `public_ledger_count` is always `NOT_CHECKED`.
+//! against, so `public_ledger_count` is always `NOT_CHECKED`; the
+//! counterparty's book is the outside count instead (`counterparty_count`,
+//! [`crate::settlement_counterparty`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -59,6 +62,10 @@ pub const BAND_ASSET_SCALE: i64 = 11;
 
 /// The finality method: the wallet's report, which the declaration names.
 pub const FINALITY_METHOD: &str = "wallet_reported";
+
+/// The finality method when the settlement carries a preimage that hashes to
+/// its `payment_hash`: the payee released it, so the payment completed.
+pub const PREIMAGE_FINALITY_METHOD: &str = "preimage_verified";
 
 /// A property status (interop profile §7.1). Never a score.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +148,8 @@ pub struct Observation {
     pub amount_msat: u64,
     pub credited_msat: Option<u64>,
     pub fee_msat: Option<u64>,
+    /// The payment's preimage, when the settlement object carries one.
+    pub preimage: Option<String>,
     /// The rail reported this payment terminal.
     pub terminal: bool,
     pub held: Check,
@@ -176,6 +185,7 @@ impl Observation {
             amount_msat: u("amount_msat")?,
             credited_msat: u("credited_msat"),
             fee_msat: u("fee_msat"),
+            preimage: s("preimage").map(str::to_string),
             terminal: s("source") == Some("wallet_reported") && s("settlement") == Some("terminal"),
             held: lifecycle_event_ref(block),
         })
@@ -200,6 +210,7 @@ fn lifecycle_event_ref(block: &Map<String, Value>) -> Check {
         "amount_msat",
         "credited_msat",
         "fee_msat",
+        "preimage",
     ] {
         if let Some(v) = block.get(key) {
             base.insert(key.into(), v.clone());
@@ -295,6 +306,32 @@ fn invoice_for<'a>(
     }
 }
 
+/// `sha256(preimage) == payment_hash`, the hash the invoice commits to.
+fn preimage_check(settlement: &Observation) -> Check {
+    use sha2::{Digest, Sha256};
+    let Some(preimage) = &settlement.preimage else {
+        return check(
+            Status::NotPresent,
+            "the settlement object carries no preimage",
+        );
+    };
+    let Some(hash) = &settlement.payment_hash else {
+        return check(
+            Status::NotPresent,
+            "the settlement names no payment_hash to check the preimage against",
+        );
+    };
+    let bytes = match hex::decode(preimage) {
+        Ok(bytes) if bytes.len() == 32 => bytes,
+        _ => return check(Status::Fail, "the preimage is not 32 bytes of hex"),
+    };
+    if hex::encode(Sha256::digest(&bytes)).eq_ignore_ascii_case(hash) {
+        check(Status::Pass, "sha256(preimage) equals payment_hash")
+    } else {
+        check(Status::Fail, "sha256(preimage) differs from payment_hash")
+    }
+}
+
 /// One terminal settlement's checks, in declaration order.
 fn settlement_checks(
     settlement: &Observation,
@@ -312,10 +349,18 @@ fn settlement_checks(
             "settled amount differs from the invoice amount",
         ),
     };
-    let finality = if settlement.terminal {
-        check(Status::Pass, FINALITY_METHOD)
-    } else {
-        check(Status::Fail, "the settlement is not reported terminal")
+    let preimage = preimage_check(settlement);
+    // A preimage that hashes to the payment hash is the rail's own proof of
+    // completion and outranks the wallet's word; one that does not is a
+    // failed finality whatever the wallet said.
+    let finality = match preimage.status {
+        Status::Pass => check(Status::Pass, PREIMAGE_FINALITY_METHOD),
+        Status::Fail => check(
+            Status::Fail,
+            "the preimage does not hash to the payment_hash",
+        ),
+        _ if settlement.terminal => check(Status::Pass, FINALITY_METHOD),
+        _ => check(Status::Fail, "the settlement is not reported terminal"),
     };
     let payee_credit = match (
         settlement.side,
@@ -349,13 +394,7 @@ fn settlement_checks(
         ("invoice_join", invoice_join),
         ("amount", amount),
         ("finality", finality),
-        (
-            "preimage",
-            check(
-                Status::NotPresent,
-                "the settlement object carries no preimage",
-            ),
-        ),
+        ("preimage", preimage),
         ("payee_credit", payee_credit),
     ]
 }
@@ -506,7 +545,15 @@ pub fn check_exchange(exchange_id: &str, observations: &[&Observation]) -> Value
 ///   ledger, so the node's count is never checked against itself.
 /// - `settlement_records`: every settlement record the book holds, and
 ///   `settlement_records_unread` those the reader could not read.
-pub fn report(records: impl IntoIterator<Item = Value>, exchange_id: Option<&str>) -> Value {
+///
+/// `counterparty`: the other side's verified book
+/// ([`crate::settlement_counterparty`]), or why there is none; it fills
+/// `counterparty_count`.
+pub fn report(
+    records: impl IntoIterator<Item = Value>,
+    exchange_id: Option<&str>,
+    counterparty: Option<Result<crate::settlement_counterparty::Books, String>>,
+) -> Value {
     let mut settlement_records = 0u64;
     let mut unread = 0u64;
     let mut by_exchange: BTreeMap<String, Vec<Observation>> = BTreeMap::new();
@@ -549,6 +596,14 @@ pub fn report(records: impl IntoIterator<Item = Value>, exchange_id: Option<&str
             check_exchange(id, &held)
         })
         .collect();
+    let counterparty_count = match counterparty {
+        None => crate::settlement_counterparty::not_run(
+            Status::NotPresent,
+            "no counterparty settlement bundle was given",
+        ),
+        Some(Err(why)) => crate::settlement_counterparty::not_run(Status::NotChecked, &why),
+        Some(Ok(books)) => crate::settlement_counterparty::cross_check(&books),
+    };
     json!({
         "adapter": LIGHTNING_ADAPTER,
         "disclosed_count": {
@@ -557,6 +612,7 @@ pub fn report(records: impl IntoIterator<Item = Value>, exchange_id: Option<&str
             "method": "distinct terminal settlements in this node's book, by payment_hash",
         },
         "public_ledger_count": {"status": Status::NotChecked.wire(), "reason": "no_public_ledger"},
+        "counterparty_count": counterparty_count,
         "settlement_records": settlement_records,
         "settlement_records_unread": unread,
         "exchanges": exchanges,
@@ -569,6 +625,10 @@ pub struct SettlementCheckArgs {
     /// holds settlement records for.
     #[serde(default)]
     pub exchange_id: Option<String>,
+    /// The counterparty's `settlement-bundle`, to cross-check this node's
+    /// count against its book (`counterparty_count`).
+    #[serde(default)]
+    pub counterparty_bundle: Option<Value>,
 }
 
 /// `settlement_check`: [`report`] over this node's book. Only settlement
@@ -577,7 +637,17 @@ pub async fn handle(
     args: SettlementCheckArgs,
     capsules: std::sync::Arc<crate::capsule_emit::CapsuleState>,
 ) -> mesh_llm_plugin::PluginResult<Value> {
+    let configured = crate::settings::var(crate::peer_keys::ENV_PEER_KEYS).ok();
+    let announced = crate::peer_keys::announced::snapshot();
     tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let counterparty = args.counterparty_bundle.as_ref().map(|bundle| {
+            crate::settlement_counterparty::books(
+                &capsules,
+                configured.as_deref(),
+                &announced,
+                bundle,
+            )
+        });
         let mut records = Vec::new();
         for id in capsules.capsule_ids_in_order() {
             match capsules.lookup(&id) {
@@ -588,7 +658,7 @@ pub async fn handle(
                 Err(e) => return Err(format!("the ledger could not be read: {e}")),
             }
         }
-        Ok(report(records, args.exchange_id.as_deref()))
+        Ok(report(records, args.exchange_id.as_deref(), counterparty))
     })
     .await
     .map_err(|e| {
