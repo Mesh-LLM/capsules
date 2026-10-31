@@ -22,7 +22,8 @@
     "types": ["node", "vite/client", "vitest/globals"],
     "paths": {
       "@/*": ["./src/*"],
-      "@cll-browser": ["./node_modules/@action-state-group/cll/dist/browser.d.ts"]
+      "@cll-browser": ["./node_modules/@action-state-group/cll/dist/browser.d.ts"],
+      "@aac-browser": ["./node_modules/@action-state-group/agent-action-capsule/dist/browser.d.ts"]
     }
   },
   "include": ["src", "dev", "vite.config.ts", "vite.dev.config.ts", "scope-css.ts"]

@@ -16,6 +16,7 @@ import type { CapsuleRecord } from '@/features/capsules/api/types'
 import { SeeInLogsLink } from '@/features/capsules/components/ExchangeIdCell'
 import { AgreementStrip } from '@/features/capsules/components/AgreementStrip'
 import { ExchangeRowChips } from '@/features/capsules/components/ExchangeRowChips'
+import { ReceiptPanel } from '@/features/capsules/components/ReceiptPanel'
 import { SecurityChecksView } from '@/features/capsules/components/SecurityChecksView'
 import {
   ProviderSettlementStrip,
@@ -659,6 +660,7 @@ export function ExchangeStreamRow({
           agreement={row.raw.agreement}
           paid={Boolean(row.raw.settlement || row.raw.provider_settlement)}
         />
+        <ReceiptPanel row={row.raw} />
         {/* v3 §2's row footer: two independent
            disclosure toggles, never a modal. Always present, regardless of
            the right-cell state. */}
