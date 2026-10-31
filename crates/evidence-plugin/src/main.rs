@@ -729,7 +729,7 @@ async fn push_settlement_legs(
             &push.capsule,
             coverage.as_ref(),
             &[],
-            None,
+            record_push_bridge::own_binding(capsules).as_ref(),
         )
         .await
         {
@@ -827,7 +827,7 @@ fn start_leg_catch_up(
                 &leg.capsule,
                 Some(&coverage),
                 &[],
-                None,
+                record_push_bridge::own_binding(&capsules).as_ref(),
             )
             .await;
             match leg_catch_up::outcome_of(&leg.capsule, &pushed) {
