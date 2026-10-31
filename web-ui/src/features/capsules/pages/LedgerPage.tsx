@@ -122,15 +122,12 @@ import {
 import { HARNESS_PANE_A_PAYLOAD, HARNESS_PANE_C_PAYLOAD } from '@/features/capsules/lib/exchange-fixtures'
 import {
   HARNESS_PANE_B_PAYLOAD,
-  PEER_TAB_HARNESS_EXCHANGE_SOURCES,
   PEER_TAB_HARNESS_LEDGER_RECORDS,
   PEER_TAB_HARNESS_MESH_MODELS,
   PEER_TAB_HARNESS_MESH_PEERS
 } from '@/features/capsules/lib/peer-fixtures'
-import { livePeerExchangeSources, type PeerExchangeSource } from '@/features/capsules/lib/peer-exchange-timeline'
 import { advertisedOnlyPeers, usePeerMeshStatusIndex } from '@/features/capsules/lib/peer-mesh-status'
 import {
-  advertisedOnlyRowView,
   dealtWithRowView,
   unlinkedNodeId,
   peerDisplayId,
@@ -204,7 +201,13 @@ function DisabledReason({ reason, children }: { reason: string | null; children:
 // Peers section (pane-b)
 // ---------------------------------------------------------------------------
 
-function PeersSection({ recordsById }: { recordsById: Map<string, CapsuleRecord> }) {
+function PeersSection({
+  recordsById,
+  onOpenExchanges
+}: {
+  recordsById: Map<string, CapsuleRecord>
+  onOpenExchanges: () => void
+}) {
   const { mode } = useDataMode()
   const harnessMode = mode === 'harness'
   const query = useQuery({
@@ -243,6 +246,15 @@ function PeersSection({ recordsById }: { recordsById: Map<string, CapsuleRecord>
   })
   const meshStatus = usePeerMeshStatusIndex(PEER_TAB_HARNESS_MESH_PEERS, PEER_TAB_HARNESS_MESH_MODELS)
   const peerName = usePeerNames()
+  // The drawer's history ask: the same request and judging as the Exchanges
+  // row's, and a verified result goes into the same browser memory
+  // (`history-memory.ts`), shown on that peer's newest Exchanges row.
+  const askPeerHistory = async (nodeId: string): Promise<HistoryOutcome> => {
+    const askedAt = new Date().toISOString()
+    const outcome = judgeHistoryReply(await askForHistory(nodeId), askedAt)
+    rememberVerifiedHistory(loadVerifiedHistories(), nodeId, outcome)
+    return outcome
+  }
   const effectiveRecordsById = harnessMode ? PEER_TAB_HARNESS_LEDGER_RECORDS : recordsById
 
   const resolveTimestamp = (capsuleId: string): string | null => effectiveRecordsById.get(capsuleId)?.timestamp ?? null
@@ -271,37 +283,16 @@ function PeersSection({ recordsById }: { recordsById: Map<string, CapsuleRecord>
   // happened). A different group, never merged with the rows above.
   const advertisedPeers = advertisedOnlyPeers(dealtWithRawRows, meshStatus.peers)
 
-  const sourcesByPeerId = new Map<string, readonly PeerExchangeSource[]>()
-  for (const row of sortedDealtWithRawRows) {
-    const peerId = peerDisplayId(row) ?? ''
-    sourcesByPeerId.set(
-      peerId,
-      harnessMode
-        ? (PEER_TAB_HARNESS_EXCHANGE_SOURCES[peerId] ?? [])
-        : livePeerExchangeSources(row, paneCQuery.data?.rows ?? [])
-    )
-  }
-
   const dealtWithViews = sortedDealtWithRawRows.map((row) => {
     const nodeId = unlinkedNodeId(row)
     const announcedKey = nodeId ? (announcedKeysQuery.data?.get(nodeId) ?? null) : null
     return dealtWithRowView(row, resolveTimestamp, harnessMode ? [] : (paneCQuery.data?.rows ?? []), announcedKey)
   })
-  const advertisedViews = advertisedPeers.map((peer) => advertisedOnlyRowView(peer.shortId ?? peer.id))
 
-  // §3E -- the role-aware
-  // headline needs the real advertised/dealt-with counts, which only this
-  // section's data pipeline has (mesh status + pane-b rows); the call
-  // site's own intro sentence stays static prose above it. `role !== 'you'`
-  // excludes this node's own self entry, same exclusion `advertisedOnlyPeers`
-  // already applies to the table's second row group.
-  const advertisedCount = meshStatus.peers.filter((peer) => peer.role !== 'you').length
-  const dealtWithCount = dealtWithViews.length
-
-  if (dealtWithViews.length === 0 && advertisedViews.length === 0) {
+  if (dealtWithViews.length === 0) {
     return (
       <EmptyState
-        description={`${advertisedCount} peers advertised on the mesh so far · ${dealtWithCount} you have dealt with on the record. Once you ask another node for an answer, or serve one to a peer, this tab will show what they've shown you and whether it holds up.`}
+        description="Once you ask another node for an answer, or serve one to a peer, this tab will show what they've shown you and whether it holds up."
         hint={
           <Button
             className="ui-control h-8 gap-1.5 rounded-[var(--radius)] px-2.5 text-[length:var(--density-type-caption)]"
@@ -321,23 +312,17 @@ function PeersSection({ recordsById }: { recordsById: Map<string, CapsuleRecord>
 
   return (
     <div className="flex flex-col gap-2">
-      {/* L3.1/§3E — the role-aware headline, two counts, never a ratio. */}
-      <p className="text-sm font-medium text-foreground">
-        {advertisedCount} peer{advertisedCount === 1 ? '' : 's'} advertised · {dealtWithCount} you have dealt with on
-        the record.
-      </p>
       {unattributedExchangeCount > 0 ? (
         <p className="text-sm text-foreground">{unattributedExchangesLine(unattributedExchangeCount)}</p>
       ) : null}
       <LedgerPeersTable
-        advertisedUnused={advertisedViews}
         advertisedUnusedRawPeers={advertisedPeers}
         dealtWith={dealtWithViews}
         dealtWithRawRows={sortedDealtWithRawRows}
-        exchangeSourcesFor={(peerId) => sourcesByPeerId.get(peerId) ?? []}
         meshStatus={meshStatus}
+        onAskHistory={harnessMode ? undefined : askPeerHistory}
+        onOpenExchanges={onOpenExchanges}
         peerName={peerName}
-        recordsById={effectiveRecordsById}
         throughSplit={peersThroughSplit((paneCQuery.data?.rows ?? []).flatMap((row) => (row.split ? [row.split] : [])))}
       />
     </div>
@@ -1764,7 +1749,7 @@ export function LedgerPageContent({ focusExchangeKey }: { focusExchangeKey?: str
                       </a>
                       .
                     </p>
-                    <PeersSection recordsById={recordsById} />
+                    <PeersSection onOpenExchanges={() => setActiveTab('exchanges')} recordsById={recordsById} />
                   </div>
                 )
               },

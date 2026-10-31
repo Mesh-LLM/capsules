@@ -265,11 +265,9 @@ describe('LedgerPageContent', () => {
 
     expect(await screen.findByText('peer-1')).toBeInTheDocument()
 
-    // §3E -- the role-aware
-    // headline. `useStatusQuery` is globally mocked to `{ data: undefined }`
-    // in this file (no mesh-status peers), so "advertised" is honestly 0
-    // even though one peer was dealt with on the record.
-    expect(screen.getByText('0 peers advertised · 1 you have dealt with on the record.')).toBeInTheDocument()
+    // The header counts the peers on the record; nodes only advertised are Network's.
+    expect(screen.getByText(/^1 peer on the record\./)).toBeInTheDocument()
+    expect(screen.queryByText(/peers? advertised/)).not.toBeInTheDocument()
   })
 
   it('Peers empty state is an invitation, never a bare "No peer exchanges recorded yet."', async () => {
@@ -278,6 +276,9 @@ describe('LedgerPageContent', () => {
     await user.click(screen.getByRole('tab', { name: /peers/i }))
 
     expect(await screen.findByText('No peers recorded yet')).toBeInTheDocument()
+    // Nodes only advertised on the mesh are Network's: the invitation shows with none dealt with.
+    expect(screen.getByText('Open Chat to start one')).toBeInTheDocument()
+    expect(screen.queryByText(/peers advertised on the mesh/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Open Chat to start one' })).toBeInTheDocument()
     expect(screen.queryByText('No peer exchanges recorded yet.')).not.toBeInTheDocument()
   })
@@ -1946,7 +1947,7 @@ describe('LedgerPageContent — twin pairs on Peers', () => {
     }
   }
 
-  it("shows a peer's twin pairs as facts, and nothing extra for a peer in none", async () => {
+  it('answers that merely differed byte for byte are not a finding: Swapped the model stays Not tested and no inferred line is drawn', async () => {
     const { fetchPaneB, fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
     vi.mocked(fetchPaneB).mockResolvedValue({
       rows: [paneBPeer('node:adversary'), paneBPeer('node:other')],
@@ -1965,10 +1966,9 @@ describe('LedgerPageContent — twin pairs on Peers', () => {
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /peers/i }))
 
-    expect(await screen.findByText('Sent to two machines: 3 · answers differed: 3 · not adjudicated')).toBeInTheDocument()
-    expect(document.querySelectorAll('[data-peer-twins="true"]')).toHaveLength(1)
-    const lines = Array.from(document.querySelectorAll('[data-peer-twins="true"]')).map((el) => el.textContent ?? '')
-    for (const line of lines) expect(line).not.toMatch(/dishonest|honest|bad|flag|lie|cheat|wrong|suspicious/i)
+    expect((await screen.findAllByText('Not tested')).length).toBe(2)
+    expect(screen.queryByText(/answers differed/)).not.toBeInTheDocument()
+    expect(document.querySelectorAll('[data-peer-twins="true"]')).toHaveLength(0)
   })
 })
 
@@ -2002,6 +2002,16 @@ describe('LedgerPageContent — a peer known only from your records', () => {
 
   afterEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('a history check that passes in the peer drawer is remembered like the Exchanges row’s', async () => {
+    await renderNodeOnlyPeer(null)
+    const user = userEvent.setup()
+    await user.click(await screen.findByLabelText(/^Open peer inspector for /))
+    await user.click(await screen.findByRole('button', { name: 'Ask a peer for their history' }))
+    expect(await screen.findByText(/Their history checks out/)).toBeInTheDocument()
+    const stored = JSON.parse(window.localStorage.getItem(HISTORY_MEMORY_KEY) ?? '{}')
+    expect(stored[NODE]).toMatchObject({ kind: 'verified', checkpoints: 2 })
   })
 
   it('names the signing key this node knows for it (here only configured), claiming no source', async () => {

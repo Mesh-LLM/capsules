@@ -1,62 +1,66 @@
-// One row of the Peers table (replaces the old
-// `PeerCard` -- review §3-F: "Peers is a card, not the table"). Each
-// accountability column gets its own cell, never blended into one
-// paragraph. A row with exchange history opens the same `PeerInspector`
-// modal PeerCard used to; an "advertised but unused" row (no `PaneBRow` at
-// all) has nothing to drill into, so it isn't clickable.
-//
-// No online badge, latency, or
-// Route-to-chat button here -- those are Network's job. `meshStatus` is
-// still threaded through to `PeerInspector` (the deep-dive modal keeps its
-// own operational Overview tab), just no longer rendered on the row.
-import { useMemo, useState } from 'react'
+// One row of the Peers table. Each column answers one way a stranger could
+// cheat (rewrote the record, left something out, swapped the model) with one
+// badge, never blended into one paragraph. A row with exchange history opens
+// the `PeerInspector` drawer. No online badge, latency or Route-to-chat button
+// here: those are Network's job.
+import { useState } from 'react'
 import { TableCell, TableRow } from '@/components/ui/table'
 import { StatusBadge } from '@/components/ui/StatusBadge'
-import type { CapsuleRecord } from '@/features/capsules/api/types'
 import { PeerInspector } from '@/features/capsules/components/PeerInspector'
-import { buildTimelinePoints, type PeerExchangeSource } from '@/features/capsules/lib/peer-exchange-timeline'
+import type { HistoryOutcome } from '@/features/capsules/lib/ask-for-history'
 import type { PeerMeshStatus } from '@/features/capsules/lib/peer-mesh-status'
 import {
   ALL_PEER_TABLE_COLUMNS,
+  isShownAttention,
+  peerIdentityAliases,
+  unlinkedNodeId,
+  type PeerBadge,
   type PeerTableColumnKey,
   type PeerTableRowView
 } from '@/features/capsules/lib/peer-row-view'
 import { HoverChip } from '@/features/capsules/components/HoverChip'
-import { InfoHover } from '@/features/capsules/components/InfoHover'
-import { PEER_ALIAS_TOOLTIP, PEER_PAYMENTS_TOOLTIP, PEER_TWINS_TOOLTIP } from '@/features/capsules/lib/tooltip-copy'
+import { PEER_PAYMENTS_TOOLTIP } from '@/features/capsules/lib/tooltip-copy'
 
 export type PeerTableRowProps = {
   view: PeerTableRowView
   meshStatus: PeerMeshStatus | null
-  exchangeSources?: readonly PeerExchangeSource[]
-  recordsById?: ReadonlyMap<string, CapsuleRecord>
-  /** Columns toggle (the Peers table toolbar) -- Peer/Alarm are
-   *  never hideable, only the six accountability columns are. */
+  /** Columns toggle (the Peers table toolbar): the Peer and Open cells are
+   *  never hideable. */
   visibleColumns?: ReadonlySet<PeerTableColumnKey>
   /** How the page names this peer (`peer-names.ts`): hostname, then short
    *  id. Defaults to the row's own id. */
   name?: string
+  /** Where the drawer's "Open in Exchanges" and "Open the verdict" go. */
+  onOpenExchanges?: () => void
+  /** Asks this peer's node for its history (see `PeerInspector`). */
+  onAskHistory?: (nodeId: string) => Promise<HistoryOutcome>
 }
 
-const EMPTY_SOURCES: readonly PeerExchangeSource[] = []
-const EMPTY_RECORDS: ReadonlyMap<string, CapsuleRecord> = new Map()
+function Badge({ badge }: { badge: PeerBadge }) {
+  return (
+    <StatusBadge size="caption" tone={badge.tone}>
+      {badge.text}
+    </StatusBadge>
+  )
+}
 
 export function PeerTableRow({
   view,
   meshStatus,
-  exchangeSources = EMPTY_SOURCES,
-  recordsById = EMPTY_RECORDS,
   visibleColumns = ALL_PEER_TABLE_COLUMNS,
-  name
+  name,
+  onOpenExchanges,
+  onAskHistory
 }: PeerTableRowProps) {
   const shownName = name ?? view.displayId
   const [inspectorOpen, setInspectorOpen] = useState(false)
-  const points = useMemo(
-    () => (view.row ? buildTimelinePoints(view.row, exchangeSources, recordsById) : []),
-    [view.row, exchangeSources, recordsById]
-  )
   const inspectable = view.row !== null
   const openInspector = () => setInspectorOpen(true)
+  const nodeId = view.row ? peerIdentityAliases(view.row).nodeId : null
+  const { facts } = view
+  // The two states with no column of their own; a disagreement and a differing
+  // answer are the Left-something-out and Swapped columns.
+  const attention = view.attention.filter(isShownAttention)
 
   return (
     <>
@@ -84,21 +88,17 @@ export function PeerTableRow({
             <span className="truncate font-mono text-sm font-medium text-foreground" title={view.displayId}>
               {shownName}
             </span>
-            {/* D3: the peer's other
-               id spaces render as ALIASES on this one row -- signing key ·
-               node · endpoint -- never as extra peer rows. */}
-            {view.aliasLine ? (
-              <span className="inline-flex items-center gap-1">
-                <span className="font-mono text-fg-faint text-xs">{view.aliasLine}</span>
-                <InfoHover census="peer:aliases" describes="the peer's ids" label={PEER_ALIAS_TOOLTIP} />
+            {nodeId || facts.actedAsReferee ? (
+              <span className="font-mono text-fg-faint text-xs" data-peer-node="true">
+                {nodeId ? `node ${nodeId.slice(0, 10)}…` : null}
+                {nodeId && facts.actedAsReferee ? ' ' : null}
+                {facts.actedAsReferee ? '· acted as referee' : null}
               </span>
             ) : null}
-            {/* UX §2: "self-reported" is true of every row, so it is said
-               once in the legend under the table, not on each row. */}
-            {view.identityNote ? <span className="text-fg-faint text-xs">{view.identityNote}</span> : null}
-            {/* Visible while collapsed (chooser-v2 §3-F), but as the specific
-               thing, counted, with one sentence on hover -- never a generic
-               warning glyph (UX §8). */}
+            {/* A node known only from your own records says so, and names the key this node was told it signs with. */}
+            {view.row && unlinkedNodeId(view.row) ? (
+              <span className="font-mono text-fg-faint text-xs">{view.aliasLine}</span>
+            ) : null}
             {view.payments ? (
               <HoverChip census="peer:payments" label={PEER_PAYMENTS_TOOLTIP}>
                 <span className="text-xs text-fg-dim" data-peer-payments="true">
@@ -106,14 +106,7 @@ export function PeerTableRow({
                 </span>
               </HoverChip>
             ) : null}
-            {view.twins ? (
-              <HoverChip census="peer:twins" label={PEER_TWINS_TOOLTIP}>
-                <span className="text-xs text-fg-dim" data-peer-twins="true">
-                  {view.twins}
-                </span>
-              </HoverChip>
-            ) : null}
-            {view.attention.map((item) => (
+            {attention.map((item) => (
               <HoverChip census={`peer_attention:${item.key}`} key={item.key} label={item.tooltip}>
                 <span>
                   <StatusBadge size="caption" tone={item.tone}>
@@ -127,25 +120,50 @@ export function PeerTableRow({
         {visibleColumns.has('exchanges') ? (
           <TableCell className="text-xs text-fg-dim">{view.exchangeCount}</TableCell>
         ) : null}
-        {visibleColumns.has('confirmed') ? (
-          <TableCell className="text-xs text-fg-dim">{view.confirmedByOtherSide}</TableCell>
+        {visibleColumns.has('rewrote') ? (
+          <TableCell>
+            <Badge badge={facts.rewrote} />
+          </TableCell>
         ) : null}
-        {visibleColumns.has('match') ? <TableCell className="text-xs text-fg-dim">{view.match}</TableCell> : null}
-        {visibleColumns.has('adjudication') ? (
-          <TableCell className="text-xs text-fg-dim">{view.adjudicationCompact}</TableCell>
+        {visibleColumns.has('leftOut') ? (
+          <TableCell>
+            <Badge badge={facts.leftOut} />
+          </TableCell>
         ) : null}
-        {visibleColumns.has('witness') ? (
-          <TableCell className="text-xs text-fg-dim">{view.witnessCompact}</TableCell>
+        {visibleColumns.has('swapped') ? (
+          <TableCell>
+            <div className="flex flex-col items-start gap-1">
+              <Badge badge={facts.swapped} />
+              {/* The denominator always travels with the count. */}
+              {facts.swapped.checked > 0 ? <span className="text-fg-faint text-xs">{facts.swapped.tally}</span> : null}
+            </div>
+          </TableCell>
         ) : null}
         {visibleColumns.has('period') ? <TableCell className="text-xs text-fg-dim">{view.period}</TableCell> : null}
+        <TableCell className="text-xs">
+          {inspectable ? (
+            <button
+              className="text-accent-text underline underline-offset-2"
+              onClick={(event) => {
+                event.stopPropagation()
+                openInspector()
+              }}
+              type="button"
+            >
+              Open
+            </button>
+          ) : null}
+        </TableCell>
       </TableRow>
       {view.row ? (
         <PeerInspector
+          facts={facts}
           meshStatus={meshStatus}
           name={name}
+          onAskHistory={onAskHistory}
           onClose={() => setInspectorOpen(false)}
+          onOpenExchanges={onOpenExchanges}
           open={inspectorOpen}
-          points={points}
           row={view.row}
         />
       ) : null}

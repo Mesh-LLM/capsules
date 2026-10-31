@@ -7,35 +7,29 @@
 // would try to break, so they're asserted directly against the pure
 // view-model functions rather than only through component snapshots.
 import { describe, expect, it } from 'vitest'
-import type { PaneBConfirmedSibling, PaneBRow } from '@/features/capsules/api/sidecarTypes'
+import type { PaneBConfirmedSibling, PaneBRow, PaneCRow, TwinRowFacts } from '@/features/capsules/api/sidecarTypes'
 import { LatencySource } from '@/lib/api/types'
 import type { PeerMeshStatus } from '@/features/capsules/lib/peer-mesh-status'
 import {
-  adjudicationCompactText,
   adjudicationSummary,
   adjudicationSummaryText,
   alarmSignal,
-  advertisedOnlyRowView,
   confirmedByOtherSide,
-  confirmedByOtherSideText,
   dealtWithRowView,
   isUnattributedPeerRow,
   matchTally,
-  matchTallyText,
   meshMetaLine,
   peerAliasLine,
   unlinkedNodeId,
   peerDisplayId,
+  peerFacts,
   periodRangeText,
   peerSortKey,
   PEER_COLUMN_INFO,
-  SELF_REPORTED_DETAIL,
   sortPeerRows,
-  theirChainSummary,
   unattributedExchangesLine,
   withYouCounts,
-  withYouCountsText,
-  WITNESS_COVERAGE_COMPACT_TEXT
+  withYouCountsText
 } from '@/features/capsules/lib/peer-row-view'
 import { fixtureMineCell, fixtureTheirsCell } from '@/features/capsules/lib/pushed-half-fixtures'
 import { STANDING_WORD } from '@/features/capsules/lib/banned-terms'
@@ -126,7 +120,6 @@ describe('adjudicationSummary honesty invariants', () => {
     const text = adjudicationSummaryText(summary)
     expect(text).not.toMatch(/corroborated/)
     expect(text.toLowerCase()).toContain('not yet checked')
-    expect(adjudicationCompactText(summary)).toBe('none')
   })
 
   it('always carries the exchange_count denominator alongside a real tally, compact form matches the full form', () => {
@@ -144,7 +137,6 @@ describe('adjudicationSummary honesty invariants', () => {
       notChecked: false
     })
     expect(adjudicationSummaryText(summary)).toBe('8 of 24 adjudicated · 8 corroborated')
-    expect(adjudicationCompactText(summary)).toBe('8 of 24 · 8 corroborated')
   })
 
   it('never drops a contradicted/inconclusive count out of either the full or compact summary text', () => {
@@ -156,7 +148,6 @@ describe('adjudicationSummary honesty invariants', () => {
     expect(adjudicationSummaryText(summary)).toBe(
       '9 of 14 adjudicated · 6 corroborated · 1 contradicted · 2 inconclusive'
     )
-    expect(adjudicationCompactText(summary)).toBe('9 of 14 · 6 corroborated · 1 contradicted · 2 inconclusive')
   })
 
   it('treats an all-zero tally as not-checked even if the cell state claims "present"', () => {
@@ -171,51 +162,12 @@ describe('adjudicationSummary honesty invariants', () => {
   })
 })
 
-describe('theirChainSummary — never presents your own chain as theirs', () => {
-  it('labels the common NOT_CHECKED case honestly, without the word "pending"', () => {
-    const row = baseRow({
-      history: {
-        state: 'NOT_CHECKED',
-        text: null,
-        mine_for_reference: { history: { state: 'verified', text: '', history_depth: 9, checkpoint_count: 9 } }
-      }
-    })
-    const chain = theirChainSummary(row)
-    expect(chain.state).toBe('NOT_CHECKED')
-    expect(chain.ownChainForReferenceOnly).toBe(true)
-    expect(chain.text.toLowerCase()).not.toMatch(/\bpending\b/)
-  })
-
-  it('only claims "unbroken" when a real peer-fetch verified history_summary backs it', () => {
-    const row = baseRow({
-      history: {
-        state: 'verified',
-        text: '',
-        history_summary: { verified_bundles: 5, checkpoint_count: 41 }
-      }
-    })
-    const chain = theirChainSummary(row)
-    expect(chain.text).toContain('41')
-    expect(chain.text).toMatch(/^Unbroken/)
-    expect(chain.ownChainForReferenceOnly).toBe(false)
-  })
-
-  it('reports a failed verification honestly, never as unbroken', () => {
-    const row = baseRow({ history: { state: 'failed', text: 'fetch verification failed: chain diverged' } })
-    const chain = theirChainSummary(row)
-    expect(chain.text).not.toMatch(/^Unbroken/)
-    expect(chain.text).toMatch(/failed/i)
-  })
-})
-
 describe('confirmedByOtherSide — routed through the ONE gate, the same predicate Pane C uses', () => {
   it('states "none received yet" as a fact (never "pending" work) when no half has arrived from the other side', () => {
     const row = baseRow({ exchange_count: 11, confirmed_siblings: [] })
     const summary = confirmedByOtherSide(row)
     expect(summary).toEqual({ confirmed: 0, total: 11, note: 'none confirmed yet' })
-    expect(confirmedByOtherSideText(summary)).toBe('0 of 11')
     // ADVERSARIAL: never resurrect the retired browser-peer-fetch framing.
-    expect(confirmedByOtherSideText(summary)).not.toMatch(/pending|fetch/i)
   })
 
   it('counts a half confirmed only when the ONE gate closes it (signature_ok + verified digest_match) -- never a fetch predicate', () => {
@@ -225,7 +177,6 @@ describe('confirmedByOtherSide — routed through the ONE gate, the same predica
     })
     const summary = confirmedByOtherSide(row)
     expect(summary).toEqual({ confirmed: 3, total: 3, note: null })
-    expect(confirmedByOtherSideText(summary)).toBe('3 of 3')
   })
 
   it('denominator is the DISTINCT-exchange count, so 3 confirmed exchanges read "3 of 3", never "3 of 6"', () => {
@@ -238,9 +189,8 @@ describe('confirmedByOtherSide — routed through the ONE gate, the same predica
       exchange_count: 3,
       confirmed_siblings: [confirmedSibling(), confirmedSibling(), confirmedSibling()]
     })
-    expect(confirmedByOtherSideText(confirmedByOtherSide(row))).toBe('3 of 3')
     expect(dealtWithRowView(row).exchangeCount).toBe(3)
-    expect(dealtWithRowView(row).confirmedByOtherSide).toBe('3 of 3')
+    expect(dealtWithRowView(row).facts.leftOut).toMatchObject({ matched: 3, total: 3 })
   })
 
   it('never closes a sibling the gate does not close (no signature, or no digest match)', () => {
@@ -258,7 +208,6 @@ describe('confirmedByOtherSide — routed through the ONE gate, the same predica
     })
     const summary = confirmedByOtherSide(row)
     expect(summary).toEqual({ confirmed: 1, total: 4, note: '1 contradicted' })
-    expect(confirmedByOtherSideText(summary)).toBe('1 of 4 · 1 differ')
   })
 })
 
@@ -266,7 +215,6 @@ describe('matchTally — clean/mismatch of the halves the other side sent, via t
   it('always shows clean/mismatch even at zero, omits contradicted when zero', () => {
     const row = baseRow({ confirmed_siblings: Array.from({ length: 11 }, () => confirmedSibling()) })
     expect(matchTally(row)).toEqual({ clean: 11, mismatch: 0, contradicted: 0 })
-    expect(matchTallyText(matchTally(row))).toBe('11 · 0 differ')
   })
 
   it('counts a gate-contradicted sibling as a mismatch, and appends the adjudication contradicted count when nonzero', () => {
@@ -277,7 +225,7 @@ describe('matchTally — clean/mismatch of the halves the other side sent, via t
       ],
       verdicts: { state: 'contradicted', text: '', tally: { corroborated: 6, contradicted: 1, inconclusive: 0 } }
     })
-    expect(matchTallyText(matchTally(row))).toBe('9 · 1 differ')
+    expect(matchTally(row)).toEqual({ clean: 9, mismatch: 1, contradicted: 1 })
   })
 
   it('counts halves the door refused on their claims as differing, so Peers matches the hero', () => {
@@ -285,7 +233,7 @@ describe('matchTally — clean/mismatch of the halves the other side sent, via t
       confirmed_siblings: Array.from({ length: 3 }, () => confirmedSibling()),
       claims_refused: 2
     })
-    expect(matchTallyText(matchTally(row))).toBe('3 · 2 differ')
+    expect(matchTally(row)).toMatchObject({ clean: 3, mismatch: 2 })
   })
 })
 
@@ -449,12 +397,11 @@ describe('peerAliasLine — D3: aliases on ONE row, never extra peers', () => {
     expect(peerAliasLine(baseRow({ identity: null }))).toBeNull()
   })
 
-  it('the dealt-with view carries the alias line; an advertised-only view never does', () => {
+  it('the dealt-with view carries the alias line', () => {
     const row = baseRow({
       identity: { signing_key_id: 'ab'.repeat(32), endpoint_id: 'e5ba9d1001', node_id: null }
     })
     expect(dealtWithRowView(row).aliasLine).toBe(`signed by ${'ab'.repeat(8)} · endpoint e5ba9d1001`)
-    expect(advertisedOnlyRowView('node:unused').aliasLine).toBeNull()
   })
 })
 
@@ -495,7 +442,7 @@ describe('meshMetaLine — still used by the PeerInspector modal', () => {
   })
 })
 
-describe('dealtWithRowView / advertisedOnlyRowView — one shape, honest degradation', () => {
+describe('dealtWithRowView — honest degradation', () => {
   it('a dealt-with row carries the real Pane B row, exchange count, and every accountability column', () => {
     const row = baseRow({
       peer_id: 'node:abc',
@@ -506,74 +453,220 @@ describe('dealtWithRowView / advertisedOnlyRowView — one shape, honest degrada
       verdicts: { state: 'present', text: '', tally: { corroborated: 8, contradicted: 0, inconclusive: 0 } }
     })
     const view = dealtWithRowView(row)
-    expect(view.hasDealings).toBe(true)
     expect(view.row).toBe(row)
-    expect(view.identityNote).toBe('')
     expect(view.exchangeCount).toBe(24)
-    expect(view.match).toBe('16 · 0 differ')
-    expect(view.adjudicationCompact).toBe('8 of 24 · 8 corroborated')
-    expect(view.witnessCompact).toBe(WITNESS_COVERAGE_COMPACT_TEXT)
     expect(view.period).toBe('3 Sep')
     // 16 halves closed through the gate, 24 exchanges total.
-    expect(view.confirmedByOtherSide).toBe('16 of 24')
+    expect(view.facts.leftOut.text).toBe('16/24 matched')
   })
 
-  it('a zero-dealings advertised-only peer shows "no exchanges yet" and "—" for every accountability column, never a fabricated zero-of-zero', () => {
-    const view = advertisedOnlyRowView('node:unused')
-    expect(view.hasDealings).toBe(false)
-    expect(view.row).toBeNull()
-    expect(view.identityNote).toBe('no exchanges yet')
-    expect(view.exchangeCount).toBe(0)
-    for (const field of [
-      view.confirmedByOtherSide,
-      view.match,
-      view.adjudicationCompact,
-      view.witnessCompact,
-      view.period
-    ]) {
-      expect(field).toBe('—')
-    }
-  })
-
-  it('no accountability figure on either view ever renders a percentage or ratio ramp (R-D)', () => {
+  it('no accountability figure on a view ever renders a percentage or ratio ramp (R-D)', () => {
     const row = baseRow({
       exchange_count: 24,
       verdicts: { state: 'present', text: '', tally: { corroborated: 8, contradicted: 0, inconclusive: 0 } }
     })
-    const dealtWith = dealtWithRowView(row)
-    const advertised = advertisedOnlyRowView('node:unused')
-    for (const view of [dealtWith, advertised]) {
-      for (const text of [
-        view.confirmedByOtherSide,
-        view.match,
-        view.adjudicationCompact,
-        view.witnessCompact,
-        view.period
-      ]) {
-        expect(text).not.toContain('%')
-      }
+    const view = dealtWithRowView(row)
+    for (const text of [
+      view.period,
+      view.facts.rewrote.text,
+      view.facts.leftOut.text,
+      view.facts.swapped.text,
+      view.facts.swapped.tally
+    ]) {
+      expect(text).not.toContain('%')
     }
   })
 })
 
-describe('Item 4 — Peers column (i) copy + self-reported detail: evidence, never a score', () => {
-  it('Confirmed carries the UX §8 sentence verbatim', () => {
-    expect(PEER_COLUMN_INFO.confirmed).toBe(
-      'How many of your exchanges with them are confirmed by their own signed record, checked on this machine.'
-    )
+describe('Item 4 — Peers column (i) copy: evidence, never a score', () => {
+  it('Left something out says what it counts, out of how many', () => {
+    expect(PEER_COLUMN_INFO.leftOut).toContain('same request, answer and model as yours')
+    expect(PEER_COLUMN_INFO.leftOut).toContain('out of all your exchanges with them')
+  })
+
+  it('Their records witnessed is no column any more', () => {
+    expect(Object.keys(PEER_COLUMN_INFO)).toEqual(['exchanges', 'rewrote', 'leftOut', 'swapped', 'period'])
   })
 
   it('every column line names what it means / what backs it and refuses the score reading', () => {
-    for (const key of ['exchanges', 'confirmed', 'match', 'adjudication', 'witness', 'period'] as const) {
+    for (const key of ['exchanges', 'rewrote', 'leftOut', 'swapped', 'period'] as const) {
       const info = PEER_COLUMN_INFO[key]
       expect(info.length).toBeGreaterThan(0)
       expect(info).not.toMatch(new RegExp(`\\b(score|rating|proven|${STANDING_WORD}|judgement|ranking)\\b`, 'i'))
     }
   })
+})
 
-  it('the self-reported detail states the identity is self-reported and not independently attested', () => {
-    expect(SELF_REPORTED_DETAIL).toMatch(/self-reported/i)
-    expect(SELF_REPORTED_DETAIL).toMatch(/only the records they signed, checked on this machine, count as evidence/i)
-    expect(SELF_REPORTED_DETAIL).not.toMatch(/\b(score|rating|proven|halves|recomputed)\b/i)
+// ---------------------------------------------------------------------------
+// The three ways a stranger could cheat, per peer (`peerFacts`).
+// ---------------------------------------------------------------------------
+
+/** One row of a twin pair, as pane C carries it: this node asked `counterparty`. */
+function pairRow(key: string, counterparty: string, twin: Partial<TwinRowFacts> & { bracket_id: string }): PaneCRow {
+  return {
+    exchange_key: key,
+    role_tag: 'ASKED',
+    counterparty,
+    header_state: 'ok',
+    properties: null,
+    has_issue: false,
+    mine: { state: 'present', capsule_id: `${key}-mine` },
+    theirs: { state: 'present', capsule_id: `${key}-theirs` },
+    unilateral: false,
+    timestamp: '2026-10-30T16:17:00Z',
+    twin_bracket_id: twin.bracket_id,
+    twin: { same_answer: null, other_row: null, ...twin }
+  }
+}
+
+/** A pair `a` and `b` were asked; the referee this node asked ruled `verdict`. */
+function askedPair(n: number, a: string, b: string, verdict: string, referee = 'node:ref'): PaneCRow[] {
+  const referee_row = { state: 'adjudicated' as const, verdict, referee, tier: 1 }
+  return [
+    pairRow(`a${n}`, a, { bracket_id: `b${n}`, other_row: `b${n}x`, referee_row }),
+    pairRow(`b${n}x`, b, { bracket_id: `b${n}`, other_row: `a${n}`, referee_row })
+  ]
+}
+
+const SWAP_PEER = baseRow({
+  peer_id: 'peer:swap',
+  identity: { signing_key_id: 'ab'.repeat(32), endpoint_id: null, node_id: 'node:swap-node' },
+  exchange_count: 3
+})
+
+describe('peerFacts — rewrote the record', () => {
+  it('reads Sealed for a peer with exchanges on your record, and not checked for none', () => {
+    expect(peerFacts(baseRow({ exchange_count: 2 })).rewrote).toEqual({ text: 'Sealed', tone: 'good' })
+    expect(peerFacts(baseRow({ exchange_count: 0 })).rewrote.text).toBe('not checked')
+  })
+})
+
+describe('peerFacts — left something out', () => {
+  it('shows n/m matched with the denominator, from the records the gate closed', () => {
+    const row = baseRow({
+      exchange_count: 4,
+      confirmed_siblings: [confirmedSibling(), confirmedSibling()]
+    })
+    expect(peerFacts(row).leftOut).toMatchObject({ text: '2/4 matched', matched: 2, total: 4 })
+  })
+
+  it('names a differing record instead of a clean count', () => {
+    const row = baseRow({ exchange_count: 2, claims_refused: 1 })
+    expect(peerFacts(row).leftOut).toMatchObject({ text: '1 of 2 differ', tone: 'bad' })
+  })
+
+  it('reads not checked with no exchanges, never 0 / 0', () => {
+    expect(peerFacts(baseRow()).leftOut.text).toBe('not checked')
+  })
+})
+
+describe('peerFacts — swapped the model counts only referee verdicts this node asked for', () => {
+  it('is Not tested, reading "not checked", when no referee was asked', () => {
+    const facts = peerFacts(SWAP_PEER, [])
+    expect(facts.swapped).toMatchObject({ text: 'Not tested', tone: 'muted', checked: 0, tally: 'not checked' })
+  })
+
+  it('a verdict contradicting this peer is Contradicted by referee, with its denominator', () => {
+    const rows = [
+      ...askedPair(1, 'peer:swap', 'peer:other', 'contradicted:node:swap-node'),
+      ...askedPair(2, 'peer:swap', 'peer:other', 'corroborated'),
+      ...askedPair(3, 'peer:swap', 'peer:other', 'inconclusive')
+    ]
+    const { swapped } = peerFacts(SWAP_PEER, rows)
+    expect(swapped).toMatchObject({ text: 'Contradicted by referee', tone: 'bad', caught: 1, checked: 3 })
+    expect(swapped.tally).toBe('1 caught · 3 checked')
+    expect(swapped.otherNode).toBe('peer:other')
+    expect(swapped.referee).toBe('node:ref')
+  })
+
+  it('a verdict contradicting the OTHER machine corroborates this peer', () => {
+    const rows = askedPair(1, 'peer:swap', 'peer:other', 'contradicted:peer:other')
+    expect(peerFacts(SWAP_PEER, rows).swapped).toMatchObject({
+      text: 'Corroborated by referee',
+      tone: 'good',
+      caught: 0,
+      tally: '0 caught · 1 checked'
+    })
+  })
+
+  it('inconclusive counts as checked and not caught; not comparable is no check at all', () => {
+    const inconclusive = peerFacts(SWAP_PEER, askedPair(1, 'peer:swap', 'peer:other', 'inconclusive')).swapped
+    expect(inconclusive).toMatchObject({ checked: 1, caught: 0, tally: '0 caught · 1 checked' })
+    expect(inconclusive.text).not.toBe('Corroborated by referee')
+    const notComparable = peerFacts(SWAP_PEER, askedPair(1, 'peer:swap', 'peer:other', 'not_comparable')).swapped
+    expect(notComparable).toMatchObject({ text: 'Not tested', checked: 0, tally: 'not checked' })
+  })
+
+  it('never counts a verdict delivered by another node’s ask, or a mismatch inferred from the answers', () => {
+    const delivered = [
+      pairRow('a1', 'peer:swap', { bracket_id: 'b1', other_row: 'b1x', same_answer: false, verdict: 'contradicted:node:swap-node' }),
+      pairRow('b1x', 'peer:other', { bracket_id: 'b1', other_row: 'a1', same_answer: false, verdict: 'contradicted:node:swap-node' })
+    ]
+    expect(peerFacts(SWAP_PEER, delivered).swapped).toMatchObject({ text: 'Not tested', checked: 0 })
+    const notAdjudicated = [
+      pairRow('a2', 'peer:swap', {
+        bracket_id: 'b2',
+        same_answer: false,
+        referee_row: { state: 'not_adjudicated', reason: 'off' }
+      })
+    ]
+    expect(peerFacts(SWAP_PEER, notAdjudicated).swapped.checked).toBe(0)
+  })
+
+  it('one pair is counted once even though both of its rows carry the verdict', () => {
+    const rows = askedPair(1, 'peer:swap', 'peer:swap', 'contradicted:node:swap-node')
+    expect(peerFacts(SWAP_PEER, rows).swapped.checked).toBe(1)
+  })
+
+  it('marks a peer that acted as referee on a pair this node asked', () => {
+    const rows = askedPair(1, 'peer:a', 'peer:b', 'corroborated', 'node:swap-node')
+    expect(peerFacts(SWAP_PEER, rows).actedAsReferee).toBe(true)
+    expect(peerFacts(baseRow({ peer_id: 'peer:a' }), rows).actedAsReferee).toBe(false)
+  })
+
+  it('a peer a pair never named is Not tested', () => {
+    const rows = askedPair(1, 'peer:a', 'peer:b', 'contradicted:node:a')
+    expect(peerFacts(baseRow({ peer_id: 'peer:c' }), rows).swapped.text).toBe('Not tested')
+  })
+})
+
+describe('peerFacts — review fixes', () => {
+  it('a caught swap is never cleared when the row has no node id to match the verdict against', () => {
+    const noIdentity = baseRow({ peer_id: 'peer:swap', identity: null, exchange_count: 1 })
+    // The referee sealed the verdict naming this peer's node id, which this row does not carry.
+    const rows = askedPair(1, 'peer:swap', 'peer:other', 'contradicted:node:swap-node')
+    const { swapped } = peerFacts(noIdentity, rows)
+    expect(swapped.text).not.toBe('Corroborated by referee')
+    expect(swapped).toMatchObject({ text: 'Checked', tone: 'muted', caught: 0, checked: 1, tally: '0 caught · 1 checked' })
+  })
+
+  it('a peer is not marked as a referee by a verdict another node delivered', () => {
+    const delivered = [
+      pairRow('a1', 'peer:a', { bracket_id: 'b1', verdict: 'corroborated', referee_node_id: 'node:swap-node' })
+    ]
+    expect(peerFacts(SWAP_PEER, delivered).actedAsReferee).toBe(false)
+  })
+
+  it('Left something out always carries its denominator when records differ', () => {
+    const row = baseRow({ exchange_count: 5, claims_refused: 2 })
+    expect(peerFacts(row).leftOut.text).toBe('2 of 5 differ')
+  })
+
+  it('"Needs a look" follows what the row shows: a pane B verdict alone does not raise it', () => {
+    const paneBOnly = baseRow({
+      exchange_count: 3,
+      verdicts: { state: 'contradicted', text: '', tally: { corroborated: 0, contradicted: 1, inconclusive: 0 } }
+    })
+    const view = dealtWithRowView(paneBOnly)
+    expect(view.facts.swapped.text).toBe('Not tested')
+    expect(view.needsALook).toBe(false)
+  })
+
+  it('"Needs a look" is raised by a caught swap, a differing record, a failed log check or a refusal', () => {
+    const caught = askedPair(1, 'peer:swap', 'peer:other', 'contradicted:node:swap-node')
+    expect(dealtWithRowView(SWAP_PEER, undefined, caught).needsALook).toBe(true)
+    expect(dealtWithRowView(baseRow({ exchange_count: 2, claims_refused: 1 })).needsALook).toBe(true)
+    expect(dealtWithRowView(baseRow({ history: { state: 'failed', text: null } })).needsALook).toBe(true)
+    expect(dealtWithRowView(baseRow({ history: { state: 'refused', text: null } })).needsALook).toBe(true)
   })
 })
