@@ -1,7 +1,7 @@
 //! This plugin's `config_schema` declaration for
-//! the one sharing-policy object -- six switches, one key
+//! the one sharing-policy object -- one key
 //! (`docs/SHARING-POLICY.md`). Declaring it here
-//! makes mesh's console render the six switches under Configuration >
+//! makes mesh's console render the switches under Configuration >
 //! Plugins with the host's own controls -- nothing here is a score, and
 //! nothing here ranks anyone.
 //!
@@ -242,7 +242,7 @@ const NETWORK_CATEGORY_LABEL: &str = "Evidence network";
 const NETWORK_CATEGORY_SUMMARY: &str =
     "Whether this node is on the evidence network's list. Off by default.";
 
-/// The `config_schema` manifest entry naming all six sharing switches and the other settings. Attach with
+/// The `config_schema` manifest entry naming the sharing switches and the other settings. Attach with
 /// `DeclarativePluginBuilder::config_item`.
 ///
 /// Every choice list names its default FIRST. mesh-llm 0.78's console does not
