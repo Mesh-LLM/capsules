@@ -539,10 +539,9 @@ interoperability (M1–M5).
 4. **Public summary periods.** Period length, alignment, per-cell floor and
    complementary suppression for R-9; whether to drop latency figures from
    public summaries entirely.
-5. **Name and registration** of the Service History projection, and whether
-   `served_summary/1` is registered in a -01 derivation registry (it was
-   served, though not in -00's IANA table, until Mesh-LLM/capsules-plugin#106
-   retired it).
+5. **Name and registration** of the Service History projection in a -01
+   derivation registry. (The question of registering `served_summary/1` is
+   moot: Mesh-LLM/capsules-plugin#106 retired it.)
 6. **Wire encoding** of `evidence-request/1`: plugin-internal JSON vs -00's
    deterministic CBOR peer binding under the same identifier (R-23).
 7. **Minimal-disclosure corroboration.** A derivation returning only a half's
