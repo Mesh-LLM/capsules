@@ -77,7 +77,7 @@ export function buildAttackCards(input: AttackCardInputs): readonly AttackCard[]
   // Checked: a ruling on the answers. "Inconclusive" is checked, not caught; "not comparable" is no check at all.
   const checked = verdicts.filter((verdict) => verdict && verdict.kind !== 'not_comparable').length
   const caught = verdicts.filter((verdict) => verdict?.kind === 'contradicted').length
-  const checkedLine = checked === 0 ? 'not checked' : `${caught} caught of ${checked} checked`
+  const checkedLine = checked === 0 ? 'not checked' : `${caught} caught · ${checked} checked`
 
   const witnessRow = witnessValue(witness)
   const rewrote: AttackCard = {
@@ -91,12 +91,12 @@ export function buildAttackCards(input: AttackCardInputs): readonly AttackCard[]
       { label: 'Sealed when it happened', value: `${records}` },
       {
         label: 'In a signed checkpoint',
-        value: covered === null ? 'not reported' : `${covered} / ${records}`,
+        value: covered === null ? 'not reported' : `${covered}/${records}`,
         tone: covered === null ? 'muted' : covered === records ? 'good' : 'warn'
       },
       { label: 'Held by an outside witness', value: witnessRow.value, tone: witnessRow.tone }
     ],
-    action: witness === 'latest' ? null : { label: 'Turn on a witness', target: 'integrity' }
+    action: witness === 'off' || witness === 'unknown' ? { label: 'Turn on a witness', target: 'integrity' } : null
   }
 
   const leftOut: AttackCard = {
@@ -105,20 +105,20 @@ export function buildAttackCards(input: AttackCardInputs): readonly AttackCard[]
     summary: 'A peer’s story of an exchange differs from yours, or skips it.',
     badge:
       differ > 0
-        ? `${differ} differ`
+        ? `${differ} of ${withCounterparty} differ`
         : withCounterparty === 0
-          ? 'No peer record yet'
-          : `${closed} / ${withCounterparty} matched`,
+          ? 'no peer record yet'
+          : `${closed}/${withCounterparty} matched`,
     tone: differ > 0 ? 'bad' : withCounterparty === 0 ? 'muted' : closed === withCounterparty ? 'good' : 'warn',
     rows: [
       {
         label: 'Their signed record received',
-        value: `${received} / ${withCounterparty}`,
+        value: `${received}/${withCounterparty}`,
         tone: received === withCounterparty && withCounterparty > 0 ? 'good' : 'muted'
       },
       {
         label: 'Same request, answer, model',
-        value: `${closed} / ${withCounterparty}`,
+        value: `${closed}/${withCounterparty}`,
         tone: closed === withCounterparty && withCounterparty > 0 ? 'good' : 'muted'
       },
       { label: 'Their full history compared', value: 'not checked', tone: 'muted' }

@@ -13,17 +13,17 @@ function row(overrides: Record<string, unknown> = {}): PaneCRow {
 }
 
 describe('buildAttackCards', () => {
-  it('reads "None found" and shows what is not checked, never a guess', () => {
+  it('reads "N/M unchanged" and shows what is not checked, never a guess', () => {
     const [rewrote, leftOut, swapped] = buildAttackCards({ records: 13, covered: 13, witness: 'off', rows: [] })
     expect(rewrote).toMatchObject({ title: 'Rewrote the record', badge: '13/13 unchanged', tone: 'good' })
     expect(buildAttackCards({ records: 13, covered: 9, witness: 'off', rows: [] })[0].badge).toBe('9/13 unchanged')
     expect(rewrote.rows.map((r) => [r.label, r.value])).toEqual([
       ['Sealed when it happened', '13'],
-      ['In a signed checkpoint', '13 / 13'],
+      ['In a signed checkpoint', '13/13'],
       ['Held by an outside witness', 'off · only you can check']
     ])
     expect(rewrote.action).toEqual({ label: 'Turn on a witness', target: 'integrity' })
-    expect(leftOut.badge).toBe('No peer record yet')
+    expect(leftOut.badge).toBe('no peer record yet')
     expect(leftOut.rows.at(-1)).toMatchObject({ label: 'Their full history compared', value: 'not checked' })
     expect(swapped).toMatchObject({ badge: 'not checked', tone: 'muted', action: null })
   })
@@ -53,7 +53,7 @@ describe('buildAttackCards', () => {
       ]
     })
     expect(swapped).toMatchObject({ badge: '1 caught · 3 checked', tone: 'bad' })
-    expect(swapped.rows.map((r) => r.value)).toEqual(['3 pairs', '1 caught of 3 checked'])
+    expect(swapped.rows.map((r) => r.value)).toEqual(['3 pairs', '1 caught · 3 checked'])
     expect(swapped.action).toEqual({ label: 'Open the verdict', target: 'exchanges' })
   })
 
@@ -92,7 +92,15 @@ describe('buildAttackCards', () => {
       theirs: { state: 'absent', capsule_id: null, evidence_outcome: 'claims_refused', evidence_outcome_reason: 'model_mismatch' }
     })
     const [, leftOut] = buildAttackCards({ records: 1, covered: 1, witness: 'off', rows: [refused] })
-    expect(leftOut).toMatchObject({ badge: '1 differ', tone: 'bad' })
-    expect(leftOut.rows.map((r) => r.value)).toEqual(['1 / 1', '0 / 1', 'not checked'])
+    expect(leftOut).toMatchObject({ badge: '1 of 1 differ', tone: 'bad' })
+    expect(leftOut.rows.map((r) => r.value)).toEqual(['1/1', '0/1', 'not checked'])
+  })
+
+  it('offers "Turn on a witness" only when the witness is off or unknown', () => {
+    const actionFor = (witness: 'off' | 'unknown' | 'pending' | 'earlier' | 'latest') =>
+      buildAttackCards({ records: 2, covered: 2, witness, rows: [] })[0].action
+    expect(actionFor('off')).not.toBeNull()
+    expect(actionFor('unknown')).not.toBeNull()
+    for (const on of ['pending', 'earlier', 'latest'] as const) expect(actionFor(on)).toBeNull()
   })
 })
