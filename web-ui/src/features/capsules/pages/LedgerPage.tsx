@@ -19,6 +19,8 @@ import { StatusBadge } from '@/components/ui/StatusBadge'
 import { navigateHost } from '@/plugin-host/host'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { TabPanel } from '@/components/ui/TabPanel'
+import { AttackCards } from '@/features/capsules/components/AttackCards'
+import { buildAttackCards } from '@/features/capsules/lib/attack-cards'
 import { fetchCapsuleLedger, fetchServedHistory } from '@/features/capsules/api/client'
 import { historyPage, settlementPage } from '@/features/capsules/lib/saved-pages'
 import { announcedKeyFor, askForHistory, askForRecord } from '@/features/capsules/api/evidenceRequestClient'
@@ -1609,6 +1611,16 @@ export function LedgerPageContent({ focusExchangeKey }: { focusExchangeKey?: str
   const [recordsOpen, setRecordsOpen] = useState(false)
   const paneACard = paneAStatusQuery.data?.card ?? null
   const paneARows = paneAStatusQuery.data?.rows ?? []
+  // The three attack cards read the same queries as the hero line and Integrity tiles.
+  const attackCards =
+    paneAStatusQuery.isSuccess && paneCHeroQuery.isSuccess
+      ? buildAttackCards({
+          records: paneAStatusQuery.data.rows.length,
+          covered: coveredRecordCount(paneACard),
+          witness: checkpointRegistration(paneACard).witnessState,
+          rows: paneCHeroQuery.data.rows
+        })
+      : null
 
   return (
     <TooltipProvider delayDuration={250} skipDelayDuration={120}>
@@ -1729,6 +1741,13 @@ export function LedgerPageContent({ focusExchangeKey }: { focusExchangeKey?: str
           sample={source === 'sample'}
           status={recordsStatus}
         />
+
+        {attackCards ? (
+          <AttackCards
+            cards={attackCards}
+            onAction={(target) => setActiveTab(target === 'integrity' ? 'integrity' : target === 'exchanges' ? 'exchanges' : 'peers')}
+          />
+        ) : null}
 
         <Card className="overflow-clip rounded-[var(--radius-lg)] border-border bg-panel p-4 shadow-none">
           <TabPanel<LedgerTab>
