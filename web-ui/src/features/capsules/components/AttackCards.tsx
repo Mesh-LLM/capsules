@@ -16,9 +16,6 @@ const TONE_BADGE: Record<AttackTone, string> = {
   muted: 'border-border-soft bg-panel-strong text-fg-dim'
 }
 
-export const ATTACK_CARDS_INTRO =
-  'Every answer a stranger gave you is sealed as a signed record. Three ways a stranger could cheat you, how each would show up here, and whether any did.'
-
 /** The three ways a stranger can cheat, each with how it would show up and whether it did. */
 export function AttackCards({
   cards,

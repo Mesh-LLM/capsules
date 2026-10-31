@@ -1723,7 +1723,7 @@ export function LedgerPageContent({ focusExchangeKey }: { focusExchangeKey?: str
         {attackCards ? (
           <AttackCards
             cards={attackCards}
-            onAction={(target) => setActiveTab(target === 'integrity' ? 'integrity' : target === 'exchanges' ? 'exchanges' : 'peers')}
+            onAction={setActiveTab}
           />
         ) : null}
 

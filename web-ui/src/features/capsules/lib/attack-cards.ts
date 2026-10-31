@@ -66,7 +66,8 @@ function askedVerdicts(rows: readonly PaneCRow[]): ReadonlyMap<string, string | 
 export function buildAttackCards(input: AttackCardInputs): readonly AttackCard[] {
   const { records, covered, witness, rows } = input
   const states = rows.map((row) => deriveRightCellState(row).kind)
-  const withCounterparty = rows.filter((row) => row.theirs.state !== 'absent').length
+  // Rows with a counterparty by the page's own right-cell state: a half the door refused is one even though no record arrived.
+  const withCounterparty = states.filter((kind) => kind !== 'open_not_asked').length
   const closed = states.filter((kind) => kind === 'closed').length
   const differ = states.filter((kind) => kind === 'contradicted').length
   const received = states.filter((kind) => kind === 'closed' || kind === 'contradicted').length
@@ -103,12 +104,12 @@ export function buildAttackCards(input: AttackCardInputs): readonly AttackCard[]
     title: 'Left something out',
     summary: 'A peer’s story of an exchange differs from yours, or skips it.',
     badge:
-      withCounterparty === 0
-        ? 'No peer record yet'
-        : differ > 0
-          ? `${differ} differ`
+      differ > 0
+        ? `${differ} differ`
+        : withCounterparty === 0
+          ? 'No peer record yet'
           : `${closed} / ${withCounterparty} matched`,
-    tone: withCounterparty === 0 ? 'muted' : differ > 0 ? 'bad' : closed === withCounterparty ? 'good' : 'warn',
+    tone: differ > 0 ? 'bad' : withCounterparty === 0 ? 'muted' : closed === withCounterparty ? 'good' : 'warn',
     rows: [
       {
         label: 'Their signed record received',

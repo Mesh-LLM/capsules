@@ -86,4 +86,13 @@ describe('buildAttackCards', () => {
     })
     expect(swapped.badge).toBe('not checked')
   })
+
+  it('a half the door refused counts as a disagreement and as a counterparty, even with no record received', () => {
+    const refused = row({
+      theirs: { state: 'absent', capsule_id: null, evidence_outcome: 'claims_refused', evidence_outcome_reason: 'model_mismatch' }
+    })
+    const [, leftOut] = buildAttackCards({ records: 1, covered: 1, witness: 'off', rows: [refused] })
+    expect(leftOut).toMatchObject({ badge: '1 differ', tone: 'bad' })
+    expect(leftOut.rows.map((r) => r.value)).toEqual(['1 / 1', '0 / 1', 'not checked'])
+  })
 })

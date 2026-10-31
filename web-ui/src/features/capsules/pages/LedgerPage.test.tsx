@@ -196,6 +196,14 @@ describe('LedgerPageContent', () => {
     expect(screen.queryByRole('button', { name: 'About the Local chip' })).not.toBeInTheDocument()
   })
 
+  it('shows the attack cards once the panes load, and a card action switches the tab', async () => {
+    const user = userEvent.setup()
+    render(<LedgerPageContent />, { wrapper: makeWrapper() })
+    const region = await screen.findByRole('region', { name: 'Three ways a stranger could cheat you' })
+    await user.click(within(region).getByRole('button', { name: 'Turn on a witness' }))
+    expect(screen.getByRole('tab', { name: /integrity/i })).toHaveAttribute('aria-selected', 'true')
+  })
+
   it('shows no leaked IDs in empty state', () => {
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
 

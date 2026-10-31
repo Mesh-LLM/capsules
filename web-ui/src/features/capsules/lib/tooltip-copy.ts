@@ -10,11 +10,8 @@
 // land with the plain-language pass. Every sentence below reads
 // correctly under either name.
 
-/** Hero chips (the InfoBanner's status row). */
+/** Hero buttons (the InfoBanner's status row). */
 export const HERO_TOOLTIPS = {
-  live: 'Reading this node’s records over its running local API. They update as this node seals them.',
-  local: 'Reading a saved local copy. This node’s API is not connected, so the records are not updating.',
-  sample: 'Showing a saved sample run, not this node’s records. Nothing here updates.',
   yourRecords: 'The records this node keeps, sealed and checkpointed. Open to see where they are and what you share.',
   // The storage-posture pills,
   // mirroring Logs. Facts, not features.
@@ -39,16 +36,9 @@ export const THEIR_RECORD_ARRIVES_IF_PUSHED =
 /** p2 item 5: why an action is disabled -- said on hover, never a silent grey. */
 export const SAMPLE_DATA_UNAVAILABLE = 'Not available on sample data.'
 
-/** The InfoBanner description under the tab title: what the page holds, and
- *  what can be shown about it. "docs" links what the page can and cannot
- *  show (`DOCS_URL`). */
 /** The header's one line: 20 words, no icons (Steven's word budget, Sherlock2's wording). */
 export const HERO_DESCRIPTION =
   'Every answer a stranger gave you is sealed and signed. Three ways they could cheat you, and whether any did.'
-
-/** Where "docs" in the hero points: this plugin's own account of what each
- *  check proves and does not prove. */
-export const DOCS_URL = 'https://github.com/Mesh-LLM/capsules/blob/main/docs/VERIFICATION-CHAIN.md'
 
 /** Peers table column headers. */
 export const PEER_COLUMN_TOOLTIPS = {
