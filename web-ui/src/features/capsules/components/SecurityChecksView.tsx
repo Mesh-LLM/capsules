@@ -314,7 +314,10 @@ export function SecurityChecksView({
   const commitsToRows = buildCommitsToRows(row.raw, localRecord, theirsRecompute)
   const checksRows = suppliedChecksRows ?? buildChecksRows(row.raw, identity, theirsRecompute)
   const theirsColumnNote = sharedTheirsDetail(checksRows)
-  const groups = buildCheckGroups({ row: row.raw, otherRow: otherRow?.raw, checks: checksRows, commits: commitsToRows })
+  const groups = buildCheckGroups({ row: row.raw, otherRow: otherRow?.raw,
+    counterparty: row.counterparty,
+    otherCounterparty: otherRow?.counterparty,
+    checks: checksRows, commits: commitsToRows })
   const headline = summarizeMarks(countMarks(groups.flatMap((group) => group.lines)), true)
 
   const isOpen = (group: CheckGroup) => chosen[group.key] ?? group.lines.some((line) => line.mark === 'failed')

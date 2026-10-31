@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildCheckGroups, countMarks, summarizeMarks, markOfCell, type CheckLine } from '@/features/capsules/lib/check-groups'
+import { buildTwinGroupCard } from '@/features/capsules/lib/twin-group-card'
 import { askedVerdict } from '@/features/capsules/lib/twin-bracket'
 
 const line = (mark: CheckLine['mark']): CheckLine => ({
@@ -73,8 +74,8 @@ describe('buildCheckGroups — the referee line names a machine only when a row 
         referee_row: { state: 'adjudicated', verdict: 'contradicted:peer-9', referee: 'ref-1', tier: 1 }
       }
     }) as never
-  const refereeOf = (row: never, otherRow?: never) => {
-    const groups = buildCheckGroups({ row, otherRow, checks: [], commits: [] })
+  const refereeOf = (row: never, otherRow?: never, counterparty?: string, otherCounterparty?: string) => {
+    const groups = buildCheckGroups({ row, otherRow, counterparty, otherCounterparty, checks: [], commits: [] })
     const found = groups.flatMap((g) => g.lines).find((l) => l.id === 'referee_verdict')
     return found?.yours as { text: string; mark: string }
   }
@@ -96,5 +97,24 @@ describe('buildCheckGroups — the referee line names a machine only when a row 
   it('a row carrying no node id at all reads not checked, never agreed', () => {
     const bare = { mine: {}, theirs: {}, twin: (pair('x') as never as { twin: unknown }).twin } as never
     expect(refereeOf(bare, pair('peer-9'))).toMatchObject({ text: 'not checked', mark: 'none' })
+  })
+
+  it('a node id carried only by the ledger counterparty counts, and the group card agrees', () => {
+    const bare = (_name: string) => {
+      const raw = pair('') as never as { counterparty: string | null; twin: unknown }
+      return { ...raw, counterparty: null, twin: raw.twin } as never as ReturnType<typeof pair>
+    }
+    const a = bare('a')
+    const b = bare('b')
+    const panel = (own: never, other: never, ownId: string, otherId: string) =>
+      refereeOf(own, other, ownId, otherId)
+    expect(panel(a, b, 'peer-9', 'peer-2')).toMatchObject({ text: 'wrong answer', mark: 'failed' })
+    expect(panel(b, a, 'peer-2', 'peer-9')).toMatchObject({ text: 'agreed', mark: 'node' })
+    expect(panel(a, b, 'peer-2', 'peer-3')).toMatchObject({ text: 'contradicted · not matched to a machine' })
+
+    const ledger = (raw: never, counterparty: string) =>
+      ({ raw, counterparty, rightCellState: { kind: 'open_not_held', date: null } }) as never
+    const card = buildTwinGroupCard([ledger(a, 'peer-9'), ledger(b, 'peer-2')])
+    expect(card.machines.map((m) => m.pill?.text)).toEqual(['Referee: wrong answer', 'Referee: agreed'])
   })
 })

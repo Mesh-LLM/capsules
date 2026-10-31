@@ -92,15 +92,21 @@ export function askedVerdict(
   return null
 }
 
+/** Every node id a pair row carries; empty when it carries none. */
+export function rowNodeIds(raw: PaneCRow, extraIds: readonly (string | null | undefined)[] = []): string[] {
+  const own = raw.mine.record as CapsuleRecord | undefined
+  return [...extraIds, raw.counterparty, raw.theirs.peer_id, raw.theirs.received_from, own ? recordServedBy(own) : null].filter(
+    (id): id is string => typeof id === 'string' && id.length > 0
+  )
+}
+
 /** Whether a pair row's evidence names `party` as the node on its other side:
  *  an id equal to it, or one that is a prefix of the other (ids are shown
  *  shortened). `extraIds` carries ids only the caller knows (the ledger row's
  *  counterparty). */
 export function rowNamesNode(raw: PaneCRow, extraIds: readonly (string | null | undefined)[], party: string): boolean {
-  const own = raw.mine.record as CapsuleRecord | undefined
   const wanted = party.toLowerCase()
-  return [...extraIds, raw.counterparty, raw.theirs.peer_id, raw.theirs.received_from, own ? recordServedBy(own) : null]
-    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+  return rowNodeIds(raw, extraIds)
     .map((id) => id.toLowerCase())
     .some((id) => id === wanted || id.startsWith(wanted) || wanted.startsWith(id))
 }

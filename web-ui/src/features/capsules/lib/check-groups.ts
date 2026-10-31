@@ -9,9 +9,8 @@
 // holds sealed); no score or grade is produced.
 import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
 import type { ChecksRow, ChecksSideCell, CommitsToRow } from '@/features/capsules/lib/security-checks-view'
-import { TEE_COPY, recordServedBy } from '@/features/capsules/lib/security-checks-view'
-import type { CapsuleRecord } from '@/features/capsules/api/types'
-import { askedVerdict, rowNamesNode } from '@/features/capsules/lib/twin-bracket'
+import { TEE_COPY } from '@/features/capsules/lib/security-checks-view'
+import { askedVerdict, rowNamesNode, rowNodeIds } from '@/features/capsules/lib/twin-bracket'
 
 /** Where a result came from: redone in this browser, taken from the node,
  *  failed, not set up on this node, or nothing to check yet. */
@@ -126,15 +125,14 @@ function captureMark(state: string | undefined): CheckMark {
   return 'none'
 }
 
-/** Whether the row carries any node id the ruling's party could be matched to. */
-function rowHasNodeId(row: PaneCRow): boolean {
-  const own = row.mine.record as CapsuleRecord | undefined
-  return [row.counterparty, row.theirs.peer_id, row.theirs.received_from, own ? recordServedBy(own) : null].some(
-    (id) => typeof id === 'string' && id.length > 0
-  )
-}
-
-function refereeLine(row: PaneCRow, otherRow?: PaneCRow): CheckLine {
+/** `ownIds`/`otherIds` are the ledger rows' counterparties (Pane B), which the
+ *  group card also matches on, so panel and card decide alike. */
+function refereeLine(
+  row: PaneCRow,
+  otherRow: PaneCRow | undefined,
+  ownIds: readonly (string | null | undefined)[],
+  otherIds: readonly (string | null | undefined)[]
+): CheckLine {
   const asked = askedVerdict([row])
   let yours: LineSide
   if (!asked) {
@@ -144,9 +142,9 @@ function refereeLine(row: PaneCRow, otherRow?: PaneCRow): CheckLine {
     // names that node, and agreed only when the other row of the pair does;
     // a party neither row carries marks no one.
     const party = asked.verdict.party
-    if (!rowHasNodeId(row)) yours = { kind: 'text', text: 'not checked', mark: 'none' }
-    else if (rowNamesNode(row, [], party)) yours = { kind: 'text', text: 'wrong answer', mark: 'failed' }
-    else if (otherRow && rowNamesNode(otherRow, [], party)) yours = { kind: 'text', text: 'agreed', mark: 'node' }
+    if (rowNodeIds(row, ownIds).length === 0) yours = { kind: 'text', text: 'not checked', mark: 'none' }
+    else if (rowNamesNode(row, ownIds, party)) yours = { kind: 'text', text: 'wrong answer', mark: 'failed' }
+    else if (otherRow && rowNamesNode(otherRow, otherIds, party)) yours = { kind: 'text', text: 'agreed', mark: 'node' }
     else yours = { kind: 'text', text: 'contradicted · not matched to a machine', mark: 'none' }
   } else {
     const kind = asked.verdict.kind
@@ -170,10 +168,13 @@ export function buildCheckGroups(input: {
   row: PaneCRow
   /** The other row of the pair, when the caller has it. */
   otherRow?: PaneCRow
+  /** The ledger rows' counterparties for this row and the other one. */
+  counterparty?: string | null
+  otherCounterparty?: string | null
   checks: readonly ChecksRow[]
   commits: readonly CommitsToRow[]
 }): CheckGroup[] {
-  const { row, otherRow, checks, commits } = input
+  const { row, otherRow, counterparty, otherCounterparty, checks, commits } = input
   const present = (lines: (CheckLine | null)[]): CheckLine[] => lines.filter((l): l is CheckLine => l !== null)
 
   const coverage = checks.find((r) => r.key === 'capture_coverage')
@@ -254,7 +255,7 @@ export function buildCheckGroups(input: {
       lines: [
         comparedLine(commits, 'model identity', 'model_identity', 'Same model identity'),
         servedLine,
-        refereeLine(row, otherRow),
+        refereeLine(row, otherRow, [counterparty], [otherCounterparty]),
         teeLine
       ]
     },
