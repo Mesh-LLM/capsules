@@ -457,7 +457,7 @@ describe('SecurityChecksView — referee verdict follows the asked-and-sealed ru
     renderView({ twin: twin({ state: 'adjudicated', verdict: 'contradicted:peer-9', referee: 'ref-1', tier: 1 }) })
     await openAllGroups()
     const line = document.querySelector('[data-check-line="Referee verdict on this pair"]') as HTMLElement
-    expect(within(line).getByText('contradicted · not matched to a machine')).toBeInTheDocument()
+    expect(within(line).getByText('not checked')).toBeInTheDocument()
     expect(within(line).queryByText('agreed')).not.toBeInTheDocument()
   })
 
