@@ -32,16 +32,31 @@
 //!
 //! **A node that stopped inside a window** closes it when it starts again
 //! ([`resume_asks`]): the request record is all it needs.
+//!
+//! **Where a reply is kept.** The reply's bytes, exactly as read, are kept
+//! in [`REPLIES_DIR`] under the ledger directory, named by their SHA-256,
+//! which the response record seals as `response_digest`; [`kept_reply`]
+//! reads them back checked against it, for the owner's own composition.
+//! They follow the ledger's lifecycle, and nothing serves them: like the
+//! records of this book, they never leave this node in an answer.
 
 use evidencebook::ask::{AskError, Book, Entry, SealError, Sealed};
 use evidencebook::record::{record_types, EpistemicType, Link, LinkType};
 use evidencebook::store::{Record, RecordSource};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
+use std::io::Write;
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::capsule_emit::CapsuleState;
 
 /// The block of a local record that holds one entry of this book.
 pub const BLOCK: &str = "evidence_book_entry";
+
+/// The directory, under the ledger directory, that keeps each reply's bytes
+/// as read, in a file named by their digest.
+pub const REPLIES_DIR: &str = "ask-replies";
 
 /// Whether a ledger record is one of this book's.
 pub fn is_ask_record(record: &Value) -> bool {
@@ -315,19 +330,23 @@ fn outcome(answer: &Value, verification: &Value) -> &'static str {
 
 /// Seal the reply that came back inside the window for the request
 /// recorded as `request_record_id` as an `evidence_response` record citing
-/// it: its outcome, the request's digest and what checking it found, which
-/// for a signed refusal includes its check against the commitment the
-/// request recorded (`peer_commitments::policy_check`). Returns the record
-/// and that verification. Refused once an outcome is recorded for the
-/// request, so a reply never replaces an absence (or another reply).
+/// it: its outcome, the request's digest, the digest of the reply's bytes
+/// (`response_digest`) and what checking it found, which for a signed
+/// refusal includes its check against the commitment the request recorded
+/// (`peer_commitments::policy_check`). The bytes are kept first
+/// ([`REPLIES_DIR`]), so a sealed digest always has its bytes. Returns the
+/// record and that verification. Refused once an outcome is recorded for
+/// the request, so a reply never replaces an absence (or another reply).
 pub fn record_response(
     capsules: &CapsuleState,
     request_record_id: &str,
     request_digest: &str,
-    answer: &Value,
+    reply: &[u8],
     verification: &Value,
     now: &str,
 ) -> Result<(Sealed, Value), AskError> {
+    let answer: Value = serde_json::from_slice(reply)
+        .map_err(|e| AskError::Invalid(format!("the reply is not JSON: {e}")))?;
     let mut book = AskBook::open(capsules, now);
     let Some(statement) = book
         .header(request_record_id)
@@ -356,6 +375,9 @@ pub fn record_response(
             &reason,
         );
     }
+    let response_digest = hex::encode(Sha256::digest(reply));
+    keep_reply(capsules.ledger_dir(), &response_digest, reply)
+        .map_err(|e| SealError(format!("the reply's bytes could not be kept: {e}")))?;
     let sealed = book.seal(&Entry {
         record_type: record_types::RESPONSE.into(),
         epistemic_type: EpistemicType::ObservedEvent,
@@ -364,12 +386,97 @@ pub fn record_response(
             target: request_record_id.to_string(),
         }],
         statement: json!({
-            "outcome": outcome(answer, &verification),
+            "outcome": outcome(&answer, &verification),
             "request_digest": request_digest,
+            "response_digest": response_digest,
             "verification": verification,
         }),
     })?;
     Ok((sealed, verification))
+}
+
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Keep `reply` as `REPLIES_DIR/<digest>`, durably, before its digest is
+/// sealed. Written to a temporary file of this call's own, then published
+/// with a hard link, which never replaces a file already there, so replies
+/// with identical bytes settled at once never expose a partial file (as
+/// `agreement::Store::put`). The file is never removed: if the seal then
+/// fails it is unreferenced, and another record may rely on the same bytes.
+fn keep_reply(ledger_dir: &Path, digest: &str, reply: &[u8]) -> std::io::Result<()> {
+    let dir = ledger_dir.join(REPLIES_DIR);
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(digest);
+    // Already kept (by another record, or a call still syncing): only the
+    // directory sync below is left, so the link is durable either way.
+    if !path.exists() {
+        let tmp = dir.join(format!(
+            ".{digest}.{}.{}.tmp",
+            std::process::id(),
+            TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let published = (|| {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)?;
+            file.write_all(reply)?;
+            file.sync_all()?;
+            match std::fs::hard_link(&tmp, &path) {
+                Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
+                _ => Ok(()),
+            }
+        })();
+        let _ = std::fs::remove_file(&tmp);
+        published?;
+    }
+    // The link itself is durable before the record that relies on it.
+    std::fs::File::open(&dir)?.sync_all()
+}
+
+/// The reply recorded by the `evidence_response` record
+/// `response_record_id` of this node's ledger, as its exact bytes, checked
+/// against the `response_digest` the record sealed: what the owner's own
+/// composition carries. Refused, naming the record, when it is no response
+/// record here (`NotFound`), when it was sealed before replies were kept
+/// and so has no digest (`Invalid`), or when the kept bytes are missing or
+/// are not the ones sealed (`Corrupt`). The payer's composition (#196)
+/// is its first caller.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn kept_reply(ledger_dir: &Path, response_record_id: &str) -> Result<Vec<u8>, AskError> {
+    let header = crate::evidence_panes::read_capsule_records(ledger_dir)
+        .into_iter()
+        .filter(|record| {
+            record.get("capsule_id").and_then(Value::as_str) == Some(response_record_id)
+        })
+        .find_map(|record| entry_block(&record).cloned())
+        .filter(|h| h.get("record_type") == Some(&json!(record_types::RESPONSE)))
+        .ok_or_else(|| {
+            AskError::NotFound(format!(
+                "{response_record_id} is not a response this book recorded"
+            ))
+        })?;
+    let Some(digest) = header
+        .get("statement")
+        .and_then(|s| s.get("response_digest"))
+        .and_then(Value::as_str)
+        .filter(|d| evidence_request::registry::is_digest(d))
+    else {
+        return Err(AskError::Invalid(format!(
+            "response {response_record_id} was recorded before replies were kept: it seals no response_digest"
+        )));
+    };
+    let bytes = std::fs::read(ledger_dir.join(REPLIES_DIR).join(digest)).map_err(|e| {
+        AskError::Corrupt(format!(
+            "the reply recorded by response {response_record_id} is not kept: {e}"
+        ))
+    })?;
+    if hex::encode(Sha256::digest(&bytes)) != digest {
+        return Err(AskError::Corrupt(format!(
+            "the bytes kept for response {response_record_id} are not the reply it sealed"
+        )));
+    }
+    Ok(bytes)
 }
 
 /// Seal `recorded_absence` for the request recorded as `request_record_id`,
