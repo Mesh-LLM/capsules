@@ -182,6 +182,71 @@ fn the_composition_is_an_interval_complete_bundle_rooted_at_its_record() {
     }
 }
 
+/// The deal flow's own order: the invoice comes before this node seals the
+/// exchange record. No deal record precedes the exchange record, so the
+/// interval starts at the cited exchange half, and it is complete.
+#[test]
+fn the_interval_starts_at_the_exchange_half_in_the_deal_flows_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = CapsuleState::open(dir.path(), "deal-composition-test").unwrap();
+    let deals = state.deals();
+    let h = |c: char| c.to_string().repeat(64);
+    deals.on_invoice(&state, "exchange-1", &h('a'), 1000, 1_790_000_000);
+    let exchange = state
+        .emit_for_exchange(&crate::capsule_emit::tests::sample_exchange("node-a"))
+        .unwrap()
+        .capsule_id;
+    deals.on_exchange(
+        &state,
+        "exchange-1",
+        &crate::deal_flow::SealedExchange {
+            capsule_id: &exchange,
+            peer: PEER,
+            request_digest: &h('d'),
+            model: "model-x",
+        },
+        1_790_000_001,
+    );
+    deals.on_paid(&state, "exchange-1", &h('b'), 1000, 1_790_000_030);
+    deals.on_delivered(&state, "exchange-1", &h('c'), 1_790_000_040);
+    let node = Node {
+        _dir: dir,
+        state,
+        exchange,
+    };
+    let bundle = node.compose(&[node.absent("n-1")]);
+    let ledger: Vec<String> = crate::evidence_panes::read_capsule_records(node.state.ledger_dir())
+        .iter()
+        .map(|r| r["capsule_id"].as_str().unwrap().to_string())
+        .collect();
+    let carried = record_ids(&bundle);
+    let first = ledger.iter().position(|id| *id == carried[0]).unwrap();
+    assert_eq!(
+        carried,
+        ledger[first..].to_vec(),
+        "every record from the first carried one"
+    );
+    // The baseline waits for the exchange record (`deal_flow`: a deal's
+    // first step is sealed once the exchange's record is), so the interval
+    // starts at the cited exchange half.
+    assert_eq!(carried[0], node.exchange);
+    assert_eq!(
+        bundle["completeness_certificate"]["first_seq"],
+        json!(first as u64 + 1)
+    );
+    let checked = agent_action_capsule::bundle::verify_bundle_strict(
+        &bundle,
+        &agent_action_capsule::bundle::StrictOptions {
+            require_signature: true,
+            witness_directory: None,
+        },
+    );
+    assert!(checked
+        .claims
+        .iter()
+        .all(|(_, c)| c.status.as_str() == "pass"));
+}
+
 #[test]
 fn an_absence_member_is_observed_by_the_payer_with_its_window() {
     let node = node();
