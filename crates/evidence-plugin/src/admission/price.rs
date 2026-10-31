@@ -99,9 +99,11 @@ pub enum Read {
         input: Option<u64>,
         output: Option<u64>,
     },
-    /// The host sends no price and no operator profile is in force (the
-    /// shipped default at most): the pack was not run.
-    NotChecked,
+    /// The host sends no price for this attempt and no operator profile is
+    /// in force (the shipped default at most): the pack was not run, for the
+    /// reason given (`host_lacks_backend_pricing`, or
+    /// `no_price_without_model` on the host's no-model fallback).
+    NotChecked(&'static str),
     /// NO, failing closed, for the reason given: `host_lacks_backend_pricing`
     /// (the operator's profile is in force but the host sends no price) or
     /// `guard_error` (the engine refused the action or the decision, logged).
@@ -114,7 +116,7 @@ impl Read {
     pub fn refuses(&self) -> bool {
         match self {
             Read::Checked { outcome, .. } => *outcome != Outcome::Allow,
-            Read::NotChecked => false,
+            Read::NotChecked(_) => false,
             Read::Unavailable(_) => true,
         }
     }
@@ -123,7 +125,7 @@ impl Read {
     pub fn source(&self) -> &str {
         match self {
             Read::Checked { refused_by, .. } => refused_by.as_deref().unwrap_or("price"),
-            Read::NotChecked => "price",
+            Read::NotChecked(_) => "price",
             Read::Unavailable(reason) => reason,
         }
     }
@@ -227,16 +229,25 @@ impl PriceRule {
         host_prices: bool,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Read {
+        // With no price for this attempt, a paid route cannot be told from a
+        // free one: the operator's profile fails closed, the shipped default
+        // alone records the rule as not checked (as on an older host).
+        let unpriced = |reason: &'static str| {
+            if self.operator_profile {
+                Read::Unavailable(reason)
+            } else {
+                Read::NotChecked(reason)
+            }
+        };
         let (input, output) = if host_prices {
             match event.get("pricing") {
                 // No price on a request with no model is not "free": the
                 // host's no-model fallback never prices its pick
-                // (mesh-llm#2742), so the rates are missing and rate_cap
-                // refuses them.
+                // (mesh-llm#2742).
                 None | Some(Value::Null)
                     if event.get("model").and_then(Value::as_str).is_none() =>
                 {
-                    (None, None)
+                    return unpriced("no_price_without_model");
                 }
                 None | Some(Value::Null) => (Some(0), Some(0)),
                 Some(pricing) => (
@@ -244,10 +255,8 @@ impl PriceRule {
                     pricing["output_msat_per_million"].as_u64(),
                 ),
             }
-        } else if self.operator_profile {
-            return Read::Unavailable("host_lacks_backend_pricing");
         } else {
-            return Read::NotChecked;
+            return unpriced("host_lacks_backend_pricing");
         };
         let mut action = json!({
             "operator": crate::settings::PLUGIN_NAME,
@@ -371,7 +380,7 @@ pub fn record(read: &Read) -> Value {
             "output_msat_per_million": output,
             "checks": constraints.iter().map(|(id, r)| json!({"check": id, "result": r})).collect::<Vec<_>>(),
         }),
-        Read::NotChecked => json!({"state": "not_checked", "reason": "host_lacks_backend_pricing"}),
+        Read::NotChecked(reason) => json!({"state": "not_checked", "reason": reason}),
         Read::Unavailable(reason) => json!({"state": "unavailable", "reason": reason}),
     }
 }

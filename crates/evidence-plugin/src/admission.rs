@@ -1214,14 +1214,27 @@ mod tests {
 
     #[test]
     fn no_price_on_a_request_with_no_model_is_not_free() {
-        // mesh-llm#2742: the no-model fallback never prices its pick.
-        let (admission, _capsules, _dir) = priced_admission(Some(CAPS), true);
-        let mut event = priced(&remote(STRANGER), None);
-        event["model"] = Value::Null;
-        let answer = admission.answer(&event);
+        // mesh-llm#2742: the no-model fallback never prices its pick. Under
+        // the operator's profile that fails closed; under the shipped default
+        // alone it is recorded as not checked, as on an older host.
+        let no_model = || {
+            let mut event = priced(&remote(STRANGER), None);
+            event["model"] = Value::Null;
+            event
+        };
+        let (admission, capsules, _dir) = priced_admission(Some(CAPS), true);
+        let answer = admission.answer(&no_model());
         assert_eq!(
             answer.reason.as_deref(),
-            Some("admission NO (price_rule: rate_cap)")
+            Some("admission NO (price_rule: no_price_without_model)")
         );
+        assert_eq!(sealed_block(&capsules)["price"]["state"], "unavailable");
+
+        let (admission, capsules, _dir) = priced_admission(None, true);
+        let answer = admission.answer(&no_model());
+        assert_eq!(answer.decision, OpenAiAdmissionDecision::Allow);
+        let block = sealed_block(&capsules);
+        assert_eq!(block["price"]["state"], "not_checked");
+        assert_eq!(block["price"]["reason"], "no_price_without_model");
     }
 }

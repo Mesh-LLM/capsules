@@ -396,9 +396,10 @@ peer advertised for the model, in msat per million tokens, with your caps:
   until you fix it and restart mesh-llm. Your file is yours: an upgrade never rewrites it.
 
 The rates are the ones mesh-llm routed on, which a host sends with each attempt once it lists
-`openai_exchange.backend_pricing.v1`. On an older host the price is not known: with your profile set,
-every peer gets NO, failing closed; with only the shipped caps, the rule is recorded as not checked
-and `doctor` warns that it is inactive. Each
+`openai_exchange.backend_pricing.v1`. When the price is not known (an older host, or a request that
+names no model, whose route mesh-llm never prices): with your profile set, the peer gets NO,
+failing closed; with only the shipped caps, the rule is recorded as not checked, and on an older
+host `doctor` warns that it is inactive. Each
 decision cites the pack, its definition digest and a salted commitment to your profile's digest
 (the profile holds your list in clear), and `doctor` shows the digest with your values. A profile
 that sets no `rate_cap` keeps the shipped caps.
