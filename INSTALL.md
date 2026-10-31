@@ -7,6 +7,23 @@ each exchange, and whether this node's log still verifies. It installs and
 runs on an unmodified mesh-llm release (0.77 or newer). No other runtime is
 needed.
 
+## What's new in 0.1.7
+
+**Upgrading from 0.1.6 needs nothing on the other node.**
+
+- **An `exchange` request is answered to the node whose half it asks about.** In 0.1.6 a node
+  refused it `not_authorized` to every asker under `share_history_segments = counterparties`,
+  the half's own sender included. Now the record citing a received half goes to a request signed
+  under the key that half verified under, and to no one else. Records already in the ledger are
+  read as they are; nothing is re-pushed.
+- **Admission's price rule.** With `CAPSULES_ADMISSION_PROFILE` set, a peer the admission lists
+  admit is then checked against the input and output rate caps in that `policy-profile/v0` file:
+  a rate over a cap, or one that cannot be read, is NO, and the reason names the rule. With no
+  profile, shipped caps apply as an outlier guard. The host must list
+  `openai_exchange.backend_pricing.v1` to send the rates; `doctor` flags an older host.
+
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules-plugin/blob/main/CHANGELOG.md).
+
 ## What's new in 0.1.6
 
 **Upgrading from 0.1.5 needs nothing on the other node.** This version answers both interop profile
@@ -195,7 +212,7 @@ glibc 2.35 or newer (x86_64 or arm64).
 and set `VERSION` to the release (without the leading `v`):
 
 ```bash
-VERSION=0.1.6
+VERSION=0.1.7
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  TARGET=aarch64-apple-darwin ;;
   Linux-x86_64)  TARGET=x86_64-unknown-linux-gnu ;;
