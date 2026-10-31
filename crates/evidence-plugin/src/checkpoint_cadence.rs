@@ -478,10 +478,13 @@ pub fn spawn(
                     {
                         let (dir, log_id, signer) =
                             (keys_dir.clone(), log_id_for_witnesses.clone(), task.signer.clone());
-                        let _ = tokio::task::spawn_blocking(move || {
+                        if let Err(e) = tokio::task::spawn_blocking(move || {
                             crate::ledger_checkpoints::cut_all(&dir, &log_id, &signer)
                         })
-                        .await;
+                        .await
+                        {
+                            tracing::warn!(error = %e, "ledger file checkpoints did not complete");
+                        }
                     }
                     // Each named witness: its key fetched when none is given,
                     // and one that lags asked again so its row can say why.

@@ -24,7 +24,10 @@ cadence uses), and the CLL #13 range proof (`cll::range_proof::range_proof`, `{v
 | `capsules.jsonl` (the chain) | the line's `capsule_id` (unchanged) | `checkpoints.jsonl` (unchanged) |
 | `received-capsules.jsonl`, `received-provenance.jsonl`, `received-inclusion.jsonl`, `issued-adjudications.jsonl`, `received-adjudications.jsonl`, `requested-adjudications.jsonl` | SHA-256 of the line's bytes, without its `\n` | `file-checkpoints.jsonl` |
 
-`referee-pairs.jsonl` is not checkpointed yet; it is a possible later addition.
+No other file under `ledger/` is checkpointed, and the route refuses them: `referee-pairs.jsonl`,
+`received-split-stage-records.jsonl`, `rejected-record-pushes.jsonl`,
+`checkpoint-equivocations.jsonl`, `checkpoints.jsonl` and `file-checkpoints.jsonl` themselves,
+and the plugin's other bookkeeping files. A copy of one of them cannot be shown complete.
 
 A leaf is every complete (newline-ended) line, in file order, whether or not it parses. A torn
 final fragment is not a leaf until a later append ends it, so each file stays append-only as a
@@ -47,9 +50,16 @@ checkpoint committed (it was rewritten) gets no new checkpoint, and the route re
 `GET /api/plugins/capsules/http/ledger-checkpoint?file=<name>[&from=<i>&to=<j>]`
 
 `from` and `to` are 0-based leaf indices, inclusive, given together; without them the range is
-the whole file at the checkpoint. An unknown file name or a bad range is refused as invalid
-parameters; a file with no complete line yet, or a chain no checkpoint covers yet, as an
-invalid request. Save the reply as JSON for the check below.
+the whole file at the checkpoint. A reply's checkpoint covers every complete line the file held
+when asked. Refusals come in three kinds:
+
+- **Invalid parameters:** an unknown file name or a bad range.
+- **Invalid request, ask again later:** a file with no complete line yet, or a chain whose newest
+  checkpoint does not reach the records it held when asked (below).
+- **Internal error:** the node cannot read or sign over the file, or the file no longer holds
+  what its last checkpoint committed (it was rewritten).
+
+Save the reply as JSON for the check below.
 
 ```json
 {
@@ -72,15 +82,16 @@ invalid request. Save the reply as JSON for the check below.
 
 For `capsules.jsonl`, `leaf_digest` is `"capsule_id"` and the checkpoint is the newest one of
 the chain in `checkpoints.jsonl`. When no chain checkpoint covers the chain's last record yet,
-the ask first has the cadence cut one, as a record push does (at most one cut per push window,
-padded to the bucket like every chain checkpoint). With the cadence off, or when that cut
-fails, the reply serves the newest chain checkpoint there is.
+the ask first has the cadence cut one, as a record push does: padded to the bucket like every
+chain checkpoint, and at most one cut per push window, so an ask inside a used window waits
+for the next. With the cadence off (`CAPSULES_CHECKPOINT_CADENCE=off`), or when that cut fails,
+the ask is refused rather than served an older checkpoint.
 
 **Taking a copy the reply covers.** Ask first, then read the file. The file only grows, so the
 reply's checkpoint covers the copy's first `range_proof.to_index + 1` lines (for a whole-file
-reply); keep exactly those as the copy. Every record sealed before the ask is among them. A
-copy read before the ask can be shorter than the checkpoint, since the chain's cut pads it and
-the other files may grow; ask for `from=0&to=<lines - 1>` in that case.
+reply); keep exactly those as the copy. Every record the file held before the ask is among
+them. A copy read before the ask can be shorter than the checkpoint, since the chain's cut pads
+it and the other files may grow; ask for `from=0&to=<lines - 1>` in that case.
 
 ## Checking a copy offline: `capsules ledger-check`
 
@@ -92,8 +103,9 @@ capsules ledger-check --file <copy> --checkpoint <reply.json> --key <node key id
 `--key` is the node's key id (raw Ed25519 public key, hex), taken from somewhere other than the
 reply. Without `--from`/`--to` the copy must be the whole file at the checkpoint; with them it
 must be exactly leaves `i..j`, and the reply must have been asked for the same range. The
-command prints `ok: …` and exits 0 when the copy checks, prints `fail: <reason>` to stderr and
-exits 1 when it does not, and exits 2 on a usage error. It reads no data directory.
+command prints `ok: …` with the line count, the checkpoint's log id and its time, and exits 0
+when the copy checks; it prints `fail: <reason>` to stderr and exits 1 when it does not, and
+exits 2 on a usage error. It reads no data directory.
 
 What it checks, in order:
 
@@ -115,13 +127,18 @@ aac-go `bundle.VerifyBundle` checks the same range proof only inside an AAC bund
 `completeness_certificate`, which holds AAC capsule records and must end at the checkpoint's
 tip, so it covers whole-file copies of `capsules.jsonl` only.
 
-**A time-bracket extract.** The range proof shows the lines are positions `i..j`. To show that
-nothing in the bracket lies outside them, the extract also carries lines `i - 1` and `j + 1`
-(ask for the range widened by one each side) and the checker sees that their times fall
-outside the bracket.
+**What `ok` shows, and what it does not.** It shows the copy is the whole file at *that*
+checkpoint. Every reply the node ever gave keeps checking a copy of the file at its own size,
+including a reply under an earlier history's log id, so an older genuine reply paired with a
+shorter copy checks too. Whoever relies on the copy being complete as of some moment checks
+that the checkpoint is from that moment: its time is no earlier than the read, and every record
+the copy is relied on for (for loop step 07, the ask's evidence_request and its outcome) sits
+at a position below the copy's line count.
 
-**A stale checkpoint.** A checkpoint keeps checking a copy of the file at its own size after
-the file grows: the copy is the file's first `leaf_count(mmr_size)` lines.
+**A filtered extract** (records picked by time, by type or by what they cite) is shown complete
+by keeping the whole-file copy and its reply, then picking the records again from the copy. A
+range proof shows only that the given lines are positions `i..j`; it cannot show that no
+matching record lies outside them, since the files are not sorted by any time field.
 
 ## `received-provenance.jsonl`
 
@@ -152,3 +169,6 @@ The checkpoint and proof formats are CLL's and do not change.
   replies find it.
 - **Counts.** A checkpoint states how many lines the file holds. Unlike the chain, these files
   are not padded.
+- **Growth.** `file-checkpoints.jsonl` gains one line, with its COSE statement, for each file
+  that grew since its last cut, at each cadence tick and ask. Like `checkpoints.jsonl`, nothing
+  shortens it.

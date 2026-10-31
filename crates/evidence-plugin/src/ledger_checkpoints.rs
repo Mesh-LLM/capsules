@@ -5,8 +5,8 @@
 //! Log MMR; a checkpoint is cll's `CheckpointRecord` and its `cll-checkpoint`
 //! COSE statement, signed with the node key; a range proof is cll's CLL #13
 //! range proof. The chain (`capsules.jsonl`) keeps its own checkpoints
-//! (`checkpoints.jsonl`, cut by the cadence); only its range proof is served
-//! here. Every other file in [`CHECKPOINTED_FILES`] is checkpointed here, into
+//! (`checkpoints.jsonl`, cut by the cadence, which a chain ask has cut one
+//! over the tip); only its range proof is built here. Every other file in [`CHECKPOINTED_FILES`] is checkpointed here, into
 //! [`FILE_CHECKPOINTS`].
 //!
 //! **What a leaf is.** Every complete (newline-ended) line, in file order,
@@ -26,10 +26,7 @@
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 
-use cll::checkpoint::{
-    checkpoint_to_cose, try_sign_checkpoint_digest, verify_checkpoint_cose_offline,
-    CheckpointRecord,
-};
+use cll::checkpoint::{checkpoint_to_cose, try_sign_checkpoint_digest, CheckpointRecord};
 use cll::mmr::{
     add_leaf, consistency_proof, leaf_count, leaf_hash, peaks, root_from_peaks, Hash,
     MemoryNodeStore, NodeReader,
@@ -357,15 +354,24 @@ fn proof_from_json(value: &Value) -> Option<RangeProof> {
     })
 }
 
-/// Why a reply was not built: the asker's fault, or this node's.
+/// Why a reply was not built.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ReplyError {
+    /// The asker's fault: an unknown file or a bad range.
     Invalid(String),
-    Unavailable(String),
+    /// Nothing to serve yet: the file holds no complete line, or no chain
+    /// checkpoint covers what the chain held when asked. Ask again later.
+    NotYet(String),
+    /// This node's fault: a file it cannot read or sign over, or one that no
+    /// longer holds what its checkpoint committed.
+    Node(String),
 }
 
 /// The route's reply for `file`: its latest checkpoint and a range proof of
-/// leaves `from..=to` (the whole file when both are `None`).
+/// leaves `from..=to` (the whole file when both are `None`). A file's
+/// checkpoint is cut now, so it covers every complete line. For the chain,
+/// `covering` is how many records the chain held when asked: a newest chain
+/// checkpoint short of it is refused rather than served stale.
 pub fn reply(
     ledger_dir: &Path,
     node_log_id: &str,
@@ -373,34 +379,37 @@ pub fn reply(
     file: &str,
     from: Option<u64>,
     to: Option<u64>,
+    covering: Option<u64>,
 ) -> Result<Value, ReplyError> {
     let rule = LeafRule::for_file(file).ok_or_else(|| {
         ReplyError::Invalid(format!("{file:?} is not a checkpointed ledger file"))
     })?;
     let (cp, cose) = match rule {
         LeafRule::Sha256Line => cut(ledger_dir, file, node_log_id, signer)
-            .map_err(ReplyError::Unavailable)?
-            .ok_or_else(|| ReplyError::Unavailable(format!("{file} holds no complete line yet")))?,
+            .map_err(ReplyError::Node)?
+            .ok_or_else(|| ReplyError::NotYet(format!("{file} holds no complete line yet")))?,
         LeafRule::CapsuleId => {
             let key_id = crate::commitment::key_id(signer);
             evidence_log::with_index(ledger_dir, &key_id, |index| index.chain.last().cloned())
-                .map_err(|e| ReplyError::Unavailable(e.to_string()))?
+                .map_err(|e| ReplyError::Node(e.to_string()))?
                 .map(|c| (c.record, c.statement))
-                .ok_or_else(|| {
-                    ReplyError::Unavailable("no checkpoint covers the chain yet".into())
-                })?
+                .ok_or_else(|| ReplyError::NotYet("no checkpoint covers the chain yet".into()))?
         }
     };
-    let tree = Tree::build(&ledger_dir.join(file), rule)
-        .map_err(|e| ReplyError::Unavailable(e.to_string()))?;
-    if cp.mmr_size > tree.size()
-        || tree.root(cp.mmr_size).map_err(ReplyError::Unavailable)? != cp.root
-    {
-        return Err(ReplyError::Unavailable(format!(
+    let tree =
+        Tree::build(&ledger_dir.join(file), rule).map_err(|e| ReplyError::Node(e.to_string()))?;
+    if cp.mmr_size > tree.size() || tree.root(cp.mmr_size).map_err(ReplyError::Node)? != cp.root {
+        return Err(ReplyError::Node(format!(
             "{file} no longer holds what its checkpoint committed"
         )));
     }
-    let leaves = leaf_count(cp.mmr_size).map_err(|e| ReplyError::Unavailable(e.to_string()))?;
+    let leaves = leaf_count(cp.mmr_size).map_err(|e| ReplyError::Node(e.to_string()))?;
+    if let Some(held) = covering.filter(|&held| held > leaves) {
+        return Err(ReplyError::NotYet(format!(
+            "the newest chain checkpoint covers {leaves} of the {held} records the chain held \
+             when asked (the checkpoint cadence is off, or its cut failed)"
+        )));
+    }
     let (from, to) = match (from, to) {
         (None, None) => (0, leaves - 1),
         (Some(from), Some(to)) if from <= to && to < leaves => (from, to),
@@ -416,7 +425,7 @@ pub fn reply(
         }
     };
     let proof = range_proof(&tree.nodes, from, to, cp.mmr_size)
-        .map_err(|e| ReplyError::Unavailable(e.to_string()))?;
+        .map_err(|e| ReplyError::Node(e.to_string()))?;
     Ok(json!({
         "ledger_checkpoint": REPLY_VERSION,
         "file": file,
@@ -454,38 +463,37 @@ fn index_arg(value: Option<&Value>, name: &str) -> Result<Option<u64>, PluginErr
         .ok_or_else(|| PluginError::invalid_params(format!("{name} must be a leaf index")))
 }
 
-/// The chain's last indexed record: the tip a fresh chain checkpoint must
-/// reach. `None` while the chain holds no record.
-fn chain_tip(ledger_dir: &Path, node_key_id: &str) -> Option<String> {
+/// The chain's last indexed record and how many records it holds: the tip
+/// a fresh chain checkpoint must reach. `None` while it holds none.
+fn chain_tip(ledger_dir: &Path, node_key_id: &str) -> Option<(String, u64)> {
     evidence_log::with_index(ledger_dir, node_key_id, |index| {
-        index.leaves.last().map(|leaf| leaf.capsule_id.clone())
+        let tip = index.leaves.last()?;
+        Some((tip.capsule_id.clone(), index.leaves.len() as u64))
     })
     .ok()
     .flatten()
 }
 
 /// Before a chain reply, have the cadence cut a checkpoint over the chain's
-/// tip if none covers it yet, so a copy read just before the ask is covered
-/// whole. The cut pads the chain like any other. Without a cadence, or when
-/// the cut fails, the reply serves the newest checkpoint there is.
+/// tip if none covers it yet (a cut pads the chain like any other; it waits
+/// out the push window rather than fall back). Returns how many records the
+/// chain held when asked, which the reply's checkpoint must reach.
 async fn cover_chain_tip(
     checkpoints: Option<&crate::checkpoint_cadence::CheckpointHandle>,
     ledger_dir: &Path,
     signer: &SigningKey,
-) {
-    let Some(handle) = checkpoints else {
-        return;
-    };
+) -> Option<u64> {
     let (dir, key) = (ledger_dir.to_path_buf(), crate::commitment::key_id(signer));
-    let tip = tokio::task::spawn_blocking(move || chain_tip(&dir, &key))
+    let (tip, held) = tokio::task::spawn_blocking(move || chain_tip(&dir, &key))
         .await
         .ok()
-        .flatten();
-    if let Some(tip) = tip {
+        .flatten()?;
+    if let Some(handle) = checkpoints {
         if let Err(why) = handle.coverage_for(&tip).await {
             tracing::warn!(%why, "no chain checkpoint cut for a ledger-checkpoint ask");
         }
     }
+    Some(held)
 }
 
 /// `GET /ledger-checkpoint?file=<name>[&from=<i>&to=<j>]`. `checkpoints` is
@@ -522,11 +530,13 @@ pub fn with_route(
                         .to_string();
                     let from = index_arg(args.from.as_ref(), "from")?;
                     let to = index_arg(args.to.as_ref(), "to")?;
-                    if file == CAPSULES_FILE {
-                        cover_chain_tip(checkpoints.as_ref(), &dir, &signer).await;
-                    }
+                    let covering = if file == CAPSULES_FILE {
+                        cover_chain_tip(checkpoints.as_ref(), &dir, &signer).await
+                    } else {
+                        None
+                    };
                     tokio::task::spawn_blocking(move || {
-                        reply(&dir, &log_id, &signer, &file, from, to)
+                        reply(&dir, &log_id, &signer, &file, from, to, covering)
                     })
                     .await
                     .map_err(|e| {
@@ -536,7 +546,8 @@ pub fn with_route(
                     })?
                     .map_err(|e| match e {
                         ReplyError::Invalid(why) => PluginError::invalid_params(why),
-                        ReplyError::Unavailable(why) => PluginError::invalid_request(why),
+                        ReplyError::NotYet(why) => PluginError::invalid_request(why),
+                        ReplyError::Node(why) => PluginError::internal(why),
                     })
                 })
             }),
@@ -572,29 +583,20 @@ pub fn check(
         .and_then(Value::as_str)
         .and_then(|h| hex::decode(h).ok())
         .ok_or("the reply carries no checkpoint statement")?;
-    let verified = verify_checkpoint_cose_offline(&cose);
-    let decoded = match verified.decoded {
-        Some(decoded) if verified.ok => decoded,
-        _ => {
-            return Err(format!(
-                "the checkpoint statement does not verify: {}",
-                verified.errors.join("; ")
-            ))
-        }
-    };
-    if decoded.key_id != key_id {
-        return Err(format!(
-            "the checkpoint is signed by {}, not by the given key",
-            decoded.key_id
-        ));
-    }
     let cp: CheckpointRecord =
         serde_json::from_value(reply.get("checkpoint").cloned().unwrap_or_default())
             .map_err(|e| format!("the reply's checkpoint is malformed: {e}"))?;
-    if cp.signing_body() != decoded.to_checkpoint_record().signing_body()
-        || !cp.verify_signature_offline()
-    {
-        return Err("the reply's checkpoint is not the one its statement states".into());
+    if cp.key_id != key_id {
+        return Err(format!(
+            "the checkpoint is signed by {}, not by the given key",
+            cp.key_id
+        ));
+    }
+    if !evidence_log::states(&cose, &cp) || !cp.verify_signature_offline() {
+        return Err(
+            "the checkpoint statement does not verify, or does not state the reply's checkpoint"
+                .into(),
+        );
     }
     // A file's checkpoint is of that file's log; the chain's is of the
     // node's own log, never a file's.
@@ -647,15 +649,16 @@ pub fn check(
     }
     Ok(if range.is_none() {
         format!(
-            "{file}: the copy is the whole file at the checkpoint ({leaves} lines, log {})",
-            cp.log_id
+            "{file}: the copy is the whole file at the checkpoint ({leaves} lines, log {}, cut {})",
+            cp.log_id, cp.timestamp
         )
     } else {
         format!(
-            "{file}: the copy is exactly lines {}..={} of {leaves} at the checkpoint (log {})",
+            "{file}: the copy is exactly lines {}..={} of {leaves} at the checkpoint (log {}, cut {})",
             from + 1,
             to + 1,
-            cp.log_id
+            cp.log_id,
+            cp.timestamp
         )
     })
 }
@@ -755,7 +758,7 @@ mod tests {
     }
 
     fn whole(dir: &Path) -> Value {
-        reply(dir, LOG, &key(), PROVENANCE, None, None).unwrap()
+        reply(dir, LOG, &key(), PROVENANCE, None, None, None).unwrap()
     }
 
     #[test]
@@ -797,7 +800,7 @@ mod tests {
     fn a_range_extract_passes_and_fails_missing_a_line() {
         let dir = tempfile::tempdir().unwrap();
         write(dir.path(), &lines(0..9));
-        let reply = reply(dir.path(), LOG, &key(), PROVENANCE, Some(2), Some(5)).unwrap();
+        let reply = reply(dir.path(), LOG, &key(), PROVENANCE, Some(2), Some(5), None).unwrap();
         let extract = lines(2..6);
         let ok = check(extract.as_bytes(), &reply, &key_id(), Some((2, 5))).unwrap();
         assert!(ok.contains("lines 3..=6"), "{ok}");
@@ -860,7 +863,7 @@ mod tests {
     #[test]
     fn an_unknown_file_a_bad_range_and_an_empty_file_are_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let r = |file: &str, from, to| reply(dir.path(), LOG, &key(), file, from, to);
+        let r = |file: &str, from, to| reply(dir.path(), LOG, &key(), file, from, to, None);
         assert!(matches!(
             r("../secret", None, None),
             Err(ReplyError::Invalid(_))
@@ -871,7 +874,7 @@ mod tests {
         ));
         assert!(matches!(
             r(PROVENANCE, None, None),
-            Err(ReplyError::Unavailable(_))
+            Err(ReplyError::NotYet(_))
         ));
         write(dir.path(), &lines(0..3));
         assert!(matches!(
@@ -894,9 +897,9 @@ mod tests {
         write(dir.path(), &lines(0..3));
         whole(dir.path());
         std::fs::write(dir.path().join(PROVENANCE), lines(1..5)).unwrap();
-        let err = reply(dir.path(), LOG, &key(), PROVENANCE, None, None).unwrap_err();
+        let err = reply(dir.path(), LOG, &key(), PROVENANCE, None, None, None).unwrap_err();
         assert!(
-            matches!(err, ReplyError::Unavailable(ref why) if why.contains("no longer holds")),
+            matches!(err, ReplyError::Node(ref why) if why.contains("no longer holds")),
             "{err:?}"
         );
     }
@@ -924,7 +927,16 @@ mod tests {
         state.pad_one().unwrap();
         crate::deal_receipt::tests::cut(&state);
         let ledger = state.ledger_dir();
-        let reply = reply(ledger, LOG, state.signing_key(), CAPSULES_FILE, None, None).unwrap();
+        let reply = reply(
+            ledger,
+            LOG,
+            state.signing_key(),
+            CAPSULES_FILE,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(reply["leaf_digest"], LEAF_CAPSULE_ID);
         assert_eq!(reply["checkpoint"]["log_id"], "test-log");
         let node = crate::commitment::key_id(state.signing_key());
@@ -961,13 +973,44 @@ mod tests {
         // A record sealed after the last checkpoint, as step 07's outcome is.
         state.pad_one().unwrap();
         let read = std::fs::read(ledger.join(CAPSULES_FILE)).unwrap();
-        let stale = reply(&ledger, LOG, state.signing_key(), CAPSULES_FILE, None, None).unwrap();
+        let stale = reply(
+            &ledger,
+            LOG,
+            state.signing_key(),
+            CAPSULES_FILE,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert!(check(&read, &stale, &node, None).is_err());
+        // With no cadence to cut one, the ask is refused, not served stale.
+        let held = cover_chain_tip(None, &ledger, state.signing_key()).await;
+        assert_eq!(held, Some(complete_lines(&read).0.len() as u64));
+        let refused = reply(
+            &ledger,
+            LOG,
+            state.signing_key(),
+            CAPSULES_FILE,
+            None,
+            None,
+            held,
+        );
+        assert!(matches!(refused, Err(ReplyError::NotYet(ref why)) if why.contains("cadence")));
 
         let handle =
             crate::checkpoint_cadence::CheckpointHandle::for_tests(state.clone(), "test-log");
-        cover_chain_tip(Some(&handle), &ledger, state.signing_key()).await;
-        let fresh = reply(&ledger, LOG, state.signing_key(), CAPSULES_FILE, None, None).unwrap();
+        let held = cover_chain_tip(Some(&handle), &ledger, state.signing_key()).await;
+        let fresh = reply(
+            &ledger,
+            LOG,
+            state.signing_key(),
+            CAPSULES_FILE,
+            None,
+            None,
+            held,
+        )
+        .unwrap();
         assert!(
             fresh["checkpoint"]["mmr_size"].as_u64() > stale["checkpoint"]["mmr_size"].as_u64()
         );
@@ -987,9 +1030,43 @@ mod tests {
             check(&copy, &fresh, &node, None)
         );
         // Asked again with nothing new sealed, the same checkpoint serves.
-        cover_chain_tip(Some(&handle), &ledger, state.signing_key()).await;
-        let again = reply(&ledger, LOG, state.signing_key(), CAPSULES_FILE, None, None).unwrap();
+        let held = cover_chain_tip(Some(&handle), &ledger, state.signing_key()).await;
+        let again = reply(
+            &ledger,
+            LOG,
+            state.signing_key(),
+            CAPSULES_FILE,
+            None,
+            None,
+            held,
+        )
+        .unwrap();
         assert_eq!(again["checkpoint"], fresh["checkpoint"]);
+    }
+
+    #[test]
+    fn a_cadence_tick_cuts_each_grown_file_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let cuts = || {
+            std::fs::read_to_string(dir.path().join(FILE_CHECKPOINTS))
+                .unwrap_or_default()
+                .lines()
+                .map(|l| serde_json::from_str::<Value>(l).unwrap()["log_id"].clone())
+                .collect::<Vec<_>>()
+        };
+        write(dir.path(), &lines(0..3));
+        std::fs::write(dir.path().join(CHECKPOINTED_FILES[0]), lines(0..2)).unwrap();
+        cut_all(dir.path(), LOG, &key());
+        assert_eq!(cuts().len(), 2);
+        // Only the file that grew is cut again; an untouched one is not.
+        write(dir.path(), &lines(3..4));
+        cut_all(dir.path(), LOG, &key());
+        let all = cuts();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[2], json!(file_log_id(LOG, PROVENANCE)));
+        let reply = whole(dir.path());
+        assert!(check(lines(0..4).as_bytes(), &reply, &key_id(), None).is_ok());
+        assert_eq!(cuts().len(), 3, "the ask reuses the tick's cut");
     }
 
     #[test]
