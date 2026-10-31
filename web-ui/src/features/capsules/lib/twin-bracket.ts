@@ -110,3 +110,23 @@ export function rowNamesNode(raw: PaneCRow, extraIds: readonly (string | null | 
     .map((id) => id.toLowerCase())
     .some((id) => id === wanted || id.startsWith(wanted) || wanted.startsWith(id))
 }
+
+export type PairRulingMark = 'wrong' | 'agreed' | 'unmatched'
+
+/** What a `contradicted:<party>` ruling says about each row of a pair, decided
+ *  here and nowhere else (the group card and the checks panel both call it):
+ *  a row is marked only when EXACTLY ONE row names the party, that row wrong
+ *  and the other agreed; with none or both naming it, no one is marked.
+ *  `rowB` is null when the other row of the pair is not known. */
+export function pairRulingMarks(
+  rowA: PaneCRow,
+  idsA: readonly (string | null | undefined)[],
+  rowB: PaneCRow | null,
+  idsB: readonly (string | null | undefined)[],
+  party: string
+): [PairRulingMark, PairRulingMark] {
+  const a = rowNamesNode(rowA, idsA, party)
+  const b = rowB !== null && rowNamesNode(rowB, idsB, party)
+  if (a === b) return ['unmatched', 'unmatched']
+  return a ? ['wrong', 'agreed'] : ['agreed', 'wrong']
+}

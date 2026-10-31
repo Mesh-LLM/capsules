@@ -94,9 +94,9 @@ describe('buildCheckGroups — the referee line names a machine only when a row 
     expect(refereeOf(pair('peer-2'))).toMatchObject(none)
   })
 
-  it('a row carrying no node id at all reads not checked, never agreed', () => {
+  it('a row carrying no node id at all reads not checked when the pair is unmatched', () => {
     const bare = { mine: {}, theirs: {}, twin: (pair('x') as never as { twin: unknown }).twin } as never
-    expect(refereeOf(bare, pair('peer-9'))).toMatchObject({ text: 'not checked', mark: 'none' })
+    expect(refereeOf(bare, pair('peer-3'))).toMatchObject({ text: 'not checked', mark: 'none' })
   })
 
   it('a node id carried only by the ledger counterparty counts, and the group card agrees', () => {
@@ -116,5 +116,52 @@ describe('buildCheckGroups — the referee line names a machine only when a row 
       ({ raw, counterparty, rightCellState: { kind: 'open_not_held', date: null } }) as never
     const card = buildTwinGroupCard([ledger(a, 'peer-9'), ledger(b, 'peer-2')])
     expect(card.machines.map((m) => m.pill?.text)).toEqual(['Referee: wrong answer', 'Referee: agreed'])
+  })
+
+  // Each case: [ids of row A, ids of row B] as [raw counterparty, ledger counterparty].
+  const raw = (counterparty: string | null) =>
+    ({
+      counterparty,
+      mine: {},
+      theirs: {},
+      twin: (pair('') as never as { twin: unknown }).twin
+    }) as never
+  const cases: [string, [string | null, string | null], [string | null, string | null]][] = [
+    ['this names', ['peer-9', null], ['peer-2', null]],
+    ['other names', ['peer-2', null], ['peer-9', null]],
+    ['both name', ['peer-9', null], ['peer-9', null]],
+    ['neither', ['peer-2', null], ['peer-3', null]],
+    ['id-less + other names', [null, null], ['peer-9', null]],
+    ['id-less + neither', [null, null], ['peer-3', null]],
+    ['ledger-only ids', [null, 'peer-9'], [null, 'peer-2']]
+  ]
+  it.each(cases)('panel line and card pill agree on every row: %s', (_name, [rawA, ledA], [rawB, ledB]) => {
+    const a = raw(rawA)
+    const b = raw(rawB)
+    const ledger = (r: never, counterparty: string | null) =>
+      ({ raw: r, counterparty, rightCellState: { kind: 'open_not_held', date: null } }) as never
+    const card = buildTwinGroupCard([ledger(a, ledA), ledger(b, ledB)])
+    const panels = [
+      refereeOf(a, b, ledA ?? undefined, ledB ?? undefined),
+      refereeOf(b, a, ledB ?? undefined, ledA ?? undefined)
+    ]
+    panels.forEach((panel, i) => {
+      const pill = card.machines[i]?.pill?.text ?? null
+      if (panel.text === 'wrong answer') expect(pill).toBe('Referee: wrong answer')
+      else if (panel.text === 'agreed') expect(pill).toBe('Referee: agreed')
+      else expect(pill).toBeNull()
+    })
+  })
+
+  it('the panel words for the table cases', () => {
+    const text = (own: [string | null, string | null], other: [string | null, string | null]) =>
+      refereeOf(raw(own[0]), raw(other[0]), own[1] ?? undefined, other[1] ?? undefined).text
+    expect(text(['peer-9', null], ['peer-2', null])).toBe('wrong answer')
+    expect(text(['peer-2', null], ['peer-9', null])).toBe('agreed')
+    expect(text(['peer-9', null], ['peer-9', null])).toBe('contradicted · not matched to a machine')
+    expect(text([null, null], ['peer-9', null])).toBe('agreed')
+    expect(text([null, null], ['peer-3', null])).toBe('not checked')
+    expect(text(['peer-2', null], ['peer-3', null])).toBe('contradicted · not matched to a machine')
+    expect(text([null, 'peer-9'], [null, 'peer-2'])).toBe('wrong answer')
   })
 })

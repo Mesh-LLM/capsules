@@ -12,7 +12,7 @@ import type { CapsuleRecord } from '@/features/capsules/api/types'
 import type { ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
 import { shortId } from '@/features/capsules/lib/adjudication-view'
 import { rowModelName, servingProvenance, tokenFlowText } from '@/features/capsules/lib/serving-provenance'
-import { askedVerdict, rowNamesNode, twinAnswerState, type TwinAnswerState } from '@/features/capsules/lib/twin-bracket'
+import { askedVerdict, pairRulingMarks, twinAnswerState, type TwinAnswerState } from '@/features/capsules/lib/twin-bracket'
 
 export type CardTone = 'good' | 'bad' | 'muted'
 
@@ -45,10 +45,6 @@ const COMPARE_WORDS: Record<TwinAnswerState, string> = {
 
 function ownRecord(row: ExchangeLedgerRow): CapsuleRecord | null {
   return (row.raw.mine.record as CapsuleRecord | undefined) ?? null
-}
-
-function namesNode(row: ExchangeLedgerRow, party: string): boolean {
-  return rowNamesNode(row.raw, [row.counterparty], party)
 }
 
 /** The id the card shows for a machine. */
@@ -89,17 +85,20 @@ export function buildTwinGroupCard(rows: readonly ExchangeLedgerRow[]): TwinGrou
   const model = rowModelName(provenances[0] ?? null, provenances[1] ?? null)
 
   const verdict = asked?.verdict
-  const matched = verdict?.kind === 'contradicted' ? rows.filter((row) => namesNode(row, verdict.party)) : []
+  const marks =
+    verdict?.kind === 'contradicted' && rowA
+      ? pairRulingMarks(rowA.raw, [rowA.counterparty], rowB?.raw ?? null, [rowB?.counterparty], verdict.party)
+      : null
 
   const pillFor = (row: ExchangeLedgerRow): MachineColumn['pill'] => {
     if (kind === null) return null
     if (kind === 'corroborated') return { text: 'Referee: agreed', tone: 'good' }
     if (kind === 'inconclusive') return { text: 'Referee: inconclusive', tone: 'muted' }
     if (kind === 'not_comparable') return { text: 'Referee: not comparable', tone: 'muted' }
-    // Contradicted: the ruling names one node. A machine is marked only when
-    // exactly that one row names it; nothing is guessed for the other.
-    if (matched.length !== 1) return null
-    return matched[0] === row ? { text: 'Referee: wrong answer', tone: 'bad' } : { text: 'Referee: agreed', tone: 'good' }
+    // Contradicted: marked only when exactly one row names the party.
+    const mark = marks?.[row === rowA ? 0 : 1]
+    if (mark === 'wrong') return { text: 'Referee: wrong answer', tone: 'bad' }
+    return mark === 'agreed' ? { text: 'Referee: agreed', tone: 'good' } : null
   }
 
   const machine = (row: ExchangeLedgerRow | undefined, label: MachineColumn['label']): MachineColumn => ({

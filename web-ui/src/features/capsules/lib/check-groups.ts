@@ -10,7 +10,7 @@
 import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
 import type { ChecksRow, ChecksSideCell, CommitsToRow } from '@/features/capsules/lib/security-checks-view'
 import { TEE_COPY } from '@/features/capsules/lib/security-checks-view'
-import { askedVerdict, rowNamesNode, rowNodeIds } from '@/features/capsules/lib/twin-bracket'
+import { askedVerdict, pairRulingMarks, rowNodeIds } from '@/features/capsules/lib/twin-bracket'
 
 /** Where a result came from: redone in this browser, taken from the node,
  *  failed, not set up on this node, or nothing to check yet. */
@@ -141,11 +141,15 @@ function refereeLine(
     // The ruling names one node. This row reads wrong answer only when it
     // names that node, and agreed only when the other row of the pair does;
     // a party neither row carries marks no one.
-    const party = asked.verdict.party
-    if (rowNodeIds(row, ownIds).length === 0) yours = { kind: 'text', text: 'not checked', mark: 'none' }
-    else if (rowNamesNode(row, ownIds, party)) yours = { kind: 'text', text: 'wrong answer', mark: 'failed' }
-    else if (otherRow && rowNamesNode(otherRow, otherIds, party)) yours = { kind: 'text', text: 'agreed', mark: 'node' }
-    else yours = { kind: 'text', text: 'contradicted · not matched to a machine', mark: 'none' }
+    const [mark] = pairRulingMarks(row, ownIds, otherRow ?? null, otherIds, asked.verdict.party)
+    yours =
+      mark === 'wrong'
+        ? { kind: 'text', text: 'wrong answer', mark: 'failed' }
+        : mark === 'agreed'
+          ? { kind: 'text', text: 'agreed', mark: 'node' }
+          : rowNodeIds(row, ownIds).length === 0
+            ? { kind: 'text', text: 'not checked', mark: 'none' }
+            : { kind: 'text', text: 'contradicted · not matched to a machine', mark: 'none' }
   } else {
     const kind = asked.verdict.kind
     yours = {
