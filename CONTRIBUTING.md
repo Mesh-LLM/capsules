@@ -137,7 +137,9 @@ in `crates/evidence-plugin/src/two_node_e2e.rs` run over what each node wrote:
   what each node's `history-page` route serves (the requester before its first
   checkpoint, a refusal; later its card; the provider, its Service History).
   `two_node_e2e.rs` checks the refusal and the card verify under the
-  requester's own key and the Service History names the provider's, and
+  requester's own key and the Service History under the provider's, for the
+  request the route made (built with `test-period-policy`, as the nodes were),
+  and
   `web-ui/src/features/capsules/lib/history-page.e2e.test.ts` builds the
   History page from each `reply`, opens it offline, and checks it verifies
   (or shows the refusal) and hands back the served bytes unchanged.

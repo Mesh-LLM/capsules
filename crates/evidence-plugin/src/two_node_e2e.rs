@@ -8,9 +8,12 @@
 //!
 //! ```sh
 //! E2E_REQUESTER_DIR=<copy> E2E_PROVIDER_DIR=<copy> E2E_EXCHANGES=<n> \
-//!   E2E_JOIN_DIR=<run dir> E2E_UNANSWERED_PEER=<id> \
-//!   cargo test --locked --bin capsules -- --ignored --test-threads=1 two_node_e2e::
+//!   E2E_JOIN_DIR=<run dir> E2E_UNANSWERED_PEER=<id> CAPSULES_TEST_PERIOD_LENGTH_S=120 \
+//!   cargo test --locked --bin capsules --features test-period-policy -- \
+//!   --ignored --test-threads=1 two_node_e2e::
 //! ```
+//!
+//! With the run's two-minute Service History definition, as the nodes had it.
 //!
 //! Every check calls the plugin's own code (the ledger reload, the receiver,
 //! the Evidence pane builder) on what the two nodes actually wrote. Every
@@ -1030,8 +1033,12 @@ fn history_page(name: &str) -> (Value, Value) {
 /// provider, which shares its Service History, that History. The History page
 /// built from each `reply` and opened offline is checked by
 /// `web-ui/src/features/capsules/lib/history-page.e2e.test.ts`, which the
-/// script runs next. This checks what that page does not: the refusal's and
-/// the card's signatures, and that the key is the node's own.
+/// script runs next. This checks what that page does not: that each reply
+/// verifies under that node's own key for the request the route made (the
+/// stranger's card request; for the Service History, the request pinned to
+/// the anchor the reply names), signatures included. The Service History is
+/// checked against the run's two-minute definition, so this runs in a build
+/// with the `test-period-policy` feature, as the script runs it.
 #[test]
 #[ignore = "needs the data directories of a real two-node run (scripts/e2e-two-node.sh)"]
 fn the_history_page_route_served_each_nodes_own_answer() {
@@ -1041,14 +1048,15 @@ fn the_history_page_route_served_each_nodes_own_answer() {
         .find(|(name, _)| *name == crate::doctor::PROBE_HISTORY_CARD)
         .expect("doctor asks for the history card");
     let no_witness_keys = std::collections::BTreeMap::new();
-    let verified = |reply: &Value, node: &Node| {
+    let verified_for = |request: &[u8], reply: &Value, node: &Node| {
         crate::evidence_answer::verify_response(
-            &card_request,
+            request,
             reply,
             &node.signing_key().verifying_key(),
             &no_witness_keys,
         )
     };
+    let verified = |reply: &Value, node: &Node| verified_for(&card_request, reply, node);
 
     let (fresh, refusal) = history_page("fresh");
     assert_eq!(fresh["form"], crate::history_page::FORM_HISTORY_CARD);
@@ -1073,4 +1081,25 @@ fn the_history_page_route_served_each_nodes_own_answer() {
     assert_eq!(service_page["outcome"], "answered", "{service_page:#}");
     assert_eq!(service_page["node_key_id"], json!(run.provider.key_id()));
     assert_eq!(service_history["responder"], service_page["node_key_id"]);
+    // The request the route asked of the provider's responder
+    // (`history_page::serve`), pinned to the anchor it answered at: the one
+    // the reply names, not whichever boundary checkpoint is latest now.
+    assert_eq!(
+        service_history["derivation"],
+        json!(crate::service_history::definition_digest()),
+        "the provider's Service History is the run's definition (run with the \
+         test-period-policy feature and CAPSULES_TEST_PERIOD_LENGTH_S)"
+    );
+    let pin = service_history["anchor"]["digest"]
+        .as_str()
+        .expect("the Service History names its anchor");
+    let service_request = serde_json::to_vec(&json!({
+        "profile": evidence_request::envelope::PROFILE,
+        "subject": {"full_history": null},
+        "coverage": {"expected_pin": pin},
+        "derivation": crate::service_history::definition_digest(),
+    }))
+    .unwrap();
+    let check = verified_for(&service_request, &service_history, &run.provider);
+    assert_eq!(check["state"], "artifact", "{check:#}");
 }

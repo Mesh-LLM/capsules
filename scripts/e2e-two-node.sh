@@ -455,10 +455,12 @@ stop_nodes
 mkdir -p "$out/data"
 cp -a "$(plugin_data requester)" "$out/data/requester"
 cp -a "$(plugin_data provider)" "$out/data/provider"
+# Built with test-period-policy (CAPSULES_TEST_PERIOD_LENGTH_S is exported
+# above), so the checks know the Service History definition the nodes ran.
 cd "$repo/crates/evidence-plugin"
 E2E_REQUESTER_DIR=$out/data/requester E2E_PROVIDER_DIR=$out/data/provider E2E_EXCHANGES=$EXCHANGES \
   E2E_JOIN_DIR=$out E2E_UNANSWERED_PEER=$unanswered_peer \
-  cargo test --locked --bin capsules -- --ignored --test-threads=1 two_node_e2e::
+  cargo test --locked --bin capsules --features test-period-policy -- --ignored --test-threads=1 two_node_e2e::
 
 # --- the History pages the live nodes served, built and opened offline ------
 cd "$repo/web-ui"

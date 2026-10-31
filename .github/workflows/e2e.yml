@@ -108,6 +108,7 @@ jobs:
           # periods instead of weekly ones. No release build enables it.
           cargo build --locked --features test-period-policy --bin capsules
           cargo test --locked --bin capsules --no-run
+          cargo test --locked --bin capsules --features test-period-policy --no-run
 
       # The script opens the History pages the nodes served with web-ui's
       # own test runner, so web-ui's dependencies are installed first.
