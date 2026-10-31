@@ -7,6 +7,28 @@ each exchange, and whether this node's log still verifies. It installs and
 runs on an unmodified mesh-llm release (0.77 or newer). No other runtime is
 needed.
 
+## What's new in 0.1.6
+
+**Upgrading from 0.1.5 needs nothing on the other node.** This version answers both interop profile
+identifiers and asks under `evidence-interop/1`; a 0.1.5 node refuses that, and the ask is sent once
+more under `evidence-interop/0`, which 0.1.5 answers.
+
+- **A refusal says whether it was policy.** Under `evidence-interop/1` (Evidence Request -02) a node
+  declines for a limit of its own with `capacity_exceeded`, and refuses a request whose signature
+  does not check with `request_unauthenticated`; `policy_declined` and `not_authorized` are then
+  policy only, and are checked against the policy the peer's commitment pins.
+- **Each ask is recorded,** before it is sent: the request, then the answer, the refusal, or that
+  nothing came back in its window.
+- **A paid exchange is sealed as a deal** on the payer's side, with the payer's and the provider's
+  receipts as Evidence Bundles, and its records go to the counterparty of the exchange.
+- **The Service History** (`service_history/1`): what this node served, per period, as a Standard
+  History.
+- **Service evidence agreements** and their coverage on the Exchanges rows, and the **join switch,
+  `doctor` and the operator binding** (loop steps 6, 7 and 12).
+- **The Evidence tab says when a peer's answer is not witnessed.**
+
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGELOG.md).
+
 ## What's new in 0.1.5
 
 **Upgrade both nodes:** a node on 0.1.4 cannot read this version's evidence answers, and under the
@@ -162,7 +184,7 @@ glibc 2.35 or newer (x86_64 or arm64).
 and set `VERSION` to the release (without the leading `v`):
 
 ```bash
-VERSION=0.1.5
+VERSION=0.1.6
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  TARGET=aarch64-apple-darwin ;;
   Linux-x86_64)  TARGET=x86_64-unknown-linux-gnu ;;

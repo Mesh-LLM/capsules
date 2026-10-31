@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.6
+
 ### Changed
 
 - **Evidence requests speak `evidence-interop/1` (Evidence Request -02), and a refusal says
