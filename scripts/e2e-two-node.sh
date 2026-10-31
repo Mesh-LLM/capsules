@@ -46,15 +46,15 @@ redact_logs() {
 }
 
 stop_nodes() {
-  for pid in "${pids[@]}"; do kill -TERM "$pid" 2>/dev/null || true; done
+  for pid in ${pids[@]+"${pids[@]}"}; do kill -TERM "$pid" 2>/dev/null || true; done
   # The plugin writes a checkpoint on shutdown: give it time.
   for _ in $(seq 60); do
     alive=0
-    for pid in "${pids[@]}"; do kill -0 "$pid" 2>/dev/null && alive=1; done
+    for pid in ${pids[@]+"${pids[@]}"}; do kill -0 "$pid" 2>/dev/null && alive=1; done
     [ "$alive" = 0 ] && break
     sleep 0.5
   done
-  for pid in "${pids[@]}"; do kill -KILL "$pid" 2>/dev/null || true; done
+  for pid in ${pids[@]+"${pids[@]}"}; do kill -KILL "$pid" 2>/dev/null || true; done
   pids=()
 }
 
@@ -112,7 +112,7 @@ wait_for() {
   shift 2
   local deadline=$((SECONDS + seconds))
   until "$@" > /dev/null 2>&1; do
-    for pid in "${pids[@]}"; do
+    for pid in ${pids[@]+"${pids[@]}"}; do
       kill -0 "$pid" 2>/dev/null || { echo "a node exited while waiting for: $what" >&2; return 1; }
     done
     if [ "$SECONDS" -ge "$deadline" ]; then
