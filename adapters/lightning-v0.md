@@ -44,7 +44,7 @@ For each paid exchange, the adapter reads these members:
 A settlement event may also carry the payment's `preimage`, 64 lowercase hex, which the plugin
 seals with the other members. No host sends it today: mesh-llm's own test
 (`event_contract_is_private_stable_and_bounded`) forbids the preimage and the BOLT11 string in
-the event, so passing the preimage is an ask of the source (Mesh-LLM/capsules-plugin#83). The
+the event, so passing the preimage is an ask of the source (Mesh-LLM/mesh-llm#2731). The
 event never carries the BOLT11 string.
 
 ## (b) Issuers
@@ -209,5 +209,5 @@ plugin's message to another on the same node.
 The reader keys on the event's shape, not on who emits it. On that path the plugin needs no second
 reader if `pay-lightning` emits `payment.lifecycle.v1` with the same members and the host relays a
 plugin's message on that channel to the local plugins declaring it, as it does its own (the ask
-in Mesh-LLM/capsules-plugin#83). Until then, a node on that path holds no settlement records, and
+in Mesh-LLM/mesh-llm#2731). Until then, a node on that path holds no settlement records, and
 `settlement_check` reports none.
