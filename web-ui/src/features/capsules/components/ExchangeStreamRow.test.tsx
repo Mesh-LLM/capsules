@@ -44,7 +44,7 @@ const RESPONSE_DIGEST = 'b'.repeat(64)
  *  since `deriveRightCellState` never reads `localRecord` unless
  *  `idMatch`/`signatureOk` both already came back true. */
 /** Our requested record: the digests, the node that served it, and the client
- *  nonce both records carry -- what "Ask them for their record" names the
+ *  nonce both records carry -- what "Ask for their record" names the
  *  exchange by. */
 const LOCAL_RECORD_WITH_DIGESTS: CapsuleRecord = (() => {
   const body = fixtureHalfBody({ capsuleId: 'mine-1' })
@@ -337,7 +337,8 @@ describe('ExchangeStreamRow — the states render distinct text/status/action', 
     verdict: string
     detail: string | null
     status: string
-    ask: string
+    /** null: the row's face is not "Waiting for their record", so it offers no ask for it. */
+    ask: string | null
     compare?: boolean
   }> = [
     {
@@ -345,7 +346,7 @@ describe('ExchangeStreamRow — the states render distinct text/status/action', 
       verdict: '✗ Their record disagrees with yours',
       detail: null,
       status: 'Disagree',
-      ask: 'Ask them for their record',
+      ask: null,
       compare: true
     },
     {
@@ -353,14 +354,14 @@ describe('ExchangeStreamRow — the states render distinct text/status/action', 
       verdict: 'They declined',
       detail: 'They declined, and signed the refusal — 4 Sep.',
       status: 'Declined',
-      ask: 'Ask again for their record'
+      ask: null
     },
     {
       kind: 'open_absent',
       verdict: 'They say they have no record of this — 4 Sep',
       detail: null,
       status: 'They have no record',
-      ask: 'Ask again for their record'
+      ask: null
     },
     {
       kind: 'open_asked',
@@ -374,14 +375,14 @@ describe('ExchangeStreamRow — the states render distinct text/status/action', 
       verdict: 'Waiting for their record',
       detail: 'Their record hasn’t arrived yet.',
       status: 'Waiting for theirs',
-      ask: 'Ask them for their record'
+      ask: 'Ask for their record'
     },
     {
       kind: 'open_not_asked',
       verdict: 'Waiting for their record',
       detail: 'Their record hasn’t arrived yet.',
       status: 'Waiting for theirs',
-      ask: 'Ask them for their record'
+      ask: 'Ask for their record'
     }
   ]
 
@@ -397,10 +398,11 @@ describe('ExchangeStreamRow — the states render distinct text/status/action', 
       // carries the two toggles, the state (i), the whole-row (i) and its two
       // asks, plus Compare on a row whose records disagree, and the
       // verdict's (i) when there is more to say than the verdict.
-      expect(screen.getByRole('button', { name: ask })).toHaveProperty('disabled', kind === 'contradicted')
+      if (ask) expect(screen.getByRole('button', { name: ask })).toBeEnabled()
+      else expect(screen.queryByRole('button', { name: /for their record/ })).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Ask for their history' })).toBeEnabled()
       if (compare) expect(screen.getByRole('button', { name: 'Compare' })).toBeEnabled()
-      expect(screen.getAllByRole('button')).toHaveLength(6 + (compare ? 1 : 0) + (detail ? 1 : 0))
+      expect(screen.getAllByRole('button')).toHaveLength((ask ? 6 : 5) + (compare ? 1 : 0) + (detail ? 1 : 0))
       unmount()
     })
   }
@@ -419,7 +421,8 @@ describe('ExchangeStreamRow — the states render distinct text/status/action', 
     // Collapsed: no engineer cells on the face -- the two toggles, the
     // state (i), the whole-row (i), the verdict's (i) and the two asks only.
     expect(screen.queryByText('signature ✓')).not.toBeInTheDocument()
-    expect(screen.getAllByRole('button')).toHaveLength(7)
+    expect(screen.getAllByRole('button')).toHaveLength(6)
+    expect(screen.queryByRole('button', { name: /for their record/ })).not.toBeInTheDocument()
 
     rerender(
       <ExchangeStreamRow checksExpanded  {...toggleProps()} rail={NO_RAIL} row={makeRow('closed')} />
@@ -635,7 +638,7 @@ describe('ExchangeStreamRow — counterparty gating (unaffected by the modal rem
     expect(screen.queryByText('nothing to ask yet')).not.toBeInTheDocument()
     expect(screen.queryByText('Their record hasn’t arrived yet.')).not.toBeInTheDocument()
     // Both asks stay on the row, disabled, each saying why (never a dead click).
-    for (const name of ['Ask them for their record', 'Ask for their history']) {
+    for (const name of ['Ask for their record', 'Ask for their history']) {
       const button = screen.getByRole('button', { name })
       expect(button).toBeDisabled()
       expect(button.closest('[data-census-chip]')).toHaveTextContent(
@@ -675,7 +678,7 @@ describe('ExchangeStreamRow — counterparty gating (unaffected by the modal rem
     expect(screen.getByRole('button', { name: 'Ask again for their record' })).toBeDisabled()
   })
 
-  it('a signed refusal offers asking again, and no "View refusal" control that does nothing', () => {
+  it('a signed refusal says so and offers no ask for their record (only a waiting row does), and no "View refusal" control that does nothing', () => {
     render(
       <ExchangeStreamRow
         {...toggleProps()}
@@ -686,7 +689,32 @@ describe('ExchangeStreamRow — counterparty gating (unaffected by the modal rem
     expect(screen.getByText('They declined')).toBeInTheDocument()
     expect(document.querySelector('[data-verdict-detail]')).toHaveTextContent('They declined, and signed the refusal — 4 Sep.')
     expect(screen.queryByRole('button', { name: 'View refusal' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Ask again for their record' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: /for their record/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ask for their history' })).toBeEnabled()
+  })
+})
+
+describe('ExchangeStreamRow — "Ask for their record" only where their half did not arrive', () => {
+  it('a row holding both halves has no request button, confirmed or disagreeing', () => {
+    for (const kind of ['closed', 'contradicted'] as const) {
+      const { unmount } = render(<ExchangeStreamRow {...toggleProps()} rail={NO_RAIL} row={makeRow(kind)} />)
+      expect(screen.queryByRole('button', { name: /for their record/ })).not.toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it('every row that reads "Waiting for their record" offers it, and no other row does', () => {
+    for (const kind of ['open_asked', 'open_not_held', 'open_not_given', 'open_not_asked'] as const) {
+      const { unmount } = render(<ExchangeStreamRow {...toggleProps()} rail={NO_RAIL} row={makeRow(kind)} />)
+      expect(document.querySelector('[data-row-verdict-text]')).toHaveTextContent('Waiting for their record')
+      expect(screen.getByRole('button', { name: /for their record/ })).toBeInTheDocument()
+      unmount()
+    }
+    for (const kind of ['open_refused', 'open_absent'] as const) {
+      const { unmount } = render(<ExchangeStreamRow {...toggleProps()} rail={NO_RAIL} row={makeRow(kind)} />)
+      expect(screen.queryByRole('button', { name: /for their record/ })).not.toBeInTheDocument()
+      unmount()
+    }
   })
 })
 
@@ -792,7 +820,7 @@ describe('ExchangeStreamRow — the two row toggles replace the modal', () => {
 
   it('the ask/compare action cell button and the two toggles are independent siblings, never nested', () => {
     render(<ExchangeStreamRow  {...toggleProps()} rail={NO_RAIL} row={makeRow('open_not_asked')} />)
-    const actionButton = screen.getByRole('button', { name: 'Ask them for their record' })
+    const actionButton = screen.getByRole('button', { name: 'Ask for their record' })
     const contentToggle = screen.getByRole('button', { name: 'What was said ▸' })
     const checksToggle = screen.getByRole('button', { name: 'How we checked ▸' })
     expect(actionButton.contains(contentToggle)).toBe(false)
@@ -815,7 +843,7 @@ describe('ExchangeStreamRow — the two row toggles replace the modal', () => {
         row={makeRow('open_not_asked')}
       />
     )
-    await user.click(screen.getByRole('button', { name: 'Ask them for their record' }))
+    await user.click(screen.getByRole('button', { name: 'Ask for their record' }))
     expect(onToggleContent).not.toHaveBeenCalled()
     expect(onToggleChecks).not.toHaveBeenCalled()
   })
@@ -916,7 +944,7 @@ describe('ExchangeStreamRow — UX §3: the left cell is the event in words; no 
   it('offers both asks on a fresh exchange: asking does not wait for a push', () => {
     const fresh = new Date(Date.now() - 1_000).toISOString()
     render(<ExchangeStreamRow {...toggleProps()} rail={NO_RAIL} row={makeRow('open_not_asked', { timestamp: fresh })} />)
-    expect(screen.getByRole('button', { name: 'Ask them for their record' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Ask for their record' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Ask for their history' })).toBeEnabled()
   })
 })
@@ -1102,7 +1130,7 @@ describe('ExchangeStreamRow — §3A one colour per state', () => {
       <ExchangeStreamRow  {...toggleProps()} rail={NO_RAIL} row={makeRow('open_not_asked')} />
     )
     expect(screen.getByText('Their record hasn’t arrived yet.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Ask them for their record' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ask for their record' })).toBeInTheDocument()
     // Exactly one tone marker on the row, and it's muted -- no colour.
     const toneEls = container.querySelectorAll('[data-row-tone]')
     expect(toneEls).toHaveLength(1)
@@ -1492,7 +1520,7 @@ describe('ExchangeStreamRow — whether the record an ask brought was saved on t
   })
 })
 
-describe('ExchangeStreamRow — a row closed from the record "Ask them for their record" brought', () => {
+describe('ExchangeStreamRow — a row closed from the record "Ask for their record" brought', () => {
   it('reads Confirmed, and its (i) says the reply was verified, never that it isn’t saved', () => {
     const theirs = { ...LOCAL_RECORD_WITH_DIGESTS, capsule_id: 'theirs-1' } as Record<string, unknown>
     render(
@@ -1514,7 +1542,7 @@ describe('ExchangeStreamRow — a row closed from the record "Ask them for their
   })
 })
 
-describe('ExchangeStreamRow — whether their reply to "Ask them for their record" was verified', () => {
+describe('ExchangeStreamRow — whether their reply to "Ask for their record" was verified', () => {
   it('says a reply the plugin could not verify is not verified, and why', () => {
     render(
       <ExchangeStreamRow
@@ -1699,7 +1727,7 @@ describe('ExchangeStreamRow — the two asks on the row face', () => {
         row={makeRow('open_not_held')}
       />
     )
-    for (const name of ['Ask them for their record', 'Ask for their history']) {
+    for (const name of ['Ask for their record', 'Ask for their history']) {
       const button = screen.getByRole('button', { name })
       expect(button).toBeDisabled()
       expect(button.closest('[data-census-chip]')).toHaveTextContent('Not available on sample data.')

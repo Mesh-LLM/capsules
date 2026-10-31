@@ -841,7 +841,7 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     expect(screen.queryByText('nothing to ask yet')).not.toBeInTheDocument()
     // The asks stay on the row, disabled with the reason: never a button
     // pointed at nobody, never one that clicks into nothing.
-    for (const button of screen.getAllByRole('button', { name: 'Ask them for their record' })) {
+    for (const button of screen.getAllByRole('button', { name: 'Ask for their record' })) {
       expect(button).toBeDisabled()
     }
 
@@ -950,7 +950,7 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
     expect(await screen.findByText('Waiting for their record')).toBeInTheDocument()
-    const askButton = await screen.findByRole('button', { name: 'Ask them for their record' })
+    const askButton = await screen.findByRole('button', { name: 'Ask for their record' })
 
     await user.click(askButton)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
@@ -2211,7 +2211,7 @@ describe('LedgerPageContent — the plain-verdict pass on Exchanges', () => {
     })
     const { user } = await openExchanges()
     const before = vi.mocked(fetchPaneCList).mock.calls.length
-    await user.click(screen.getByRole('button', { name: 'Ask them for their record' }))
+    await user.click(screen.getByRole('button', { name: 'Ask for their record' }))
     await vi.waitFor(() => expect(vi.mocked(fetchPaneCList).mock.calls.length).toBeGreaterThan(before))
   })
 
@@ -2219,7 +2219,7 @@ describe('LedgerPageContent — the plain-verdict pass on Exchanges', () => {
     const { fetchPaneCList } = await oneAskableRow()
     const { user } = await openExchanges()
     const before = vi.mocked(fetchPaneCList).mock.calls.length
-    await user.click(screen.getByRole('button', { name: 'Ask them for their record' }))
+    await user.click(screen.getByRole('button', { name: 'Ask for their record' }))
     expect(await screen.findByText(/The ask didn’t go through/)).toBeInTheDocument()
     expect(vi.mocked(fetchPaneCList).mock.calls.length).toBe(before)
   })

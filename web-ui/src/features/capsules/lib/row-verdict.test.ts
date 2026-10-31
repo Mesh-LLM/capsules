@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { rightCellText, type RightCellStateKind } from '@/features/capsules/lib/exchange-row-state'
-import { rowSteps, rowVerdictText } from '@/features/capsules/lib/row-verdict'
+import { isWaitingForTheirRecord, rowSteps, rowVerdictText } from '@/features/capsules/lib/row-verdict'
 
 const state = (kind: RightCellStateKind) => ({ kind, date: '2026-10-22T10:00:00Z' })
 
@@ -42,5 +42,23 @@ describe('the three steps', () => {
     const steps = rowSteps({ sealed: true, inCheckpoint: false, confirmed: true })
     expect(steps.map((s) => s.label)).toEqual(['Sealed', 'In a checkpoint', 'Confirmed by them'])
     expect(steps.map((s) => s.reached)).toEqual([true, false, true])
+  })
+})
+
+describe('isWaitingForTheirRecord', () => {
+  it('is true exactly for the states whose face reads "Waiting for their record"', () => {
+    const kinds: RightCellStateKind[] = [
+      'closed',
+      'contradicted',
+      'open_refused',
+      'open_absent',
+      'open_asked',
+      'open_not_held',
+      'open_not_given',
+      'open_not_asked'
+    ]
+    for (const kind of kinds) {
+      expect(isWaitingForTheirRecord(kind), kind).toBe(rowVerdictText(state(kind), 'x') === 'Waiting for their record')
+    }
   })
 })

@@ -1,4 +1,4 @@
-// "Ask them for their record" (UX §3): a row whose other side's record hasn't
+// "Ask for their record" (UX §3): a row whose other side's record hasn't
 // arrived can ask that node for it, as soon as our record names that node. The plugin sends one
 // evidence request over the mesh and verifies the reply before handing it
 // over (`api/evidenceRequestClient.ts`); this module judges what came back,
@@ -167,7 +167,7 @@ export type RowAskInput = {
   historyAsk: { kind: string } | null
 }
 
-export const ASK_RECORD_LABEL = 'Ask them for their record'
+export const ASK_RECORD_LABEL = 'Ask for their record'
 export const ASK_RECORD_AGAIN_LABEL = 'Ask again for their record'
 export const ASK_HISTORY_LABEL = 'Ask for their history'
 export const ASKING_LABEL = 'Asking…'

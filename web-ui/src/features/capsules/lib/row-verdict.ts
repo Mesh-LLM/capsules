@@ -34,6 +34,14 @@ export function rowVerdictText(state: RightCellState, peer: string | null, notOn
   }
 }
 
+/** The row states whose face reads "Waiting for their record": their half
+ *  has not arrived. Only these rows offer the ask for their record; a row
+ *  that holds both halves, or holds their signed answer to the ask, has
+ *  nothing left to request. */
+export function isWaitingForTheirRecord(kind: RightCellState['kind']): boolean {
+  return kind === 'open_asked' || kind === 'open_not_held' || kind === 'open_not_given' || kind === 'open_not_asked'
+}
+
 export type RowStep = { key: keyof typeof ROW_STEP_LABELS; label: string; reached: boolean }
 
 /** `Sealed → In a checkpoint → Confirmed by them`. Each step is reached on

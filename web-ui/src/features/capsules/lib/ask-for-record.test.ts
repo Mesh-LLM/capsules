@@ -208,7 +208,7 @@ describe('rowAskControls', () => {
   it('offers both asks at once on a row whose record has not arrived: no timeout', () => {
     for (const kind of ['open_not_given', 'open_not_held', 'open_not_asked'] as const) {
       expect(rowAskControls(input({ kind }))).toEqual({
-        record: { label: 'Ask them for their record', disabledReason: null },
+        record: { label: 'Ask for their record', disabledReason: null },
         history: { label: 'Ask for their history', disabledReason: null }
       })
     }
