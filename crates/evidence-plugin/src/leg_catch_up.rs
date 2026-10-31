@@ -8,23 +8,29 @@
 //! **Which legs.** The sender of a push seals nothing when it succeeds (the
 //! citing records are the receiver's), so this node's ledger cannot tell a
 //! covered push from a bare one. What tells is the receiver's reply: it names
-//! the verified inclusion only for a bundle. Each such reply for a terms leg
-//! is noted in [`COVERED_FILE`] ([`note_reply`]), both here and when a new leg
-//! is pushed. Every own terms leg not noted there is due: one pushed bare by
-//! a release before the fix, or one whose push failed and expired from the
+//! the verified inclusion only for a bundle. The outcome of a push of a terms
+//! leg is recorded in [`OUTCOMES_FILE`] ([`record`]): `covered`, here and when
+//! a new leg is pushed; and, here only, `no_inclusion` (the receiver took the
+//! leg but predates bundles, so it was sent bare) or `refused` (a final
+//! refusal). Only `covered` means covered, but each is final: a leg with an
+//! outcome is never pushed again, so an older receiver is not sent the bare
+//! leg on every start. Every own terms leg with none is due: one pushed bare
+//! by a release before the fix, or one whose push failed and expired from the
 //! in-memory retry queue ([`crate::settlement_legs`]).
 //!
 //! **Which peer.** A terms leg names no peer, so it is read from what this
 //! node sealed: the leg's payment hash, the payer settlement record of that
 //! invoice (its host exchange id), and this node's requested exchange record
 //! for that id (the peer that served it). A leg for which that join does not
-//! give exactly one peer is skipped and logged, never guessed.
+//! give exactly one peer is skipped and counted, never guessed.
 //!
-//! **Bounded.** At most [`MAX_PER_RUN`] legs per run, oldest first; one run
-//! per process. A leg whose push fails, or whose receiver predates bundles,
-//! is not noted, so the next run tries it again.
+//! **Bounded.** One run per process, of at most [`MAX_PER_RUN`] push
+//! attempts, oldest leg first. A peer a push did not reach is not tried again
+//! in that run, so legs stuck on a peer that is gone never keep the run from
+//! the others. A push that did not reach a receiver records nothing, and the
+//! next run tries it again.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,12 +40,15 @@ use serde_json::{json, Value};
 
 use crate::producer::capsule::SETTLEMENT_BLOCK_POINTER;
 
-/// One line per own terms leg whose push a provider acknowledged with the
-/// inclusion it verified: `{capsule_id, peer, checkpoint_digest, covered_at}`.
-pub const COVERED_FILE: &str = "covered-terms-legs.jsonl";
+/// One line per own terms leg whose push ended: `{capsule_id, outcome, peer,
+/// at}`, `outcome` an [`Outcome`]'s wire value.
+pub const OUTCOMES_FILE: &str = "covered-terms-legs.jsonl";
 
-/// How many legs one run pushes again.
+/// How many pushes one run attempts.
 pub const MAX_PER_RUN: usize = 64;
+
+/// How many of the legs left for want of a peer a plan names.
+const UNKNOWN_PEER_NAMED: usize = 3;
 
 /// A terms leg to push again to `peer`, under a checkpoint covering it.
 #[derive(Debug, Clone, PartialEq)]
@@ -48,16 +57,52 @@ pub struct Due {
     pub capsule: Value,
 }
 
-/// What a run pushes, and how many due legs it left for want of a peer.
+/// The legs due, oldest first, and the legs left for want of a peer: how
+/// many, and the first few ids.
 #[derive(Debug, Default, PartialEq)]
 pub struct Plan {
     pub due: Vec<Due>,
-    pub unknown_peer: Vec<String>,
+    pub unknown_peer: usize,
+    pub unknown_peer_ids: Vec<String>,
 }
 
-/// One writer of [`COVERED_FILE`] at a time: the catch-up and new pushes both
-/// append.
-static COVERED_WRITER: Mutex<()> = Mutex::new(());
+/// How a push of a terms leg ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// The receiver holds the leg and the inclusion it verified.
+    Covered,
+    /// The receiver took the leg with no inclusion: it predates bundles.
+    NoInclusion,
+    /// The receiver refused the push for good.
+    Refused,
+}
+
+impl Outcome {
+    pub fn wire(self) -> &'static str {
+        match self {
+            Outcome::Covered => "covered",
+            Outcome::NoInclusion => "no_inclusion",
+            Outcome::Refused => "refused",
+        }
+    }
+}
+
+/// A receiver's refusal of a push, the error `record_push_bridge` returns
+/// for one, so a caller can tell it from a push that never arrived.
+#[derive(Debug)]
+pub struct Refused(pub Value);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "refused record-push: {}", self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+/// One writer of [`OUTCOMES_FILE`] at a time: the catch-up and new pushes
+/// both append.
+static OUTCOMES_WRITER: Mutex<()> = Mutex::new(());
 
 /// Whether this process's run has started.
 static STARTED: AtomicBool = AtomicBool::new(false);
@@ -67,15 +112,15 @@ pub fn claim_run() -> bool {
     !STARTED.swap(true, Ordering::SeqCst)
 }
 
-/// The legs due in the ledger at `ledger_dir`, oldest first, at most `limit`.
-pub fn plan(ledger_dir: &Path, limit: usize) -> Plan {
+/// Every leg due in the ledger at `ledger_dir`, oldest first.
+pub fn plan(ledger_dir: &Path) -> Plan {
     let records = crate::evidence_panes::read_capsule_records(ledger_dir);
-    plan_from(&records, &covered(ledger_dir), limit)
+    plan_from(&records, &ended(ledger_dir))
 }
 
 /// [`plan`] over `records` (this node's own, in ledger order) and the legs
-/// already noted as covered.
-pub fn plan_from(records: &[Value], covered: &HashSet<String>, limit: usize) -> Plan {
+/// whose push already ended.
+pub fn plan_from(records: &[Value], ended: &HashSet<String>) -> Plan {
     // The payer's invoices: payment hash -> the host exchange ids its
     // settlement records name for it.
     let mut invoices: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
@@ -116,13 +161,10 @@ pub fn plan_from(records: &[Value], covered: &HashSet<String>, limit: usize) -> 
     };
     let mut plan = Plan::default();
     for record in records {
-        if plan.due.len() >= limit {
-            break;
-        }
         let Some((capsule_id, hash)) = own_terms_leg(record) else {
             continue;
         };
-        if covered.contains(capsule_id) {
+        if ended.contains(capsule_id) {
             continue;
         }
         let peer =
@@ -132,10 +174,79 @@ pub fn plan_from(records: &[Value], covered: &HashSet<String>, limit: usize) -> 
                 peer,
                 capsule: record.clone(),
             }),
-            None => plan.unknown_peer.push(capsule_id.to_string()),
+            None => {
+                plan.unknown_peer += 1;
+                if plan.unknown_peer_ids.len() < UNKNOWN_PEER_NAMED {
+                    plan.unknown_peer_ids.push(capsule_id.to_string());
+                }
+            }
         }
     }
     plan
+}
+
+/// One run over a plan's due legs: [`Run::next`] gives the next leg to push,
+/// at most `limit` in all, past the legs of a peer named [`Run::unreached`].
+pub struct Run {
+    due: VecDeque<Due>,
+    left: usize,
+    unreached: HashSet<String>,
+}
+
+impl Run {
+    pub fn new(due: Vec<Due>, limit: usize) -> Self {
+        Self {
+            due: due.into(),
+            left: limit,
+            unreached: HashSet::new(),
+        }
+    }
+
+    pub fn next(&mut self) -> Option<Due> {
+        if self.left == 0 {
+            return None;
+        }
+        let leg = loop {
+            let leg = self.due.pop_front()?;
+            if !self.unreached.contains(&leg.peer) {
+                break leg;
+            }
+        };
+        self.left -= 1;
+        Some(leg)
+    }
+
+    /// A push to `peer` did not reach it: its other legs wait for the next run.
+    pub fn unreached(&mut self, peer: &str) {
+        self.unreached.insert(peer.to_string());
+    }
+}
+
+/// How a push of `capsule` ended; `None` when no receiver answered for good:
+/// the push did not arrive, or the receiving bridge refused it only because
+/// its own citing record did not seal, which asks for a retry.
+pub fn outcome_of(capsule: &Value, pushed: &anyhow::Result<Value>) -> Option<Outcome> {
+    match pushed {
+        Ok(reply) if names_inclusion(capsule, reply) => Some(Outcome::Covered),
+        Ok(_) => Some(Outcome::NoInclusion),
+        Err(error) => {
+            let Refused(reply) = error.downcast_ref::<Refused>()?;
+            let reason = reply.get("reason").and_then(Value::as_str);
+            (reason != Some(crate::record_push_bridge::SEAL_FAILED_REFUSAL_REASON))
+                .then_some(Outcome::Refused)
+        }
+    }
+}
+
+/// Whether `reply` acknowledges a bundle of `capsule`: it names the
+/// inclusion the receiver verified and holds for it.
+pub fn names_inclusion(capsule: &Value, reply: &Value) -> bool {
+    let id = capsule.get("capsule_id").and_then(Value::as_str);
+    id.is_some()
+        && reply
+            .pointer("/inclusion/half_capsule_id")
+            .and_then(Value::as_str)
+            == id
 }
 
 /// A payer's terms leg: its capsule id and payment hash.
@@ -154,9 +265,9 @@ fn own_terms_leg(record: &Value) -> Option<(&str, &str)> {
     ))
 }
 
-/// The terms legs noted as covered. A torn line is skipped.
-fn covered(ledger_dir: &Path) -> HashSet<String> {
-    std::fs::read_to_string(ledger_dir.join(COVERED_FILE))
+/// The terms legs whose push ended. A torn line is skipped.
+fn ended(ledger_dir: &Path) -> HashSet<String> {
+    std::fs::read_to_string(ledger_dir.join(OUTCOMES_FILE))
         .unwrap_or_default()
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
@@ -164,46 +275,36 @@ fn covered(ledger_dir: &Path) -> HashSet<String> {
         .collect()
 }
 
-/// Note `capsule` (an own terms leg pushed to `peer`) as covered when
-/// `reply` is the receiver's acknowledgement of a bundle naming it: the
-/// inclusion it verified and holds. Returns whether it was noted. A reply
-/// with no inclusion (a bare push, or a receiver predating bundles) notes
-/// nothing, so the leg stays due.
-pub fn note_reply(
+/// Record `outcome` for `capsule`, an own terms leg pushed to `peer`. A leg
+/// keeps its first outcome.
+pub fn record(
     ledger_dir: &Path,
     capsule: &Value,
     peer: &str,
-    reply: &Value,
-) -> std::io::Result<bool> {
+    outcome: Outcome,
+) -> std::io::Result<()> {
     let Some((capsule_id, _)) = own_terms_leg(capsule) else {
-        return Ok(false);
+        return Ok(());
     };
-    let Some(inclusion) = reply
-        .get("inclusion")
-        .filter(|i| i.get("half_capsule_id").and_then(Value::as_str) == Some(capsule_id))
-    else {
-        return Ok(false);
-    };
-    let _one = COVERED_WRITER
+    let _one = OUTCOMES_WRITER
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if covered(ledger_dir).contains(capsule_id) {
-        return Ok(true);
+    if ended(ledger_dir).contains(capsule_id) {
+        return Ok(());
     }
     let mut line = serde_json::to_vec(&json!({
         "capsule_id": capsule_id,
+        "outcome": outcome.wire(),
         "peer": peer,
-        "checkpoint_digest": inclusion.get("checkpoint_digest"),
-        "covered_at": crate::producer::timestamp::utc_now_minute(),
+        "at": crate::producer::timestamp::utc_now_minute(),
     }))?;
     line.push(b'\n');
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(ledger_dir.join(COVERED_FILE))?;
+        .open(ledger_dir.join(OUTCOMES_FILE))?;
     file.write_all(&line)?;
-    file.sync_all()?;
-    Ok(true)
+    file.sync_all()
 }
 
 #[cfg(test)]
@@ -273,10 +374,39 @@ mod tests {
             .collect()
     }
 
+    /// The records of a payer whose terms leg `id` (invoice `hash`) is of
+    /// exchange `exchange`, served by `peer`; with `peer` `None`, nothing names
+    /// the server.
+    fn sealed(id: &str, hash: &str, exchange: &str, peer: Option<&str>) -> Vec<Value> {
+        let mut records = vec![json!({"model_attestation": {"compute_attestation": {
+            "x-mesh-settlement-v1": {
+                "observed_by": "payer", "phase": "input_invoice_issued",
+                "payment_hash": hash, "exchange_id": exchange}}}})];
+        if let Some(peer) = peer {
+            records.push(requested(exchange, peer));
+        }
+        records.push(json!({"capsule_id": id, "settlement": {
+            "leg": "terms", "sealer_role": "payer",
+            "payment_ref": {"type": "ln.payment_hash", "value": hash}}}));
+        records
+    }
+
+    fn requested(exchange: &str, peer: &str) -> Value {
+        json!({"model_attestation": {"compute_attestation": {"x-mesh-poc-v1": {
+            "role": "requested",
+            "serving_provenance": {"exchange_id": exchange, "served_by_node_id": peer}}}}})
+    }
+
+    fn ids(due: &[Due]) -> Vec<&str> {
+        due.iter()
+            .map(|d| d.capsule["capsule_id"].as_str().unwrap())
+            .collect()
+    }
+
     /// A terms leg the provider holds from a bare push is pushed again under
     /// a checkpoint covering it: the provider then holds its inclusion and
     /// seals its `counterparty_inclusion` citing record, without holding or
-    /// citing the half a second time. The payer notes the leg covered, so a
+    /// citing the half a second time. The payer records the leg covered, so a
     /// second run pushes nothing.
     #[tokio::test]
     async fn a_leg_pushed_bare_is_covered_once_by_the_catch_up() {
@@ -289,8 +419,8 @@ mod tests {
             &crate::commitment::key_id(payer.signing_key()),
         );
         let ledger = payer.ledger_dir().to_path_buf();
-        let plan = plan(&ledger, MAX_PER_RUN);
-        assert!(plan.unknown_peer.is_empty(), "{plan:?}");
+        let plan = plan(&ledger);
+        assert_eq!(plan.unknown_peer, 0, "{plan:?}");
         let [due] = plan.due.as_slice() else {
             panic!("one leg due: {plan:?}");
         };
@@ -305,11 +435,10 @@ mod tests {
         )
         .await;
         assert_eq!(bare["status"], "received", "{bare}");
-        assert!(bare.get("inclusion").is_none());
+        assert!(!names_inclusion(&due.capsule, &bare), "{bare}");
         let held = provider.ledger_dir().to_path_buf();
         let inclusion = crate::record_push_receive::RECEIVED_INCLUSION_FILENAME;
         assert!(lines(&held, inclusion).is_empty());
-        assert!(!note_reply(&ledger, &due.capsule, &due.peer, &bare).unwrap());
 
         // The catch-up: the same leg, under a checkpoint of the payer's log.
         let (state, _) = crate::producer::checkpoint::CheckpointState::load(
@@ -329,7 +458,9 @@ mod tests {
         )
         .await;
         assert_eq!(reply["inclusion"]["half_capsule_id"], leg_id, "{reply}");
-        assert!(note_reply(&ledger, &due.capsule, &due.peer, &reply).unwrap());
+        let outcome = outcome_of(&due.capsule, &Ok(reply)).unwrap();
+        assert_eq!(outcome, Outcome::Covered);
+        record(&ledger, &due.capsule, &due.peer, outcome).unwrap();
 
         let inclusions = lines(&held, inclusion);
         assert_eq!(inclusions.len(), 1, "{inclusions:?}");
@@ -354,8 +485,10 @@ mod tests {
         assert_eq!(cited("counterparty_inclusion"), 1, "its inclusion cited");
 
         // A second run: nothing due, nothing sent.
-        assert_eq!(super::plan(&ledger, MAX_PER_RUN), Plan::default());
-        assert_eq!(lines(&ledger, COVERED_FILE).len(), 1);
+        assert_eq!(super::plan(&ledger), Plan::default());
+        let outcomes = lines(&ledger, OUTCOMES_FILE);
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0]["outcome"], "covered");
     }
 
     /// A leg whose serving peer this node never sealed (no requested record
@@ -364,47 +497,113 @@ mod tests {
     fn a_leg_whose_peer_is_unknown_is_skipped() {
         let dir = tempfile::tempdir().unwrap();
         let payer = payer(dir.path(), "ex-unknown", None);
-        let plan = plan(payer.ledger_dir(), MAX_PER_RUN);
+        let plan = plan(payer.ledger_dir());
         assert!(plan.due.is_empty(), "{plan:?}");
-        assert_eq!(plan.unknown_peer.len(), 1);
+        assert_eq!(plan.unknown_peer, 1);
+        assert_eq!(plan.unknown_peer_ids.len(), 1);
     }
 
     /// Two requested records naming different peers for one exchange leave
-    /// the peer unknown; a run takes at most its bound, oldest first.
+    /// the peer unknown. The plan counts every such leg and names only the
+    /// first few.
     #[test]
-    fn an_ambiguous_peer_is_skipped_and_a_run_is_bounded() {
-        let leg = |id: &str, hash: &str| {
-            json!({"capsule_id": id, "settlement": {
-                "leg": "terms", "sealer_role": "payer",
-                "payment_ref": {"type": "ln.payment_hash", "value": hash}}})
+    fn an_ambiguous_peer_is_skipped_and_counted() {
+        let mut records = sealed("l0", "h0", "e0", Some("p1"));
+        records.push(requested("e0", "p2"));
+        for n in 1..10 {
+            records.extend(sealed(&format!("l{n}"), &format!("h{n}"), "e", None));
+        }
+        let plan = plan_from(&records, &HashSet::new());
+        assert!(plan.due.is_empty());
+        assert_eq!(plan.unknown_peer, 10);
+        assert_eq!(plan.unknown_peer_ids, ["l0", "l1", "l2"]);
+    }
+
+    /// More stuck legs than a run's bound, all to a peer that is gone, ahead
+    /// of a live peer's: the run tries the dead peer once and still reaches
+    /// every live leg, within the bound.
+    #[test]
+    fn legs_stuck_on_a_dead_peer_never_keep_a_run_from_the_others() {
+        let mut records = Vec::new();
+        for n in 0..MAX_PER_RUN + 1 {
+            records.extend(sealed(
+                &format!("dead-{n}"),
+                &format!("hd{n}"),
+                &format!("ed{n}"),
+                Some("dead"),
+            ));
+        }
+        for n in 0..2 {
+            records.extend(sealed(
+                &format!("live-{n}"),
+                &format!("hl{n}"),
+                &format!("el{n}"),
+                Some("live"),
+            ));
+        }
+        let plan = plan_from(&records, &HashSet::new());
+        assert_eq!(plan.due.len(), MAX_PER_RUN + 3, "the plan is not capped");
+        let mut run = Run::new(plan.due, MAX_PER_RUN);
+        let mut pushed = Vec::new();
+        while let Some(leg) = run.next() {
+            if leg.peer == "dead" {
+                run.unreached(&leg.peer);
+            }
+            pushed.push(leg.capsule["capsule_id"].as_str().unwrap().to_string());
+        }
+        assert_eq!(pushed, ["dead-0", "live-0", "live-1"]);
+
+        let mut run = Run::new(plan_from(&records, &HashSet::new()).due, MAX_PER_RUN);
+        let mut attempts = 0;
+        while run.next().is_some() {
+            attempts += 1;
+        }
+        assert_eq!(attempts, MAX_PER_RUN, "a run attempts at most its bound");
+    }
+
+    /// `no_inclusion` and `refused` are final like `covered`: such a leg is
+    /// not sent again. A push that never arrived, or one the receiving bridge
+    /// asked to retry, records nothing and stays due.
+    #[test]
+    fn a_leg_with_a_final_outcome_is_not_sent_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut records = Vec::new();
+        for id in ["older", "refused", "unreached", "retry"] {
+            records.extend(sealed(
+                id,
+                &format!("h-{id}"),
+                &format!("e-{id}"),
+                Some("p"),
+            ));
+        }
+        let leg = |id: &str| {
+            records
+                .iter()
+                .find(|r| r["capsule_id"] == id)
+                .unwrap()
+                .clone()
         };
-        let invoice = |hash: &str, exchange: &str| {
-            json!({"model_attestation": {"compute_attestation": {"x-mesh-settlement-v1": {
-                "observed_by": "payer", "phase": "input_invoice_issued",
-                "payment_hash": hash, "exchange_id": exchange}}}})
+        let refusal = |reason: &str| -> anyhow::Result<Value> {
+            Err(anyhow::Error::new(Refused(json!({"reason": reason}))))
         };
-        let requested = |exchange: &str, peer: &str| {
-            json!({"model_attestation": {"compute_attestation": {"x-mesh-poc-v1": {
-                "role": "requested",
-                "serving_provenance": {"exchange_id": exchange, "served_by_node_id": peer}}}}})
-        };
-        let records = vec![
-            invoice("h1", "e1"),
-            requested("e1", "p1"),
-            requested("e1", "p2"),
-            leg("l1", "h1"),
-            invoice("h2", "e2"),
-            requested("e2", "p1"),
-            leg("l2", "h2"),
-            leg("l3", "h2"),
+        let pushes = [
+            ("older", Ok(json!({"status": "received"}))),
+            ("refused", refusal("checkpoint_stale")),
+            ("unreached", Err(anyhow::anyhow!("could not reach peer p"))),
+            (
+                "retry",
+                refusal(crate::record_push_bridge::SEAL_FAILED_REFUSAL_REASON),
+            ),
         ];
-        let plan = plan_from(&records, &HashSet::new(), 1);
-        assert_eq!(plan.unknown_peer, ["l1"]);
-        assert_eq!(plan.due.len(), 1);
-        assert_eq!(plan.due[0].capsule["capsule_id"], "l2");
-        let covered: HashSet<String> = ["l2".to_string()].into();
-        let rest = plan_from(&records, &covered, MAX_PER_RUN);
-        assert_eq!(rest.due.len(), 1);
-        assert_eq!(rest.due[0].capsule["capsule_id"], "l3");
+        let mut ended = Vec::new();
+        for (id, pushed) in &pushes {
+            if let Some(outcome) = outcome_of(&leg(id), pushed) {
+                record(dir.path(), &leg(id), "p", outcome).unwrap();
+                ended.push((*id, outcome.wire()));
+            }
+        }
+        assert_eq!(ended, [("older", "no_inclusion"), ("refused", "refused")]);
+        let next = plan_from(&records, &super::ended(dir.path()));
+        assert_eq!(ids(&next.due), ["unreached", "retry"]);
     }
 }

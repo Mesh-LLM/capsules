@@ -734,7 +734,12 @@ async fn push_settlement_legs(
         {
             Ok(reply) => {
                 tracing::debug!(peer = %push.peer, "pushed settlement terms leg");
-                note_covered_leg(capsules, &push.capsule, &push.peer, &reply);
+                // Only `covered` is final here: a leg pushed bare (the
+                // cadence off, or no checkpoint) is still the catch-up's.
+                if leg_catch_up::names_inclusion(&push.capsule, &reply) {
+                    let covered = leg_catch_up::Outcome::Covered;
+                    record_leg_outcome(capsules, &push.capsule, &push.peer, covered).await;
+                }
             }
             Err(error) => {
                 tracing::warn!(%error, peer = %push.peer, "settlement terms leg push failed; held for retry");
@@ -744,12 +749,31 @@ async fn push_settlement_legs(
     }
 }
 
-/// Note a pushed terms leg as covered when the provider's reply names the
-/// inclusion it holds for it, so the catch-up ([`leg_catch_up`]) never sends
-/// it again.
-fn note_covered_leg(capsules: &CapsuleState, capsule: &Value, peer: &str, reply: &Value) {
-    if let Err(error) = leg_catch_up::note_reply(capsules.ledger_dir(), capsule, peer, reply) {
-        tracing::warn!(%error, %peer, "a covered terms leg was not noted; the catch-up may send it again");
+/// Record how a push of a terms leg ended ([`leg_catch_up`]), off the async
+/// runtime: the record is read and synced to disk.
+async fn record_leg_outcome(
+    capsules: &CapsuleState,
+    capsule: &Value,
+    peer: &str,
+    outcome: leg_catch_up::Outcome,
+) {
+    let (ledger_dir, capsule, peer) = (
+        capsules.ledger_dir().to_path_buf(),
+        capsule.clone(),
+        peer.to_string(),
+    );
+    let recorded = tokio::task::spawn_blocking(move || {
+        leg_catch_up::record(&ledger_dir, &capsule, &peer, outcome)
+    })
+    .await;
+    match recorded {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(%error, outcome = outcome.wire(), "a terms leg push outcome was not recorded; the catch-up may send it again")
+        }
+        Err(join_error) => {
+            tracing::warn!(%join_error, "terms leg outcome task did not complete")
+        }
     }
 }
 
@@ -774,22 +798,27 @@ fn start_leg_catch_up(
         (context.owned(), capsules.clone(), checkpoints.clone());
     tokio::spawn(async move {
         let ledger_dir = capsules.ledger_dir().to_path_buf();
-        let plan = tokio::task::spawn_blocking(move || {
-            leg_catch_up::plan(&ledger_dir, leg_catch_up::MAX_PER_RUN)
-        })
-        .await
-        .unwrap_or_default();
-        for capsule_id in &plan.unknown_peer {
-            tracing::info!(%capsule_id, "terms leg not pushed again: its serving peer is not in this node's records");
+        let plan = tokio::task::spawn_blocking(move || leg_catch_up::plan(&ledger_dir))
+            .await
+            .unwrap_or_default();
+        if plan.unknown_peer > 0 {
+            tracing::info!(
+                count = plan.unknown_peer,
+                first = ?plan.unknown_peer_ids,
+                "terms legs not pushed again: their serving peer is not in this node's records"
+            );
         }
-        let (mut covered, due) = (0usize, plan.due.len());
-        for leg in plan.due {
+        let due = plan.due.len();
+        let mut run = leg_catch_up::Run::new(plan.due, leg_catch_up::MAX_PER_RUN);
+        let (mut attempted, mut covered) = (0usize, 0usize);
+        while let Some(leg) = run.next() {
             // Only a covered push adds anything: the provider holds the leg.
             let Some(coverage) = push_coverage(Some(&checkpoints), &leg.capsule, &leg.peer).await
             else {
                 continue;
             };
-            match record_push_bridge::push_capsule_to_peer(
+            attempted += 1;
+            let pushed = record_push_bridge::push_capsule_to_peer(
                 &mut context,
                 &leg.peer,
                 &self_id,
@@ -798,24 +827,24 @@ fn start_leg_catch_up(
                 &[],
                 None,
             )
-            .await
-            {
-                Ok(reply) => {
-                    note_covered_leg(&capsules, &leg.capsule, &leg.peer, &reply);
-                    covered += 1;
+            .await;
+            match leg_catch_up::outcome_of(&leg.capsule, &pushed) {
+                Some(outcome) => {
+                    if outcome == leg_catch_up::Outcome::Covered {
+                        covered += 1;
+                    }
+                    record_leg_outcome(&capsules, &leg.capsule, &leg.peer, outcome).await;
                 }
-                Err(error) => {
-                    tracing::warn!(%error, peer = %leg.peer, "terms leg catch-up push failed; the next run tries again");
+                None => {
+                    if let Err(error) = &pushed {
+                        tracing::warn!(%error, peer = %leg.peer, "terms leg catch-up push did not reach the peer; its legs wait for the next run");
+                    }
+                    run.unreached(&leg.peer);
                 }
             }
         }
-        if due > 0 || !plan.unknown_peer.is_empty() {
-            tracing::info!(
-                due,
-                covered,
-                unknown_peer = plan.unknown_peer.len(),
-                "terms leg catch-up done"
-            );
+        if due > 0 {
+            tracing::info!(due, attempted, covered, "terms leg catch-up done");
         }
     });
 }
