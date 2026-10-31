@@ -8,7 +8,7 @@
 // internal item IDs, or any branded service name. Comments are exempt.
 import { Fragment, type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeftRight, FolderOpen, Search as SearchIcon, ShieldCheck, Trash2, Users } from 'lucide-react'
+import { ArrowLeftRight, FolderOpen, Search as SearchIcon, Trash2, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -19,6 +19,8 @@ import { StatusBadge } from '@/components/ui/StatusBadge'
 import { navigateHost } from '@/plugin-host/host'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { TabPanel } from '@/components/ui/TabPanel'
+import { AttackCards } from '@/features/capsules/components/AttackCards'
+import { buildAttackCards } from '@/features/capsules/lib/attack-cards'
 import { fetchCapsuleLedger, fetchServedHistory } from '@/features/capsules/api/client'
 import { historyPage, settlementPage } from '@/features/capsules/lib/saved-pages'
 import { announcedKeyFor, askForHistory, askForRecord } from '@/features/capsules/api/evidenceRequestClient'
@@ -140,14 +142,11 @@ import { useStatusQuery } from '@/features/network/api/use-status-query'
 import { useDataMode } from '@/lib/data-mode'
 import { HoverChip } from '@/features/capsules/components/HoverChip'
 import {
-  HERO_DESCRIPTION_AFTER_LINK,
-  HERO_DESCRIPTION_BEFORE_LINK,
-  HERO_DESCRIPTION_LINK_TEXT,
+  HERO_DESCRIPTION,
   CONTINUITY_TOOLTIP,
   SAVE_EVIDENCE_FILE_TOOLTIP,
   SETUP_STEPS_LABEL,
   SETUP_STEPS_TOOLTIP,
-  DOCS_URL,
   HERO_TOOLTIPS,
   EXCHANGE_TEXT_DELETE_NOW,
   CLOSE_CARD_COUNTS_TOOLTIP,
@@ -1609,26 +1608,22 @@ export function LedgerPageContent({ focusExchangeKey }: { focusExchangeKey?: str
   const [recordsOpen, setRecordsOpen] = useState(false)
   const paneACard = paneAStatusQuery.data?.card ?? null
   const paneARows = paneAStatusQuery.data?.rows ?? []
+  // The three attack cards read the same queries as the hero line and Integrity tiles.
+  const attackCards =
+    paneAStatusQuery.isSuccess && paneCHeroQuery.isSuccess
+      ? buildAttackCards({
+          records: paneAStatusQuery.data.rows.length,
+          covered: coveredRecordCount(paneACard),
+          witness: checkpointRegistration(paneACard).witnessState,
+          rows: paneCHeroQuery.data.rows
+        })
+      : null
 
   return (
     <TooltipProvider delayDuration={250} skipDelayDuration={120}>
       <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-[calc(var(--shell-normal)*2)]">
         <InfoBanner
-          description={
-            <>
-              {HERO_DESCRIPTION_BEFORE_LINK}
-              <a
-                className="underline underline-offset-2 hover:text-foreground"
-                href={DOCS_URL}
-                rel="noreferrer"
-                target="_blank"
-              >
-                {HERO_DESCRIPTION_LINK_TEXT}
-              </a>
-              {HERO_DESCRIPTION_AFTER_LINK}
-            </>
-          }
-          leadingIcon={<ShieldCheck aria-hidden="true" className="size-4" />}
+          description={HERO_DESCRIPTION}
           status={
             <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-1">
@@ -1639,11 +1634,6 @@ export function LedgerPageContent({ focusExchangeKey }: { focusExchangeKey?: str
                 >
                   {EVIDENCE_SOURCE_LABEL[source]}
                 </StatusBadge>
-                <InfoHover
-                  census={`hero:${source}`}
-                  describes={`the ${EVIDENCE_SOURCE_LABEL[source]} chip`}
-                  label={HERO_TOOLTIPS[source]}
-                />
               </span>
             </div>
           }
@@ -1729,6 +1719,13 @@ export function LedgerPageContent({ focusExchangeKey }: { focusExchangeKey?: str
           sample={source === 'sample'}
           status={recordsStatus}
         />
+
+        {attackCards ? (
+          <AttackCards
+            cards={attackCards}
+            onAction={setActiveTab}
+          />
+        ) : null}
 
         <Card className="overflow-clip rounded-[var(--radius-lg)] border-border bg-panel p-4 shadow-none">
           <TabPanel<LedgerTab>

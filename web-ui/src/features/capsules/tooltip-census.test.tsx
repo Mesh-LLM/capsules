@@ -286,8 +286,8 @@ describe('tooltip census -- every chip type the Evidence tab ships has a plain o
     const seen = censusOnScreen()
     expectCovered(REQUIRED.hero, seen, 'face')
     expectCovered(REQUIRED.peers, seen, 'face')
-    // The live/local chip: one of the two, whichever state the page is in.
-    expect(seen.has('hero:live') || seen.has('hero:local') || seen.has('hero:sample')).toBe(true)
+    // The header carries no icons (Steven's word budget), so the live/local chip has no (i) any more.
+    expect(seen.has('hero:live') || seen.has('hero:local') || seen.has('hero:sample')).toBe(false)
     // No generic warning glyph anywhere on the Peers face (§8).
     expect(document.body.textContent).not.toContain('⚠')
   })

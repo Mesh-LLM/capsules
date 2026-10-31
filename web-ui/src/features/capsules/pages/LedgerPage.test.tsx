@@ -21,7 +21,7 @@ import { setPluginHost } from '@/plugin-host/host'
 import { createStandaloneHost } from '@/plugin-host/standalone-host'
 import { CHAIN_BAR_INFO, INTEGRITY_TILE_INFO } from '@/features/capsules/lib/integrity-view'
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
-import { HERO_DESCRIPTION, DOCS_URL } from '@/features/capsules/lib/tooltip-copy'
+import { HERO_DESCRIPTION } from '@/features/capsules/lib/tooltip-copy'
 import { HISTORY_MEMORY_KEY } from '@/features/capsules/lib/history-memory'
 
 // ---------------------------------------------------------------------------
@@ -176,9 +176,10 @@ describe('LedgerPageContent', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('shows the premise line, with "docs" linking what the page can and cannot show', () => {
+  it('shows the 20-word premise line, with no docs link and no icon', () => {
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
-    expect(screen.getByRole('link', { name: 'docs' })).toHaveAttribute('href', DOCS_URL)
+    expect(HERO_DESCRIPTION.split(/\s+/)).toHaveLength(20)
+    expect(screen.queryByRole('link', { name: 'docs' })).not.toBeInTheDocument()
     expect(screen.queryByText(/Everything here is checked on this machine/)).not.toBeInTheDocument()
 
     expect(
@@ -186,20 +187,21 @@ describe('LedgerPageContent', () => {
     ).toBeInTheDocument()
   })
 
-  it('Item 4: the honesty banner STAYS visible while the chip (i)s carry their detail (hovers explain, never hide, the banner)', () => {
+  it('the premise line stays on the face and the connectivity chip carries no info icon', () => {
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
-
-    // The load-bearing banner is still on the face -- hovers do not replace it.
     expect(
       screen.getByText((_, element) => element?.textContent === HERO_DESCRIPTION && element.tagName === 'DIV')
     ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'About the Live chip' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'About the Local chip' })).not.toBeInTheDocument()
+  })
 
-    // The connectivity chip's (i) is present too (Live or Local depending on
-    // the harness's sidecar-connected state).
-    const liveGlyph =
-      screen.queryByRole('button', { name: 'About the Live chip' }) ??
-      screen.getByRole('button', { name: 'About the Local chip' })
-    expect(liveGlyph).toBeInTheDocument()
+  it('shows the attack cards once the panes load, and a card action switches the tab', async () => {
+    const user = userEvent.setup()
+    render(<LedgerPageContent />, { wrapper: makeWrapper() })
+    const region = await screen.findByRole('region', { name: 'Three ways a stranger could cheat you' })
+    await user.click(within(region).getByRole('button', { name: 'Turn on a witness' }))
+    expect(screen.getByRole('tab', { name: /integrity/i })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('shows no leaked IDs in empty state', () => {
