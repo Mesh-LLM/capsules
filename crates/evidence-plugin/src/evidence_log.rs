@@ -589,6 +589,17 @@ impl LedgerIndex {
         cll::mmr::inclusion_proof(&self.nodes, leaf_index, size)
     }
 
+    /// The range proof of leaf indices `from..=to` in the MMR of `size`
+    /// nodes (cll's CLL #13 proof).
+    pub fn range_proof(
+        &self,
+        from: u64,
+        to: u64,
+        size: u64,
+    ) -> Result<cll::range_proof::RangeProof, cll::mmr::MmrError> {
+        cll::range_proof::range_proof(&self.nodes, from, to, size)
+    }
+
     pub fn leaf_index_of(&self, capsule_id: &str) -> Option<u64> {
         self.by_id.get(capsule_id).copied()
     }
