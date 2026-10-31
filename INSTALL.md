@@ -7,6 +7,36 @@ each exchange, and whether this node's log still verifies. It installs and
 runs on an unmodified mesh-llm release (0.77 or newer). No other runtime is
 needed.
 
+## What's new in 0.1.8
+
+**Upgrading from 0.1.7 needs nothing installed on the other node.** For a pushed terms leg to
+carry its proof there, the provider needs a version that reads bundles (any release since bundles
+shipped); an older one keeps the leg bare.
+
+- **With the checkpoint cadence on, a payer's settlement terms leg is pushed with its checkpoint
+  and inclusion proof,** as other pushed records are, so a provider holds the proof that each leg
+  it received was in the payer's log. Legs an earlier version pushed without one are pushed once
+  more, under a checkpoint, soon after the payer starts with the cadence on and sending records at
+  completion on (at the host's first mesh event or its first channel message, whichever comes
+  first): at most 64 per start, to the peer each leg's sealed exchange record names. It re-sends
+  sealed records only and moves no money. A provider that reads bundles adds the proof to the leg
+  it already holds; an older one keeps the leg bare (recorded as `no_inclusion`), and that leg is
+  not re-sent. Each leg also carries this node's controller binding, as its chat halves to that
+  peer do.
+- **Signed checkpoints over the ledger files.** received-capsules, received-provenance,
+  received-inclusion, the three adjudication files and the chain itself each have a node-signed
+  checkpoint with a range proof, on the owner console at
+  `GET …/http/ledger-checkpoint?file=<name>[&from=i&to=j]`; `capsules ledger-check` checks a copy
+  offline. See [docs/LEDGER-CHECKPOINTS.md](docs/LEDGER-CHECKPOINTS.md).
+- **The Evidence tab is redesigned** around the three ways a stranger could cheat: the header and
+  attack cards, the Peers table and drawer, the Integrity tab, "How we checked", and a paid
+  Exchanges row's receipt, checked in the browser.
+- **Configuration is regrouped** into "What you show others", "When answers differ" and "Keeping
+  records"; no setting changes meaning. The Witnesses field suggests the agentactioncapsule.org
+  witness and stores it only when you set it.
+
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules-plugin/blob/main/CHANGELOG.md).
+
 ## What's new in 0.1.7
 
 **Upgrading from 0.1.6 needs nothing on the other node.**
@@ -214,7 +244,7 @@ glibc 2.35 or newer (x86_64 or arm64).
 and set `VERSION` to the release (without the leading `v`):
 
 ```bash
-VERSION=0.1.7
+VERSION=0.1.8
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  TARGET=aarch64-apple-darwin ;;
   Linux-x86_64)  TARGET=x86_64-unknown-linux-gnu ;;
