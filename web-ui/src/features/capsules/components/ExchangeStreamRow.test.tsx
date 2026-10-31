@@ -1741,7 +1741,7 @@ describe('ExchangeStreamRow — the record an ask returned feeds the state, the 
     rerender(<ExchangeStreamRow {...toggleProps()} askOutcome={askOutcome} checksExpanded rail={NO_RAIL} row={row} />)
     // Their record is the one the ask brought, compared field by field; the
     // panel's fetch still runs a real fetch, never the asked record's no-op.
-    expect(screen.getAllByText('✕ differs').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('differs').length).toBeGreaterThan(0)
     await user.click(screen.getByRole('button', { name: 'Get their record and check it here' }))
     expect(NOT_FETCHED.fetch).toHaveBeenCalled()
   })
@@ -1816,8 +1816,8 @@ describe('ExchangeStreamRow — a row the pane shows with no other side, whose a
     expect(onToggleChecks).toHaveBeenCalledWith(row)
     rerender(<ExchangeStreamRow {...toggleProps()} askOutcome={askOutcome} checksExpanded rail={NO_RAIL} row={row} />)
     // The panel holds their record although the pane recorded no other side.
-    expect(screen.getAllByText('✕ differs').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('e'.repeat(64)).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('differs').length).toBeGreaterThan(0)
+    expect(document.querySelector(`[data-digest="${'e'.repeat(64)}"]`)).not.toBeNull()
   })
 })
 
@@ -1846,6 +1846,6 @@ describe('ExchangeStreamRow — the checks panel names the record whose checks i
     const panel = screen.getByLabelText(`Security checks for ${row.exchangeKey}`)
     expect(within(panel).getAllByText(idB).length).toBeGreaterThan(0)
     expect(within(panel).queryByText(idA)).not.toBeInTheDocument()
-    expect(within(panel).getAllByText('✕ differs').length).toBeGreaterThan(0)
+    expect(within(panel).getAllByText('differs').length).toBeGreaterThan(0)
   })
 })

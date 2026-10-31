@@ -437,7 +437,7 @@ export const CLOSE_CARD_COUNTS_TOOLTIP =
 /** Where a check result in the checks panel came from, in words. */
 export const CHECK_SOURCE_WORDS = { here: 'checked here', node: 'node says' } as const
 export const CHECK_SOURCE_LEGEND =
-  'checked here = your browser redid this check just now; node says = taken from this node without re-checking.'
+  '✓ checked here: your browser redid it just now. ◐ node says: taken from this node without re-checking. ○ not set up. — nothing to check yet.'
 
 /** Said on the page, always, while this node keeps exchange text: where it
  *  is, how long, and that it is not shared. */

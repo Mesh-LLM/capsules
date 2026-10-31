@@ -850,8 +850,8 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     const alarmRow = screen.getByLabelText('Exchange exch-alarm-07')
     await user.click(within(alarmRow).getByRole('button', { name: 'How we checked ▸' }))
     const checksRegion = await screen.findByRole('region', { name: /Security checks for exch-alarm-07/ })
-    expect(checksRegion).toHaveTextContent('words match')
-    expect(checksRegion).toHaveTextContent('signed')
+    expect(checksRegion).toHaveTextContent('Contents match the record’s id')
+    expect(checksRegion).toHaveTextContent('Signed with the node’s key')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
@@ -1610,7 +1610,7 @@ describe('LedgerPageContent — Part B3: windowed paging + sticky header', () =>
     // Expands the same full-detail checks view inline a click would --
     // never a dialog.
     const checksRegion = await screen.findByRole('region', { name: /Security checks for exch-75/ })
-    expect(checksRegion).toHaveTextContent('exch-75')
+    expect(checksRegion).toHaveAccessibleName(/exch-75/)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 

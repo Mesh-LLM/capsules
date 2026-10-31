@@ -12,6 +12,7 @@
 //     diff), never an equality/inconclusive judgment call.
 import type { ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
 import { parseVerdict, type ParsedVerdict } from '@/features/capsules/lib/adjudication-view'
+import type { RefereeRow } from '@/features/capsules/lib/referee-row'
 
 /** The bracket's one statement of how the pair came to be: a client marked
  *  the two requests as one pair with the `x-mesh-twin-bracket` header. The
@@ -74,6 +75,24 @@ export const TWIN_ANSWER_LABEL: Record<TwinAnswerState, string> = {
   same: 'same answer',
   different: 'different answers',
   not_compared: 'not compared yet'
+}
+
+/** The ruling THIS node asked for on a pair and holds as a sealed record
+ *  (the plugin's `referee_row`, state `adjudicated`), from either row. The
+ *  same rule as the "Swapped the model" card (`attack-cards.ts`): another
+ *  node's ask and a verdict this node issued as a referee are not read here,
+ *  and no mismatch is inferred from the two answers. `null` when no ruling is
+ *  held. */
+export function askedVerdict(
+  rows: readonly { twin?: { referee_row?: RefereeRow | null } | null }[]
+): { verdict: ParsedVerdict; referee: string | null } | null {
+  for (const row of rows) {
+    const recorded = row.twin?.referee_row
+    if (recorded?.state !== 'adjudicated') continue
+    const verdict = parseVerdict(recorded.verdict)
+    if (verdict !== null) return { verdict, referee: recorded.referee || null }
+  }
+  return null
 }
 
 /** A referee's signed verdict for this pair, when one exists. */
