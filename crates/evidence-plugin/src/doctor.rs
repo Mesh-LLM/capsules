@@ -743,7 +743,14 @@ pub async fn handle_doctor(
                 binding.as_ref(),
                 args.probe,
             )
-            .map(|f| json!({"findings": f}))
+            .map(|f| {
+                json!({
+                    "findings": f,
+                    // Admission's price rule (#105): the pack, its digest,
+                    // the operator's profile digest and values.
+                    "admission_price": crate::admission::price::loaded_description(),
+                })
+            })
         })
     })
     .await

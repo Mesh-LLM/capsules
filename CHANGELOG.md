@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+
+- **Admission's price rule (#105).** A peer the admission lists admit is then decided by
+  capsule-engine's guard with its `asg/inference` terms pack (`capsule-engine` crate, pinned at
+  3663fbf), not by a second evaluator here. Its input and output rates, in msat per million tokens,
+  are checked against the caps in the operator's `policy-profile/v0` file
+  (`CAPSULES_ADMISSION_PROFILE`), which may also set the pack's counterparty list. A rate over a
+  cap, an unreadable rate, or a peer that list refuses or asks about gets NO, and the reason names
+  the rule. A free route is GO.
+  - The rates come from the host's `backend_selected` event (`pricing`), which a host sends once it
+    lists `openai_exchange.backend_pricing.v1`. When an attempt carries no price it can trust (an
+    older host, or a request naming no model), the operator's profile fails closed and the
+    shipped caps alone record the price as not checked; `doctor` flags an older host.
+  - The sealed `admission_decision` gains a `price` member (the rates and each check's result,
+    never the peer's id) and a `terms_pack` read citing the pack, its definition digest and a salted
+    commitment to the profile's digest (the profile holds the counterparty list in clear). `doctor` shows them with the profile's values.
+  - With no profile, shipped caps apply as an outlier guard: 500,000 input and 1,500,000 output
+    msat per million (`DEFAULT_RATE_CAPS`), 1000x mesh-llm's CLI default price.
+
 ## 0.1.6
 
 ### Changed

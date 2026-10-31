@@ -378,6 +378,32 @@ your lists, and seal the decision in its book:
 - `CAPSULES_ADMISSION_DENY`: peers to refuse, in the same form. A peer on both lists is refused.
 - `CAPSULES_ADMISSION_DEFAULT`: `go` (the default) or `no`, for a peer on neither list.
 
+A peer your lists admit then meets the price rule, decided by capsule-engine's `asg/inference`
+terms pack (the same evaluator and vectors Muse uses). It compares the input and output rates the
+peer advertised for the model, in msat per million tokens, with your caps:
+
+- `CAPSULES_ADMISSION_PROFILE`: the path of a `policy-profile/v0` JSON file. For example:
+
+  ```json
+  {"format":"policy-profile/v0","packs":[{"pack":"asg/inference","parameters":{
+    "rate_cap":{"max_input_msat_per_million":2000000,"max_output_msat_per_million":8000000}}}]}
+  ```
+
+  It may also set the pack's `counterparty_list`. A rate over a cap, a rate the peer did not
+  state, or a peer that list refuses gets NO, naming the rule. A free route (no price) is GO.
+  With no file set, the shipped caps apply: 500,000 and 1,500,000 msat per million, far above
+  any real price, so they only stop an outlier. A file that does not read gives every peer NO
+  until you fix it and restart mesh-llm. Your file is yours: an upgrade never rewrites it.
+
+The rates are the ones mesh-llm routed on, which a host sends with each attempt once it lists
+`openai_exchange.backend_pricing.v1`. When the price is not known (an older host, or a request that
+names no model, whose route mesh-llm never prices): with your profile set, the peer gets NO,
+failing closed; with only the shipped caps, the rule is recorded as not checked, and on an older
+host `doctor` warns that it is inactive. Each
+decision cites the pack, its definition digest and a salted commitment to your profile's digest
+(the profile holds your list in clear), and `doctor` shows the digest with your values. A profile
+that sets no `rate_cap` keeps the shipped caps.
+
 Each decision also records what the base policy's five rows (policy `base/1`) read about the peer,
 from its history card and this node's own book. The rows decide nothing: only your settings give a
 NO. They record:

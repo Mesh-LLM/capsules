@@ -55,6 +55,7 @@ use crate::capsule_emit::CapsuleState;
 use crate::producer::capsule::peer_commitment;
 
 pub mod base;
+pub mod price;
 
 pub const ALLOW_SETTING: &str = "CAPSULES_ADMISSION_ALLOW";
 pub const DENY_SETTING: &str = "CAPSULES_ADMISSION_DENY";
@@ -97,6 +98,11 @@ pub enum Source {
     UnreadableTarget,
     /// The operator's settings did not read or parse.
     UnreadablePolicy,
+    /// The price rule refused (#105): a rate over a cap, a peer the profile's
+    /// list refuses, or a price the host does not send under a cap.
+    PriceRule,
+    /// The operator's price profile did not read or decode.
+    UnreadableProfile,
 }
 
 impl Source {
@@ -107,6 +113,8 @@ impl Source {
             Self::Default => "default",
             Self::UnreadableTarget => "unreadable_target",
             Self::UnreadablePolicy => "unreadable_policy",
+            Self::PriceRule => "price_rule",
+            Self::UnreadableProfile => "unreadable_profile",
         }
     }
 }
@@ -292,16 +300,27 @@ pub struct Admission {
     policy_digest: Option<String>,
     seal: Seal,
     base: Arc<base::Base>,
+    /// The price rule; `None` when the operator's profile did not read, and
+    /// every peer then gets NO.
+    price: Option<price::PriceRule>,
+    /// Whether the host sends the selected peer's price
+    /// ([`price::PRICING_CAPABILITY`]), learned at initialize.
+    host_prices: std::sync::atomic::AtomicBool,
 }
 
 impl Admission {
     /// `policy` as [`Policy::from_settings`] read it; an error is logged
     /// once here and fails closed.
-    pub fn new(policy: anyhow::Result<Policy>, capsules: Arc<CapsuleState>) -> Self {
+    pub fn new(
+        policy: anyhow::Result<Policy>,
+        price: anyhow::Result<price::PriceRule>,
+        capsules: Arc<CapsuleState>,
+    ) -> Self {
         let salt = salt(capsules.signing_key());
         let base = Arc::new(base::Base::new(capsules.ledger_dir().to_path_buf()));
         Self::with_seal(
             policy,
+            price,
             salt,
             Box::new(move |block| capsules.emit_admission_decision(block).map(|_| ())),
             base,
@@ -310,10 +329,24 @@ impl Admission {
 
     fn with_seal(
         policy: anyhow::Result<Policy>,
+        price: anyhow::Result<price::PriceRule>,
         salt: [u8; 32],
         seal: Seal,
         base: Arc<base::Base>,
     ) -> Self {
+        let price = match price {
+            Ok(price) => {
+                let _ = price::set_loaded(price.describe());
+                Some(price)
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    "the admission price profile is unreadable; every peer gets NO until it is fixed and mesh-llm restarts"
+                );
+                None
+            }
+        };
         let policy = match policy {
             Ok(policy) => Some(policy),
             Err(error) => {
@@ -331,11 +364,23 @@ impl Admission {
             policy_digest,
             seal,
             base,
+            price,
+            host_prices: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    #[cfg(test)]
+    fn set_host_prices(&self, on: bool) {
+        self.host_prices
+            .store(on, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Start the rows' background card asks and local refresh.
     pub fn start(&self, context: mesh_llm_plugin::PluginContext<'static>) {
+        let host_prices = context.host_supports(price::PRICING_CAPABILITY);
+        self.host_prices
+            .store(host_prices, std::sync::atomic::Ordering::Relaxed);
+        price::set_host_prices(host_prices);
         self.base.start(context);
     }
 
@@ -353,7 +398,7 @@ impl Admission {
         if event.get("phase").and_then(Value::as_str) != Some("backend_selected") {
             return OpenAiExchangeDecision::default();
         }
-        let (peer, (verdict, source)) = match target(event) {
+        let (peer, (mut verdict, mut source)) = match target(event) {
             Target::NotAPeer => return OpenAiExchangeDecision::default(),
             Target::Peer(peer) => {
                 let decided = match &self.policy {
@@ -364,8 +409,36 @@ impl Admission {
             }
             Target::Unreadable => (None, (Verdict::No, Source::UnreadableTarget)),
         };
+        // The price rule runs after the lists, on a peer they admit: one
+        // decision, the lists first (#55), then the terms pack (#105).
+        let mut priced = None;
+        if verdict == Verdict::Go {
+            if let Some(peer) = &peer {
+                match &self.price {
+                    None => (verdict, source) = (Verdict::No, Source::UnreadableProfile),
+                    Some(rule) => {
+                        let host_prices =
+                            self.host_prices.load(std::sync::atomic::Ordering::Relaxed);
+                        let read = rule.check(event, peer, host_prices, now);
+                        if read.refuses() {
+                            (verdict, source) = (Verdict::No, Source::PriceRule);
+                        }
+                        priced = Some(read);
+                    }
+                }
+            }
+        }
         let rows = peer.as_deref().map(|peer| self.base.read(peer, at, now));
-        let block = self.block(peer.as_deref(), verdict, source, rows.as_ref(), event);
+        let mut block = self.block(peer.as_deref(), verdict, source, rows.as_ref(), event);
+        // The pack is cited as read only when it ran.
+        if let (Some(rule), Some(price::Read::Checked { .. })) = (&self.price, &priced) {
+            if let Some(Value::Array(reads)) = block.get_mut("reads") {
+                reads.push(rule.reads(&self.salt));
+            }
+        }
+        if let Some(read) = &priced {
+            block.insert("price".into(), price::record(read));
+        }
         if let Err(error) = (self.seal)(block) {
             tracing::error!(%error, reason = SEAL_FAILED, "could not seal an admission decision; answering NO");
             return seal_failed();
@@ -375,7 +448,14 @@ impl Admission {
                 decision: OpenAiAdmissionDecision::Allow,
                 ..Default::default()
             },
-            Verdict::No => deny(format!("admission NO ({})", source.as_str())),
+            Verdict::No => match (&priced, source) {
+                (Some(read), Source::PriceRule) => deny(format!(
+                    "admission NO ({}: {})",
+                    source.as_str(),
+                    read.source()
+                )),
+                _ => deny(format!("admission NO ({})", source.as_str())),
+            },
         }
     }
 
@@ -460,7 +540,12 @@ mod tests {
     fn admission(policy: Policy) -> (Admission, Arc<CapsuleState>, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
         let capsules = Arc::new(CapsuleState::open(dir.path(), "node-under-test").expect("open"));
-        (Admission::new(Ok(policy), capsules.clone()), capsules, dir)
+        let price = price::PriceRule::from_profile(None).expect("the pack loads");
+        (
+            Admission::new(Ok(policy), Ok(price), capsules.clone()),
+            capsules,
+            dir,
+        )
     }
 
     fn selected(target: &str) -> Value {
@@ -791,6 +876,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let admission = Admission::with_seal(
             Ok(policy(None)),
+            price::PriceRule::from_profile(None),
             [1; 32],
             Box::new(|_| anyhow::bail!("disk full")),
             Arc::new(base::Base::new(dir.path().to_path_buf())),
@@ -811,7 +897,11 @@ mod tests {
             let capsules =
                 Arc::new(CapsuleState::open(dir.path(), "node-under-test").expect("open"));
             let bad = Policy::parse(None, Some("typo"), None);
-            (Admission::new(bad, capsules.clone()), capsules, dir)
+            (
+                Admission::new(bad, price::PriceRule::from_profile(None), capsules.clone()),
+                capsules,
+                dir,
+            )
         };
         for peer in [ALLOWED, DENIED, STRANGER] {
             let answer = admission.answer(&selected(&remote(peer)));
@@ -862,5 +952,301 @@ mod tests {
         assert!(!hook.request_body && !hook.response_body && hook.headers.is_empty());
         mesh_llm_plugin::openai_exchange::validate_openai_exchange_manifest(&hook)
             .expect("the host accepts the declaration");
+    }
+
+    // The price rule (#105). The profile caps match capsule-engine's
+    // conformance-vectors/guard/v0/inference.json (2,000,000 input and
+    // 8,000,000 output msat per million), and each test names the vector case
+    // it mirrors.
+    const CAPS: &str = r#"{"format":"policy-profile/v0","packs":[{"pack":"asg/inference","parameters":{"rate_cap":{"max_input_msat_per_million":2000000,"max_output_msat_per_million":8000000}}}]}"#;
+
+    fn priced_admission(
+        profile: Option<&str>,
+        host_prices: bool,
+    ) -> (Admission, Arc<CapsuleState>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let capsules = Arc::new(CapsuleState::open(dir.path(), "node-under-test").expect("open"));
+        let rule = price::PriceRule::from_profile(profile.map(str::as_bytes));
+        let admission = Admission::new(Ok(policy(None)), rule, capsules.clone());
+        admission.set_host_prices(host_prices);
+        (admission, capsules, dir)
+    }
+
+    fn priced(target: &str, pricing: Option<Value>) -> Value {
+        let mut event = selected(target);
+        event["exchange_id"] = json!("exchange-1");
+        if let Some(pricing) = pricing {
+            event["pricing"] = pricing;
+        }
+        event
+    }
+
+    fn rates(input: u64, output: u64) -> Option<Value> {
+        Some(json!({"input_msat_per_million": input, "output_msat_per_million": output}))
+    }
+
+    #[test]
+    fn a_price_under_or_at_the_caps_is_go_and_sealed_with_the_pack() {
+        // inference.json: under-both-caps, at-both-caps.
+        for (input, output) in [(1_000_000, 4_000_000), (2_000_000, 8_000_000)] {
+            let (admission, capsules, _dir) = priced_admission(Some(CAPS), true);
+            let answer = admission.answer(&priced(&remote(STRANGER), rates(input, output)));
+            assert_eq!(answer.decision, OpenAiAdmissionDecision::Allow);
+            let block = sealed_block(&capsules);
+            assert_eq!(block["verdict"], "GO");
+            assert_eq!(block["price"]["state"], "checked");
+            assert_eq!(block["price"]["outcome"], "allow");
+            assert_eq!(block["price"]["input_msat_per_million"], input);
+            let pack = block["reads"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["kind"] == "terms_pack")
+                .unwrap();
+            assert_eq!(pack["pack"], "asg/inference/0.1.0");
+            assert_eq!(
+                pack["definition_digest"]["digest"].as_str().unwrap().len(),
+                64
+            );
+            assert_eq!(pack["profile"]["commitment"].as_str().unwrap().len(), 64);
+        }
+    }
+
+    #[test]
+    fn a_price_over_a_cap_is_no_naming_the_rule() {
+        // inference.json: over-input-cap, over-output-cap.
+        for (input, output) in [(2_000_001, 1), (1, 8_000_001)] {
+            let (admission, capsules, _dir) = priced_admission(Some(CAPS), true);
+            let answer = admission.answer(&priced(&remote(STRANGER), rates(input, output)));
+            assert_eq!(answer.decision, OpenAiAdmissionDecision::Deny);
+            assert_eq!(
+                answer.reason.as_deref(),
+                Some("admission NO (price_rule: rate_cap)")
+            );
+            let block = sealed_block(&capsules);
+            assert_eq!(block["verdict"], "NO");
+            assert_eq!(block["source"], "price_rule");
+            assert_eq!(block["price"]["outcome"], "deny");
+            assert!(block["price"]["checks"]
+                .as_array()
+                .unwrap()
+                .contains(&json!({"check": "rate_cap", "result": "fail"})));
+        }
+    }
+
+    #[test]
+    fn a_free_route_is_go() {
+        // inference.json: free-peer (0/0). With the capability, no pricing is free.
+        let (admission, capsules, _dir) = priced_admission(Some(CAPS), true);
+        let answer = admission.answer(&priced(&remote(STRANGER), None));
+        assert_eq!(answer.decision, OpenAiAdmissionDecision::Allow);
+        assert_eq!(
+            sealed_block(&capsules)["price"]["input_msat_per_million"],
+            0
+        );
+    }
+
+    #[test]
+    fn a_price_that_does_not_read_is_no() {
+        // inference.json: missing-output-rate.
+        let (admission, capsules, _dir) = priced_admission(Some(CAPS), true);
+        let answer = admission.answer(&priced(
+            &remote(STRANGER),
+            Some(json!({"input_msat_per_million": 1})),
+        ));
+        assert_eq!(
+            answer.reason.as_deref(),
+            Some("admission NO (price_rule: rate_cap)")
+        );
+        let block = sealed_block(&capsules);
+        assert_eq!(block["source"], "price_rule");
+        // The rate the host did not state is recorded as unknown, never 0.
+        assert_eq!(block["price"]["output_msat_per_million"], Value::Null);
+        assert_eq!(block["price"]["input_msat_per_million"], 1);
+    }
+
+    #[test]
+    fn a_host_that_sends_no_price_fails_closed_only_under_a_profile() {
+        let (admission, capsules, _dir) = priced_admission(Some(CAPS), false);
+        let answer = admission.answer(&priced(&remote(STRANGER), None));
+        assert_eq!(
+            answer.reason.as_deref(),
+            Some("admission NO (price_rule: host_lacks_backend_pricing)")
+        );
+        let block = sealed_block(&capsules);
+        assert_eq!(block["price"]["state"], "unavailable");
+        assert_eq!(block["price"]["reason"], "host_lacks_backend_pricing");
+
+        // The shipped default alone does not fail closed on an older host.
+        let (admission, capsules, _dir) = priced_admission(None, false);
+        let answer = admission.answer(&priced(&remote(STRANGER), None));
+        assert_eq!(answer.decision, OpenAiAdmissionDecision::Allow);
+        let block = sealed_block(&capsules);
+        assert_eq!(block["price"]["state"], "not_checked");
+        assert_eq!(block["price"]["reason"], "host_lacks_backend_pricing");
+    }
+
+    #[test]
+    fn no_profile_is_the_shipped_default_outlier_guard() {
+        // The shipped default caps (500,000 / 1,500,000) apply with no
+        // profile: at them GO, over either NO.
+        assert_eq!(price::DEFAULT_RATE_CAPS, Some((500_000, 1_500_000)));
+        for (input, output, allowed) in [
+            (500_000, 1_500_000, true),
+            (500_001, 1, false),
+            (1, 1_500_001, false),
+        ] {
+            let (admission, _capsules, _dir) = priced_admission(None, true);
+            let answer = admission.answer(&priced(&remote(STRANGER), rates(input, output)));
+            assert_eq!(
+                answer.decision == OpenAiAdmissionDecision::Allow,
+                allowed,
+                "{input}/{output}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_profiles_list_and_its_ask_are_no() {
+        // inference.json: deny-list-target-listed; allow-list-unlisted-ask
+        // (escalate is NO here).
+        let deny = format!(
+            r#"{{"format":"policy-profile/v0","packs":[{{"pack":"asg/inference","parameters":{{"counterparty_list":{{"mode":"deny","entries":[{{"kind":"target","value":"{STRANGER}"}}]}}}}}}]}}"#
+        );
+        let ask = r#"{"format":"policy-profile/v0","packs":[{"pack":"asg/inference","parameters":{"counterparty_list":{"mode":"allow","entries":[{"kind":"target","value":"node-z"}],"disposition":"ask"}}}]}"#;
+        for (profile, outcome) in [(deny.as_str(), "deny"), (ask, "escalate")] {
+            let (admission, capsules, _dir) = priced_admission(Some(profile), true);
+            let answer = admission.answer(&priced(&remote(STRANGER), rates(1, 1)));
+            assert_eq!(answer.decision, OpenAiAdmissionDecision::Deny, "{outcome}");
+            assert_eq!(sealed_block(&capsules)["price"]["outcome"], outcome);
+        }
+    }
+
+    #[test]
+    fn an_unreadable_profile_is_no_for_every_peer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let capsules = Arc::new(CapsuleState::open(dir.path(), "node-under-test").expect("open"));
+        let rule = price::PriceRule::from_profile(Some(br#"{"format":"policy-profile/v9"}"#));
+        assert!(rule.is_err());
+        let admission = Admission::new(Ok(policy(None)), rule, capsules.clone());
+        let answer = admission.answer(&priced(&remote(STRANGER), rates(1, 1)));
+        assert_eq!(
+            answer.reason.as_deref(),
+            Some("admission NO (unreadable_profile)")
+        );
+    }
+
+    #[test]
+    fn the_lists_decide_before_the_price() {
+        let (admission, capsules, _dir) = priced_admission(Some(CAPS), true);
+        let admission = Admission {
+            policy: Some(Policy::parse(None, Some(STRANGER), None).unwrap()),
+            ..admission
+        };
+        let answer = admission.answer(&priced(&remote(STRANGER), rates(1, 1)));
+        assert_eq!(answer.reason.as_deref(), Some("admission NO (deny_list)"));
+        assert!(sealed_block(&capsules).get("price").is_none());
+        assert!(!serde_json::to_string(&sealed_block(&capsules))
+            .unwrap()
+            .contains("terms_pack"));
+    }
+
+    #[test]
+    fn the_record_never_names_the_peer() {
+        let (admission, capsules, _dir) = priced_admission(Some(CAPS), true);
+        admission.answer(&priced(&remote(STRANGER), rates(1, 1)));
+        let text = serde_json::to_string(&sealed_block(&capsules)).unwrap();
+        assert!(!text.contains(STRANGER));
+    }
+
+    #[test]
+    fn a_profile_with_only_a_list_keeps_the_shipped_caps() {
+        // An operator profile that sets no rate_cap still meets the outlier
+        // guard (review round 1).
+        let list_only = r#"{"format":"policy-profile/v0","packs":[{"pack":"asg/inference","parameters":{"counterparty_list":{"mode":"deny","entries":[{"kind":"target","value":"node-z"}]}}}]}"#;
+        let (admission, capsules, _dir) = priced_admission(Some(list_only), true);
+        let answer = admission.answer(&priced(&remote(STRANGER), rates(1_000_000_000_000, 1)));
+        assert_eq!(
+            answer.reason.as_deref(),
+            Some("admission NO (price_rule: rate_cap)")
+        );
+        assert_eq!(sealed_block(&capsules)["price"]["outcome"], "deny");
+        // "rate_cap": null sets no cap either.
+        let null_caps = r#"{"format":"policy-profile/v0","packs":[{"pack":"asg/inference","parameters":{"rate_cap":null}}]}"#;
+        let (admission, _capsules, _dir) = priced_admission(Some(null_caps), true);
+        let answer = admission.answer(&priced(&remote(STRANGER), rates(1_000_000_000_000, 1)));
+        assert_eq!(
+            answer.reason.as_deref(),
+            Some("admission NO (price_rule: rate_cap)")
+        );
+        // And a cap the operator set stands over the default.
+        let (admission, _capsules, _dir) = priced_admission(Some(CAPS), true);
+        let answer = admission.answer(&priced(&remote(STRANGER), rates(1_999_999, 7_999_999)));
+        assert_eq!(answer.decision, OpenAiAdmissionDecision::Allow);
+    }
+
+    #[test]
+    fn a_purchase_with_no_exchange_id_is_no_naming_required_fields() {
+        let (admission, _capsules, _dir) = priced_admission(Some(CAPS), true);
+        let mut event = priced(&remote(STRANGER), rates(1, 1));
+        event.as_object_mut().unwrap().remove("exchange_id");
+        let answer = admission.answer(&event);
+        assert_eq!(answer.decision, OpenAiAdmissionDecision::Deny);
+        assert!(answer
+            .reason
+            .as_deref()
+            .unwrap()
+            .starts_with("admission NO (price_rule: "));
+        assert!(
+            !answer.reason.as_deref().unwrap().contains("caps)"),
+            "{:?}",
+            answer.reason
+        );
+    }
+
+    #[test]
+    fn the_profile_is_cited_by_salted_commitment_only() {
+        let deny = format!(
+            r#"{{"format":"policy-profile/v0","packs":[{{"pack":"asg/inference","parameters":{{"counterparty_list":{{"mode":"deny","entries":[{{"kind":"target","value":"{ALLOWED}"}}]}}}}}}]}}"#
+        );
+        let (admission, capsules, _dir) = priced_admission(Some(&deny), true);
+        admission.answer(&priced(&remote(STRANGER), rates(1, 1)));
+        let text = serde_json::to_string(&sealed_block(&capsules)).unwrap();
+        let clear = price::PriceRule::from_profile(Some(deny.as_bytes())).unwrap();
+        let digest = clear.describe()["profile_digest"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            !text.contains(&digest),
+            "the clear profile digest is sealed"
+        );
+        assert!(!text.contains(ALLOWED));
+    }
+
+    #[test]
+    fn no_price_on_a_request_with_no_model_is_not_free() {
+        // mesh-llm#2742: the no-model fallback never prices its pick. Under
+        // the operator's profile that fails closed; under the shipped default
+        // alone it is recorded as not checked, as on an older host.
+        let no_model = || {
+            let mut event = priced(&remote(STRANGER), None);
+            event["model"] = Value::Null;
+            event
+        };
+        let (admission, capsules, _dir) = priced_admission(Some(CAPS), true);
+        let answer = admission.answer(&no_model());
+        assert_eq!(
+            answer.reason.as_deref(),
+            Some("admission NO (price_rule: no_price_without_model)")
+        );
+        assert_eq!(sealed_block(&capsules)["price"]["state"], "unavailable");
+
+        let (admission, capsules, _dir) = priced_admission(None, true);
+        let answer = admission.answer(&no_model());
+        assert_eq!(answer.decision, OpenAiAdmissionDecision::Allow);
+        let block = sealed_block(&capsules);
+        assert_eq!(block["price"]["state"], "not_checked");
+        assert_eq!(block["price"]["reason"], "no_price_without_model");
     }
 }
