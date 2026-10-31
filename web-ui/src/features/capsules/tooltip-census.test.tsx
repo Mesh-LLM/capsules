@@ -353,7 +353,6 @@ describe('tooltip census -- the copy itself', () => {
       COPY.SETUP_STEPS_TOOLTIP,
       COPY.CONTINUITY_TOOLTIP,
       COPY.SAVE_EVIDENCE_FILE_TOOLTIP,
-      COPY.PEER_ALIAS_TOOLTIP,
       ...Object.values(COPY.STAGE_CELL_TOOLTIPS),
       ...Object.values(COPY.HANDOFF_TOOLTIPS),
       COPY.TWIN_NO_VERDICT_TOOLTIP,

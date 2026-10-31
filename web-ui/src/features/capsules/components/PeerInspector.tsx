@@ -4,7 +4,7 @@
 // already holds (`peerFacts`); one with no source here reads "not checked".
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   SharedModal,
@@ -16,6 +16,8 @@ import {
 } from '@/components/ui/SharedModal'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 import type { PaneBRow } from '@/features/capsules/api/sidecarTypes'
+import { shortId } from '@/features/capsules/lib/adjudication-view'
+import { historyNote, type HistoryOutcome } from '@/features/capsules/lib/ask-for-history'
 import type { PeerMeshStatus } from '@/features/capsules/lib/peer-mesh-status'
 import {
   meshMetaLine,
@@ -43,9 +45,13 @@ export type PeerInspectorProps = {
   /** Where "Open in Exchanges" and "Open the verdict" go. With none, the
    *  buttons are not drawn rather than drawn dead. */
   onOpenExchanges?: () => void
+  /** Asks this node (by node id) for its history card and judges the reply.
+   *  With none, "Ask a peer for their history" is not drawn: only a button that
+   *  really asks may carry that name. */
+  onAskHistory?: (nodeId: string) => Promise<HistoryOutcome>
 }
 
-const short = (id: string) => (id.length > 10 ? `${id.slice(0, 10)}…` : id)
+const short = shortId
 
 function historySentence(row: PaneBRow): string {
   switch (row.history?.state) {
@@ -99,7 +105,17 @@ function swappedSentence(facts: PeerFacts): string {
   return `${count} ${other}${referee}ruled this peer’s answer wrong. ${PEER_DRAWER.swappedSealed}`
 }
 
-export function PeerInspector({ open, onClose, row, meshStatus, name, facts, onOpenExchanges }: PeerInspectorProps) {
+export function PeerInspector({
+  open,
+  onClose,
+  row,
+  meshStatus,
+  name,
+  facts,
+  onOpenExchanges,
+  onAskHistory
+}: PeerInspectorProps) {
+  const [asked, setAsked] = useState<HistoryOutcome | null>(null)
   const shown = facts ?? (row ? peerFacts(row) : null)
   const ids = row ? peerIdentityAliases(row) : null
   const exchanges = row?.exchange_count ?? 0
@@ -113,16 +129,19 @@ export function PeerInspector({ open, onClose, row, meshStatus, name, facts, onO
         .filter((part): part is string => !!part && part !== '—')
         .join(' · ')
     : ''
-  const idsLine =
-    ids?.signingKeyId || ids?.nodeId || ids?.endpointId
-      ? `Ids they use: ${ids.signingKeyId ? `${short(ids.signingKeyId)} signs` : 'signing key not checked'}${
-          ids.nodeId || ids.endpointId
-            ? ` · ${ids.nodeId && ids.endpointId ? 'node and endpoint' : ids.nodeId ? 'node' : 'endpoint'} ${short(
-                (ids.nodeId ?? ids.endpointId) as string
-              )}`
-            : ''
-        }`
-      : 'Ids they use: not checked'
+  const idParts = [
+    ids?.signingKeyId ? `${short(ids.signingKeyId)} signs` : null,
+    ids?.nodeId ? `node ${short(ids.nodeId)}` : null,
+    ids?.endpointId ? `endpoint ${short(ids.endpointId)}` : null
+  ].filter((part): part is string => part !== null)
+  const idsLine = idParts.length > 0 ? `Ids they use: ${idParts.join(' · ')}` : 'Ids they use: not checked'
+  const askNodeId = onAskHistory ? (ids?.nodeId ?? null) : null
+  const askHistory = () => {
+    if (!onAskHistory || !askNodeId) return
+    setAsked({ kind: 'asking', at: new Date().toISOString() })
+    void onAskHistory(askNodeId).then(setAsked)
+  }
+  const askedNote = asked ? historyNote(asked) : null
   const actionFor = onOpenExchanges ? (label: string) => ({ label, onClick: onOpenExchanges }) : () => null
 
   return (
@@ -161,7 +180,11 @@ export function PeerInspector({ open, onClose, row, meshStatus, name, facts, onO
               title={PEER_DRAWER.rewroteTitle}
             />
             <DrawerRow
-              action={actionFor(PEER_DRAWER.askHistory)}
+              action={
+                askNodeId && asked?.kind !== 'asking'
+                  ? { label: PEER_DRAWER.askHistory, onClick: askHistory }
+                  : null
+              }
               badge={shown.leftOut}
               detail={`${
                 shown.leftOut.differ > 0
@@ -169,7 +192,7 @@ export function PeerInspector({ open, onClose, row, meshStatus, name, facts, onO
                   : shown.leftOut.matched > 0
                     ? PEER_DRAWER.leftOutMatched
                     : PEER_DRAWER.leftOutNone
-              } ${historySentence(row)}`}
+              } ${asked?.kind === 'asking' ? 'Asking for their history…' : (askedNote?.text ?? historySentence(row))}`}
               title={PEER_DRAWER.leftOutTitle}
             />
             <DrawerRow

@@ -6,7 +6,6 @@
 import type { PaneBConfirmedSibling, PaneBRow, PaneCRow } from '@/features/capsules/api/sidecarTypes'
 import { deriveRightCellState } from '@/features/capsules/lib/exchange-row-state'
 import type { PeerMeshStatus } from '@/features/capsules/lib/peer-mesh-status'
-import { peerTwinTally, peerTwinText } from '@/features/capsules/lib/peer-twins'
 import { parseVerdict } from '@/features/capsules/lib/adjudication-view'
 import { peerSettlementText } from '@/features/capsules/lib/settlement-view'
 import { PEER_ATTENTION, PEER_COLUMN_TOOLTIPS, SELF_REPORTED_TOOLTIP } from '@/features/capsules/lib/tooltip-copy'
@@ -202,18 +201,6 @@ export function adjudicationSummaryText(summary: AdjudicationSummary): string {
   return `${summary.checked} of ${summary.denominator} adjudicated · ${parts.join(' · ')}`
 }
 
-/** Compact form of `adjudicationSummaryText` for the Peers table's
- *  narrower ADJUDICATION column -- same honesty invariant (never
- *  "corroborated"-sounding when `notChecked`), just terser wording. */
-export function adjudicationCompactText(summary: AdjudicationSummary): string {
-  if (summary.notChecked) return 'none'
-  const parts: string[] = []
-  if (summary.corroborated) parts.push(`${summary.corroborated} corroborated`)
-  if (summary.contradicted) parts.push(`${summary.contradicted} contradicted`)
-  if (summary.inconclusive) parts.push(`${summary.inconclusive} inconclusive`)
-  return `${summary.checked} of ${summary.denominator} · ${parts.join(' · ')}`
-}
-
 // ---------------------------------------------------------------------------
 // Their chain (secondary) -- you verified it's unbroken/unforked, never its
 // contents. Never summed with with-you facts.
@@ -311,14 +298,6 @@ export function confirmedByOtherSide(row: PaneBRow): ConfirmedByOtherSide {
   return { confirmed, total, note: null }
 }
 
-/** UX §2: "3 of 3" -- "of" reads as a count, "/" as a ratio. The one note
- *  kept is a disagreement; "0 of 2" already says none are confirmed. */
-export function confirmedByOtherSideText(summary: ConfirmedByOtherSide): string {
-  const base = `${summary.confirmed} of ${summary.total}`
-  const differ = /^(\d+) contradicted$/.exec(summary.note ?? '')
-  return differ ? `${base} · ${differ[1]} differ` : base
-}
-
 // ---------------------------------------------------------------------------
 // Match -- the clean/mismatch tally of the halves the other side actually
 // sent, derived through the SAME ONE gate: a
@@ -342,13 +321,6 @@ export function matchTally(row: PaneBRow): MatchTally {
       (row.claims_refused ?? 0),
     contradicted: row.verdicts?.tally?.contradicted ?? 0
   }
-}
-
-/** UX §2 "Same request & answer": how many of their records hold the same
- *  request and answer as yours, and how many differ. Disputes are their own
- *  column, so the adjudication tally is not repeated here. */
-export function matchTallyText(tally: MatchTally): string {
-  return `${tally.clean} · ${tally.mismatch} differ`
 }
 
 // ---------------------------------------------------------------------------
@@ -474,7 +446,6 @@ export const SELF_REPORTED_DETAIL = SELF_REPORTED_TOOLTIP
 // states the absence honestly instead of borrowing that field.
 // ---------------------------------------------------------------------------
 
-export const WITNESS_COVERAGE_COMPACT_TEXT = 'not shown yet'
 
 // ---------------------------------------------------------------------------
 // Last dealt with -- the date of a row's latest exchange (UX §2), rendered by
@@ -518,7 +489,6 @@ export function periodRangeText(firstSeen: string | null, lastSeen: string | nul
 export type PeerTableRowView = {
   key: string
   displayId: string
-  hasDealings: boolean
   /** The row's alias evidence, one line (`peerAliasLine`): the other id
    *  spaces this ONE peer is known by -- never rendered as extra peers.
    *  `null` when the row carries no identity evidence. */
@@ -526,23 +496,17 @@ export type PeerTableRowView = {
   /** One honesty caveat under the identity, stated once (chooser-v2 §3
    *  discipline carried over): empty for a dealt-with peer (the legend says it once),
    *  "no exchanges yet" for one only advertised. */
-  identityNote: string
   exchangeCount: number
-  confirmedByOtherSide: string
-  match: string
-  adjudicationCompact: string
-  witnessCompact: string
   period: string
-  alarm: AlarmSignal
+  /** The "Needs a look" filter: only what the row itself shows -- a caught swap, a
+   *  differing record, a failed log check or a refusal. */
+  needsALook: boolean
   /** What needs a look, each named and counted -- replaces the old generic
    *  ⚠ chip on the face (UX §8). Empty when nothing does. */
   attention: PeerAttentionItem[]
   /** Payments with this peer, counted (`peerSettlementText`); `null` when
    *  there is no paid exchange on record. */
   payments: string | null
-  /** This peer's twin pairs, as facts (`peerTwinText`); `null` when no twin
-   *  pair names it. */
-  twins: string | null
   /** The three columns the table and the drawer share (`peerFacts`). */
   facts: PeerFacts
   row: PaneBRow | null
@@ -578,7 +542,7 @@ export type PeerFacts = {
   /** Their signed records that name the same request, answer and model as yours. */
   leftOut: PeerBadge & { matched: number; total: number; differ: number }
   swapped: PeerSwappedFacts
-  /** This node asked this peer to referee a pair. */
+  /** A referee this node asked ruled on a pair as this peer. */
   actedAsReferee: boolean
 }
 
@@ -625,13 +589,18 @@ export function peerSwappedFacts(
     if (!verdict || verdict.kind === 'not_comparable') continue
     checked += 1
     if (verdict.kind === 'corroborated') cleared += 1
-    // A referee that ruled the OTHER answer wrong cleared this peer.
     else if (verdict.kind === 'contradicted') {
+      const other = exchangeRows.find((r) => r.exchange_key === pair.otherKey)?.counterparty ?? null
       if (ids.has(verdict.party)) {
         caught += 1
-        otherNode = exchangeRows.find((r) => r.exchange_key === pair.otherKey)?.counterparty ?? otherNode
+        otherNode = other ?? otherNode
         referee = pair.referee ?? referee
-      } else cleared += 1
+      } else if (other !== null && verdict.party === other) {
+        // The referee ruled the OTHER machine's answer wrong: this peer is cleared.
+        cleared += 1
+      }
+      // A party that is neither this peer nor the other machine by any id this
+      // page holds is checked but not attributed: neither caught nor cleared.
     }
   }
   const badge: PeerBadge =
@@ -640,7 +609,7 @@ export function peerSwappedFacts(
       : cleared > 0
         ? { text: 'Corroborated by referee', tone: 'good' }
         : checked > 0
-          ? { text: 'Inconclusive', tone: 'muted' }
+          ? { text: 'Checked', tone: 'muted' }
           : { text: 'Not tested', tone: 'muted' }
   return {
     ...badge,
@@ -660,8 +629,9 @@ export function peerFacts(row: PaneBRow, exchangeRows: readonly PaneCRow[] = [])
   const differ = matchTally(row).mismatch
   const refereed = exchangeRows.some((exchange) => {
     const recorded = exchange.twin?.referee_row
-    const named = recorded?.state === 'adjudicated' ? recorded.referee : exchange.twin?.referee_node_id
-    return !!named && ids.has(named)
+    // Only a ruling this node asked for and holds; `twin.referee_node_id` also
+    // rides on verdicts other nodes delivered.
+    return recorded?.state === 'adjudicated' && ids.has(recorded.referee)
   })
   return {
     rewrote: total > 0 ? { text: 'Sealed', tone: 'good' } : { text: 'not checked', tone: 'muted' },
@@ -669,16 +639,17 @@ export function peerFacts(row: PaneBRow, exchangeRows: readonly PaneCRow[] = [])
       total === 0
         ? { text: 'not checked', tone: 'muted', matched, total, differ }
         : differ > 0
-          ? { text: `${differ} differ`, tone: 'bad', matched, total, differ }
-          : { text: `${matched} / ${total} matched`, tone: matched === total ? 'good' : 'warn', matched, total, differ },
+          ? { text: `${differ} of ${total} differ`, tone: 'bad', matched, total, differ }
+          : { text: `${matched}/${total} matched`, tone: matched === total ? 'good' : 'warn', matched, total, differ },
     swapped: peerSwappedFacts(ids, exchangeRows),
     actedAsReferee: refereed
   }
 }
 
-function twinsText(peerId: string, exchangeRows: readonly PaneCRow[]): string | null {
-  const tally = peerTwinTally(peerId, exchangeRows)
-  return tally ? peerTwinText(tally) : null
+/** The two attention items the Peers row still draws; a disagreement and a
+ *  differing answer are the Left-something-out and Swapped columns. */
+export function isShownAttention(item: PeerAttentionItem): boolean {
+  return item.key === 'logFailed' || item.key === 'refused'
 }
 
 export function dealtWithRowView(
@@ -694,25 +665,20 @@ export function dealtWithRowView(
   // reaching here, but this fallback keeps the view honest, never `null`,
   // if ever called directly with one.
   const displayId = peerDisplayId(row) ?? 'other side not recorded'
+  const facts = peerFacts(row, exchangeRows)
+  const attention = peerAttention(row, resolveTimestamp)
   return {
     key: row.peer_id ?? displayId,
     displayId,
-    hasDealings: true,
     aliasLine: peerAliasLine(row, announcedKeyId),
     // UX §2: "self-reported" is true of every row, so it lives once in the
     // table legend, not on each row.
-    identityNote: '',
     exchangeCount: row.exchange_count ?? 0,
-    confirmedByOtherSide: confirmedByOtherSideText(confirmedByOtherSide(row)),
-    match: matchTallyText(matchTally(row)),
-    adjudicationCompact: adjudicationCompactText(adjudicationSummary(row)),
-    witnessCompact: WITNESS_COVERAGE_COMPACT_TEXT,
     period: periodRangeText(row.last_seen, row.last_seen),
-    alarm: alarmSignal(row, resolveTimestamp),
-    attention: peerAttention(row, resolveTimestamp),
+    needsALook: facts.swapped.caught > 0 || facts.leftOut.differ > 0 || attention.some(isShownAttention),
+    attention,
     payments: peerSettlementText(row.settlement),
-    twins: twinsText(displayId, exchangeRows),
-    facts: peerFacts(row, exchangeRows),
+    facts,
     row
   }
 }

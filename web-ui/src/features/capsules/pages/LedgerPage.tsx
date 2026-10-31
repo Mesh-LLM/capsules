@@ -246,6 +246,11 @@ function PeersSection({
   })
   const meshStatus = usePeerMeshStatusIndex(PEER_TAB_HARNESS_MESH_PEERS, PEER_TAB_HARNESS_MESH_MODELS)
   const peerName = usePeerNames()
+  // The drawer's history ask: the same request and the same judging as the Exchanges row's.
+  const askPeerHistory = async (nodeId: string): Promise<HistoryOutcome> => {
+    const askedAt = new Date().toISOString()
+    return judgeHistoryReply(await askForHistory(nodeId), askedAt)
+  }
   const effectiveRecordsById = harnessMode ? PEER_TAB_HARNESS_LEDGER_RECORDS : recordsById
 
   const resolveTimestamp = (capsuleId: string): string | null => effectiveRecordsById.get(capsuleId)?.timestamp ?? null
@@ -280,19 +285,10 @@ function PeersSection({
     return dealtWithRowView(row, resolveTimestamp, harnessMode ? [] : (paneCQuery.data?.rows ?? []), announcedKey)
   })
 
-  // §3E -- the role-aware
-  // headline needs the real advertised/dealt-with counts, which only this
-  // section's data pipeline has (mesh status + pane-b rows); the call
-  // site's own intro sentence stays static prose above it. `role !== 'you'`
-  // excludes this node's own self entry, same exclusion `advertisedOnlyPeers`
-  // already applies to the table's second row group.
-  const advertisedCount = meshStatus.peers.filter((peer) => peer.role !== 'you').length
-  const dealtWithCount = dealtWithViews.length
-
-  if (dealtWithViews.length === 0 && advertisedPeers.length === 0) {
+  if (dealtWithViews.length === 0) {
     return (
       <EmptyState
-        description={`${advertisedCount} peers advertised on the mesh so far · ${dealtWithCount} you have dealt with on the record. Once you ask another node for an answer, or serve one to a peer, this tab will show what they've shown you and whether it holds up.`}
+        description="Once you ask another node for an answer, or serve one to a peer, this tab will show what they've shown you and whether it holds up."
         hint={
           <Button
             className="ui-control h-8 gap-1.5 rounded-[var(--radius)] px-2.5 text-[length:var(--density-type-caption)]"
@@ -320,6 +316,7 @@ function PeersSection({
         dealtWith={dealtWithViews}
         dealtWithRawRows={sortedDealtWithRawRows}
         meshStatus={meshStatus}
+        onAskHistory={harnessMode ? undefined : askPeerHistory}
         onOpenExchanges={onOpenExchanges}
         peerName={peerName}
         throughSplit={peersThroughSplit((paneCQuery.data?.rows ?? []).flatMap((row) => (row.split ? [row.split] : [])))}

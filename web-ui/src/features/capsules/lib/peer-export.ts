@@ -9,13 +9,11 @@ import type { PeerTableRowView } from '@/features/capsules/lib/peer-row-view'
 
 const CSV_COLUMNS = [
   'Peer',
-  'Group',
   'Exchanges',
-  'Saved as confirmed',
-  'Same request & answer',
-  'Disputes judged',
-  'Their records witnessed',
-  'Last dealt with'
+  'Rewrote the record',
+  'Left something out',
+  'Swapped the model',
+  'Last'
 ] as const
 
 function csvCell(value: string): string {
@@ -23,18 +21,19 @@ function csvCell(value: string): string {
   return `"${value.replace(/"/g, '""')}"`
 }
 
+/** One cell per table column, as the page words it: the swap column carries
+ *  its denominator whenever a referee ruled. */
 export function peerRowsToCsv(rows: readonly PeerTableRowView[]): string {
   const lines = [CSV_COLUMNS.join(',')]
   for (const row of rows) {
+    const { swapped } = row.facts
     lines.push(
       [
         row.displayId,
-        row.hasDealings ? 'dealt with' : 'advertised but unused',
         String(row.exchangeCount),
-        row.confirmedByOtherSide,
-        row.match,
-        row.adjudicationCompact,
-        row.witnessCompact,
+        row.facts.rewrote.text,
+        row.facts.leftOut.text,
+        swapped.checked > 0 ? `${swapped.text} (${swapped.tally})` : swapped.text,
         row.period
       ]
         .map(csvCell)

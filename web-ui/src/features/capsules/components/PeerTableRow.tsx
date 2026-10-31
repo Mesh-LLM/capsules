@@ -7,9 +7,11 @@ import { useState } from 'react'
 import { TableCell, TableRow } from '@/components/ui/table'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 import { PeerInspector } from '@/features/capsules/components/PeerInspector'
+import type { HistoryOutcome } from '@/features/capsules/lib/ask-for-history'
 import type { PeerMeshStatus } from '@/features/capsules/lib/peer-mesh-status'
 import {
   ALL_PEER_TABLE_COLUMNS,
+  isShownAttention,
   peerIdentityAliases,
   unlinkedNodeId,
   type PeerBadge,
@@ -17,7 +19,7 @@ import {
   type PeerTableRowView
 } from '@/features/capsules/lib/peer-row-view'
 import { HoverChip } from '@/features/capsules/components/HoverChip'
-import { PEER_PAYMENTS_TOOLTIP, PEER_TWINS_TOOLTIP } from '@/features/capsules/lib/tooltip-copy'
+import { PEER_PAYMENTS_TOOLTIP } from '@/features/capsules/lib/tooltip-copy'
 
 export type PeerTableRowProps = {
   view: PeerTableRowView
@@ -30,6 +32,8 @@ export type PeerTableRowProps = {
   name?: string
   /** Where the drawer's "Open in Exchanges" and "Open the verdict" go. */
   onOpenExchanges?: () => void
+  /** Asks this peer's node for its history (see `PeerInspector`). */
+  onAskHistory?: (nodeId: string) => Promise<HistoryOutcome>
 }
 
 function Badge({ badge }: { badge: PeerBadge }) {
@@ -45,7 +49,8 @@ export function PeerTableRow({
   meshStatus,
   visibleColumns = ALL_PEER_TABLE_COLUMNS,
   name,
-  onOpenExchanges
+  onOpenExchanges,
+  onAskHistory
 }: PeerTableRowProps) {
   const shownName = name ?? view.displayId
   const [inspectorOpen, setInspectorOpen] = useState(false)
@@ -55,7 +60,7 @@ export function PeerTableRow({
   const { facts } = view
   // The two states with no column of their own; a disagreement and a differing
   // answer are the Left-something-out and Swapped columns.
-  const attention = view.attention.filter((item) => item.key === 'logFailed' || item.key === 'refused')
+  const attention = view.attention.filter(isShownAttention)
 
   return (
     <>
@@ -94,18 +99,10 @@ export function PeerTableRow({
             {view.row && unlinkedNodeId(view.row) ? (
               <span className="font-mono text-fg-faint text-xs">{view.aliasLine}</span>
             ) : null}
-            {view.identityNote ? <span className="text-fg-faint text-xs">{view.identityNote}</span> : null}
             {view.payments ? (
               <HoverChip census="peer:payments" label={PEER_PAYMENTS_TOOLTIP}>
                 <span className="text-xs text-fg-dim" data-peer-payments="true">
                   Payments: {view.payments}
-                </span>
-              </HoverChip>
-            ) : null}
-            {view.twins ? (
-              <HoverChip census="peer:twins" label={PEER_TWINS_TOOLTIP}>
-                <span className="text-xs text-fg-dim" data-peer-twins="true">
-                  {view.twins}
                 </span>
               </HoverChip>
             ) : null}
@@ -163,6 +160,7 @@ export function PeerTableRow({
           facts={facts}
           meshStatus={meshStatus}
           name={name}
+          onAskHistory={onAskHistory}
           onClose={() => setInspectorOpen(false)}
           onOpenExchanges={onOpenExchanges}
           open={inspectorOpen}

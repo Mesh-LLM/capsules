@@ -83,39 +83,11 @@ export const PEER_DRAWER = {
   openVerdict: 'Open the verdict'
 } as const
 
-/** The Peers row's alias line, and the table's second group. */
-export const PEER_ALIAS_TOOLTIP =
-  'The ids this peer uses: the key it signs with, its mesh node and its endpoint, as they appear on your records.'
 export const PEER_NEEDS_A_LOOK_LABEL = 'Needs a look'
 
 /** The peer's self-reported identity note. */
 export const SELF_REPORTED_TOOLTIP =
   'This identity is self-reported: it’s what the peer says about itself. Only the records they signed, checked on this machine, count as evidence.'
-
-/** The drill's "Their log, as shown to you" hover follows the
- *  section's state: "checked" only once a fetched log was checked
- *  (peer_evidence_client fails closed). */
-export const THEIR_LOG_TOOLTIPS = {
-  shown:
-    'Their log as your node fetched and checked it: counts per checkpoint, no record contents. Witnesses a checkpoint lists are shown as listed, not checked here.',
-  failed: 'Your node fetched their log and it didn’t check out on this machine, so none of it is shown as checked.',
-  refused: 'They refused to show their log. Nothing of it is checked here.',
-  no_answer: 'Your node asked for their log and no answer has been checked here yet.',
-  not_asked:
-    'Your node hasn’t asked for their history, so nothing of it is checked here. “Ask for their history” on an exchange with them asks, and shows the checked answer on that row.'
-} as const
-
-/** The peer drill's "Their history" sections
- *  (UX review §7.2 names). One tooltip per section heading. */
-export const PEER_HISTORY_TOOLTIPS = {
-  dealings: 'Your exchanges with this peer, and how many of them their own signed record confirms.',
-  theirLog:
-    'Their log as your node fetched and checked it: counts per checkpoint, no record contents. Witnesses a checkpoint lists are shown as listed, not checked here.',
-  othersSay: 'What the nodes you asked about this peer said. A node that answered with a refusal still answered.',
-  verdicts:
-    'Verdicts on exchanges this peer took part in; a verdict can find against either side. Each column is counted on its own and never added to another.',
-  askedOfYou: 'Requests your node logged from a node naming itself as this peer, and what your node did with each one.'
-} as const
 
 /** Peer attention badges -- the specific thing, counted, replacing the old
  *  generic ⚠ alarm chip. Each is one sentence naming exactly that. */
@@ -203,10 +175,6 @@ export const ENTRY_CHIP_RESULT_TOOLTIPS = {
     '–': 'No confirmed record from them yet; the state on the right says why.'
   }
 } as const
-
-/** The (i) on a peer's twin pairs line. Facts only, never a judgement. */
-export const PEER_TWINS_TOOLTIP =
-  'A client sent the same request to this node and to another one, and marked the two as one pair. “Answers differed” compares the two sealed answers byte for byte; it is a comparison, not a ruling. “No ruling yet” means no referee has ruled on the pair.'
 
 /** The LOCAL badge's (i): a served exchange with no other side recorded. */
 export const LOCAL_ONLY_TOOLTIP =
@@ -362,9 +330,6 @@ export const HANDOFF_TOOLTIPS = {
   break: 'The two ends of this hand-off name different data.',
   malformed: 'A record at this hand-off is broken and can’t be read.'
 } as const
-
-/** §7.5: the drill's "your dealings with them" section title (console copy). */
-export const YOUR_DEALINGS_TITLE = 'Your dealings with them'
 
 /** The drill's "Referee verdicts about them" section. Plain words first, then
  *  the check actually run: `verdict_counts.rs` counts only the

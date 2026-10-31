@@ -25,6 +25,7 @@ import {
 import { FilterPopover, type FilterValueOption } from '@/components/ui/FilterPopover'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import type { HistoryOutcome } from '@/features/capsules/lib/ask-for-history'
 import { PeerTableRow } from '@/features/capsules/components/PeerTableRow'
 import { peerEvidenceBundle, peerRowsToCsv } from '@/features/capsules/lib/peer-export'
 import type { PeerMeshStatusIndex } from '@/features/capsules/lib/peer-mesh-status'
@@ -74,7 +75,7 @@ function filterOptionLabel(value: string): string {
 }
 
 function alarmValue(view: PeerTableRowView): AlarmFilterValue {
-  return view.alarm.present ? 'has_alarm' : 'clean'
+  return view.needsALook ? 'has_alarm' : 'clean'
 }
 
 function matchesSearch(view: PeerTableRowView, query: string, name: string): boolean {
@@ -114,6 +115,8 @@ export type LedgerPeersTableProps = {
   meshStatus: PeerMeshStatusIndex
   /** Where the drawer's "Open in Exchanges" and "Open the verdict" go. */
   onOpenExchanges?: () => void
+  /** Asks a peer's node for its history; with none the drawer draws no ask. */
+  onAskHistory?: (nodeId: string) => Promise<HistoryOutcome>
   /** Nodes that ran part of a request this node sent to a split's
    *  coordinator: a third group, never merged with the other two. */
   throughSplit?: readonly SplitPeer[]
@@ -128,6 +131,7 @@ export function LedgerPeersTable({
   advertisedUnusedRawPeers,
   meshStatus,
   onOpenExchanges,
+  onAskHistory,
   throughSplit = [],
   peerName = asGiven
 }: LedgerPeersTableProps) {
@@ -330,6 +334,7 @@ export function LedgerPeersTable({
                 key={view.key}
                 meshStatus={meshStatus.statusFor(view.displayId)}
                 name={peerName(view.displayId)}
+                onAskHistory={onAskHistory}
                 onOpenExchanges={onOpenExchanges}
                 view={view}
                 visibleColumns={visibleColumns}

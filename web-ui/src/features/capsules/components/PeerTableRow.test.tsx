@@ -36,7 +36,7 @@ describe('PeerTableRow — dealt-with peers', () => {
     expect(screen.getByText('24')).toBeInTheDocument()
     // 16 of the 24 exchanges have a pushed half that closed through the gate.
     expect(screen.getByText('Sealed')).toBeInTheDocument()
-    expect(screen.getByText('16 / 24 matched')).toBeInTheDocument()
+    expect(screen.getByText('16/24 matched')).toBeInTheDocument()
     // No referee was asked on this node's exchange rows: not tested, never guessed.
     expect(screen.getByText('Not tested')).toBeInTheDocument()
     // The witnessed column is gone.
@@ -54,7 +54,7 @@ describe('PeerTableRow — dealt-with peers', () => {
     const { container } = renderInTable(<PeerTableRow meshStatus={null} view={view} />)
 
     // 1 pushed half the gate reads as CONTRADICTED: the Left-something-out badge names it.
-    expect(screen.getByText('1 differ')).toBeInTheDocument()
+    expect(screen.getByText('1 of 14 differ')).toBeInTheDocument()
     expect(container.textContent).not.toContain('⚠')
     // A disagreement is the Left-something-out column, not a second chip.
     expect(screen.queryByText('1 disagreement')).not.toBeInTheDocument()
@@ -147,7 +147,7 @@ describe('PeerTableRow — dealt-with peers', () => {
     const view = dealtWithRowView(CLEAN_ROW)
     renderInTable(<PeerTableRow meshStatus={null} view={view} visibleColumns={new Set(['leftOut'])} />)
 
-    expect(screen.getByText('16 / 24 matched')).toBeInTheDocument()
+    expect(screen.getByText('16/24 matched')).toBeInTheDocument()
     expect(screen.queryByText('Sealed')).not.toBeInTheDocument()
     expect(screen.queryByText('Not tested')).not.toBeInTheDocument()
   })
