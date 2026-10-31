@@ -306,6 +306,15 @@ describe('tooltip census -- every chip type the Evidence tab ships has a plain o
     const closedRow = await screen.findByRole('group', { name: 'Exchange exch-closed' })
     await user.click(within(closedRow).getByRole('button', { name: /How we checked/ }))
     const panel = await screen.findByLabelText('Security checks for exch-closed')
+    // The checks sit in groups that open on their own.
+    for (const question of [
+      /Could anyone have rewritten this/,
+      /Do both sides tell the same story/,
+      /Was it the model they advertised/,
+      /Who stands behind it/
+    ]) {
+      await user.click(within(panel).getByRole('button', { name: question }))
+    }
 
     const seen = censusOnScreen()
     expectCovered(REQUIRED.checks, seen, 'dig')

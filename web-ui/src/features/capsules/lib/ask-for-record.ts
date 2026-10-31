@@ -1,4 +1,4 @@
-// "Ask them for their record" (UX §3): a row whose other side's record hasn't
+// "Ask for their record" (UX §3): a row whose other side's record hasn't
 // arrived can ask that node for it, as soon as our record names that node. The plugin sends one
 // evidence request over the mesh and verifies the reply before handing it
 // over (`api/evidenceRequestClient.ts`); this module judges what came back,
@@ -136,15 +136,13 @@ export function askTarget(record: CapsuleRecord | Record<string, unknown> | null
   return peerId && (nonce || digests) ? { peerId, nonce, digests } : null
 }
 
-/** The row states where asking can help: their record hasn't arrived, or
- *  they answered with a statement that asking again may change. */
+/** The row states where asking can help: their record hasn't arrived. A
+ *  declined or no-record row keeps no record ask (product ruling). */
 const ASKABLE_KINDS: ReadonlySet<RightCellStateKind> = new Set([
   'open_not_held',
   'open_not_given',
   'open_not_asked',
-  'open_asked',
-  'open_refused',
-  'open_absent'
+  'open_asked'
 ])
 
 /** Why one of the row's two asks can't be sent, or `null` when it can. */
@@ -167,7 +165,7 @@ export type RowAskInput = {
   historyAsk: { kind: string } | null
 }
 
-export const ASK_RECORD_LABEL = 'Ask them for their record'
+export const ASK_RECORD_LABEL = 'Ask for their record'
 export const ASK_RECORD_AGAIN_LABEL = 'Ask again for their record'
 export const ASK_HISTORY_LABEL = 'Ask for their history'
 export const ASKING_LABEL = 'Asking…'
@@ -191,10 +189,7 @@ export function rowAskControls(input: RowAskInput): { record: RowAskControl; his
   if (input.recordAsk?.kind === 'asking') {
     record = { label: ASKING_LABEL, disabledReason: 'Waiting for their reply.' }
   } else {
-    const label =
-      input.recordAsk || input.kind === 'open_asked' || input.kind === 'open_refused' || input.kind === 'open_absent'
-        ? ASK_RECORD_AGAIN_LABEL
-        : ASK_RECORD_LABEL
+    const label = input.recordAsk || input.kind === 'open_asked' ? ASK_RECORD_AGAIN_LABEL : ASK_RECORD_LABEL
     const settled =
       input.kind === 'closed'
         ? 'Their record is already here and checks out.'

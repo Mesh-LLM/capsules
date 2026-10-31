@@ -1131,6 +1131,7 @@ function ExchangesSection({
                         peerName={peerName}
                         witnessOff={witnessOff}
                         counterpartyNodeId={row.counterparty ? (keyNodeIds.get(row.counterparty) ?? null) : null}
+                        otherRow={group.rows.find((r) => r.exchangeKey === row.raw.twin?.other_row) ?? null}
                         onToggleChecks={handleToggleChecks}
                         onToggleContent={handleToggleContent}
                         rail={railSegments[pageStart + index]}

@@ -12,6 +12,10 @@
 //     diff), never an equality/inconclusive judgment call.
 import type { ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
 import { parseVerdict, type ParsedVerdict } from '@/features/capsules/lib/adjudication-view'
+import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
+import type { CapsuleRecord } from '@/features/capsules/api/types'
+import { recordServedBy } from '@/features/capsules/lib/security-checks-view'
+import type { RefereeRow } from '@/features/capsules/lib/referee-row'
 
 /** The bracket's one statement of how the pair came to be: a client marked
  *  the two requests as one pair with the `x-mesh-twin-bracket` header. The
@@ -70,19 +74,59 @@ export function twinAnswerState(rows: readonly ExchangeLedgerRow[]): TwinAnswerS
   return 'not_compared'
 }
 
-export const TWIN_ANSWER_LABEL: Record<TwinAnswerState, string> = {
-  same: 'same answer',
-  different: 'different answers',
-  not_compared: 'not compared yet'
+/** The ruling THIS node asked for on a pair and holds as a sealed record
+ *  (the plugin's `referee_row`, state `adjudicated`), from either row. The
+ *  same rule as the "Swapped the model" card (`attack-cards.ts`): another
+ *  node's ask and a verdict this node issued as a referee are not read here,
+ *  and no mismatch is inferred from the two answers. `null` when no ruling is
+ *  held. */
+export function askedVerdict(
+  rows: readonly { twin?: { referee_row?: RefereeRow | null } | null }[]
+): { verdict: ParsedVerdict; referee: string | null } | null {
+  for (const row of rows) {
+    const recorded = row.twin?.referee_row
+    if (recorded?.state !== 'adjudicated') continue
+    const verdict = parseVerdict(recorded.verdict)
+    if (verdict !== null) return { verdict, referee: recorded.referee || null }
+  }
+  return null
 }
 
-/** A referee's signed verdict for this pair, when one exists. */
-export type TwinVerdict = ParsedVerdict | null
+/** Every node id a pair row carries; empty when it carries none. */
+export function rowNodeIds(raw: PaneCRow, extraIds: readonly (string | null | undefined)[] = []): string[] {
+  const own = raw.mine.record as CapsuleRecord | undefined
+  return [...extraIds, raw.counterparty, raw.theirs.peer_id, raw.theirs.received_from, own ? recordServedBy(own) : null].filter(
+    (id): id is string => typeof id === 'string' && id.length > 0
+  )
+}
 
-export function twinVerdict(rows: readonly ExchangeLedgerRow[]): { verdict: TwinVerdict; capsuleId: string | null } {
-  for (const row of rows) {
-    const verdict = parseVerdict(row.raw.twin?.verdict)
-    if (verdict !== null) return { verdict, capsuleId: row.raw.twin?.verdict_capsule_id ?? null }
-  }
-  return { verdict: null, capsuleId: null }
+/** Whether a pair row's evidence names `party` as the node on its other side:
+ *  an id equal to it, or one that is a prefix of the other (ids are shown
+ *  shortened). `extraIds` carries ids only the caller knows (the ledger row's
+ *  counterparty). */
+export function rowNamesNode(raw: PaneCRow, extraIds: readonly (string | null | undefined)[], party: string): boolean {
+  const wanted = party.toLowerCase()
+  return rowNodeIds(raw, extraIds)
+    .map((id) => id.toLowerCase())
+    .some((id) => id === wanted || id.startsWith(wanted) || wanted.startsWith(id))
+}
+
+export type PairRulingMark = 'wrong' | 'agreed' | 'unmatched'
+
+/** What a `contradicted:<party>` ruling says about each row of a pair, decided
+ *  here and nowhere else (the group card and the checks panel both call it):
+ *  a row is marked only when EXACTLY ONE row names the party, that row wrong
+ *  and the other agreed; with none or both naming it, no one is marked.
+ *  `rowB` is null when the other row of the pair is not known. */
+export function pairRulingMarks(
+  rowA: PaneCRow,
+  idsA: readonly (string | null | undefined)[],
+  rowB: PaneCRow | null,
+  idsB: readonly (string | null | undefined)[],
+  party: string
+): [PairRulingMark, PairRulingMark] {
+  const a = rowNamesNode(rowA, idsA, party)
+  const b = rowB !== null && rowNamesNode(rowB, idsB, party)
+  if (a === b) return ['unmatched', 'unmatched']
+  return a ? ['wrong', 'agreed'] : ['agreed', 'wrong']
 }

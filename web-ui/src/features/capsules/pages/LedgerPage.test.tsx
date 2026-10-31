@@ -844,7 +844,7 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     expect(screen.queryByText('nothing to ask yet')).not.toBeInTheDocument()
     // The asks stay on the row, disabled with the reason: never a button
     // pointed at nobody, never one that clicks into nothing.
-    for (const button of screen.getAllByRole('button', { name: 'Ask them for their record' })) {
+    for (const button of screen.getAllByRole('button', { name: 'Ask for their record' })) {
       expect(button).toBeDisabled()
     }
 
@@ -853,8 +853,8 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     const alarmRow = screen.getByLabelText('Exchange exch-alarm-07')
     await user.click(within(alarmRow).getByRole('button', { name: 'How we checked ▸' }))
     const checksRegion = await screen.findByRole('region', { name: /Security checks for exch-alarm-07/ })
-    expect(checksRegion).toHaveTextContent('words match')
-    expect(checksRegion).toHaveTextContent('signed')
+    expect(checksRegion).toHaveTextContent('Contents match the record’s id')
+    expect(checksRegion).toHaveTextContent('Signed with the node’s key')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
@@ -953,7 +953,7 @@ describe('LedgerPageContent — Part 3: Exchanges two-sided stream + row inspect
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
     expect(await screen.findByText('Waiting for their record')).toBeInTheDocument()
-    const askButton = await screen.findByRole('button', { name: 'Ask them for their record' })
+    const askButton = await screen.findByRole('button', { name: 'Ask for their record' })
 
     await user.click(askButton)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
@@ -1707,7 +1707,7 @@ describe('LedgerPageContent — Part B3: windowed paging + sticky header', () =>
     // Expands the same full-detail checks view inline a click would --
     // never a dialog.
     const checksRegion = await screen.findByRole('region', { name: /Security checks for exch-75/ })
-    expect(checksRegion).toHaveTextContent('exch-75')
+    expect(checksRegion).toHaveAccessibleName(/exch-75/)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
@@ -1894,7 +1894,7 @@ describe('LedgerPageContent — real twin bracket + Twins-only filter', () => {
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /exchanges/i }))
 
-    expect(await screen.findByTestId('twin-bracket-twin-abc')).toHaveTextContent('Side-by-side check · twin-abc · same request, two machines')
+    expect(await screen.findByTestId('twin-bracket-twin-abc')).toHaveTextContent('Same request, two machines · twin-abc')
     expect(screen.getByRole('group', { name: 'Exchange twin-exch-0' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Exchange twin-exch-1' })).toBeInTheDocument()
     expect(
@@ -2317,7 +2317,7 @@ describe('LedgerPageContent — the plain-verdict pass on Exchanges', () => {
     })
     const { user } = await openExchanges()
     const before = vi.mocked(fetchPaneCList).mock.calls.length
-    await user.click(screen.getByRole('button', { name: 'Ask them for their record' }))
+    await user.click(screen.getByRole('button', { name: 'Ask for their record' }))
     await vi.waitFor(() => expect(vi.mocked(fetchPaneCList).mock.calls.length).toBeGreaterThan(before))
   })
 
@@ -2325,7 +2325,7 @@ describe('LedgerPageContent — the plain-verdict pass on Exchanges', () => {
     const { fetchPaneCList } = await oneAskableRow()
     const { user } = await openExchanges()
     const before = vi.mocked(fetchPaneCList).mock.calls.length
-    await user.click(screen.getByRole('button', { name: 'Ask them for their record' }))
+    await user.click(screen.getByRole('button', { name: 'Ask for their record' }))
     expect(await screen.findByText(/The ask didn’t go through/)).toBeInTheDocument()
     expect(vi.mocked(fetchPaneCList).mock.calls.length).toBe(before)
   })

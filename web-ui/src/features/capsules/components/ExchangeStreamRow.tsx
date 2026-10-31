@@ -71,7 +71,7 @@ import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import { RowVerdictLine } from '@/features/capsules/components/RowVerdictLine'
 import { rowCombinationText } from '@/features/capsules/lib/row-combination'
 import { NO_PEER_NAMES, peerName as namePeer, resolveRowPeer } from '@/features/capsules/lib/peer-names'
-import { rowSteps, rowVerdictText, type RowStep } from '@/features/capsules/lib/row-verdict'
+import { isWaitingForTheirRecord, rowSteps, rowVerdictText, type RowStep } from '@/features/capsules/lib/row-verdict'
 import {
   CONFIRMED_NOT_KEPT,
   LOCAL_ONLY_TOOLTIP,
@@ -247,7 +247,7 @@ export type ExchangeStreamRowProps = {
   onToggleContent: (row: ExchangeLedgerRow) => void
   /** Toggle ② -- flips `checksExpanded` for this row (the `▸/▾ checks` control). */
   onToggleChecks: (row: ExchangeLedgerRow) => void
-  /** What "Ask them for their record" produced for this row, if it asked:
+  /** What "Ask for their record" produced for this row, if it asked:
    *  the latest reply and the latest verified one (`settleRowAsk`). */
   askOutcome?: RowAsk | null
   /** Sends the ask. Absent where the page can't ask (a saved sample): the
@@ -265,6 +265,8 @@ export type ExchangeStreamRowProps = {
   /** The node Pane B joins to this row's `key:` counterparty
    *  (`identity.node_id`), when it knows one (`resolveRowPeer`). */
   counterpartyNodeId?: string | null
+  /** The other row of this row's twin pair, when the page has it. */
+  otherRow?: ExchangeLedgerRow | null
 }
 
 const shortIdOnly = (id: string) => namePeer(id, NO_PEER_NAMES)
@@ -288,7 +290,8 @@ export function ExchangeStreamRow({
   onAskForHistory,
   peerName = shortIdOnly,
   witnessOff = false,
-  counterpartyNodeId = null
+  counterpartyNodeId = null,
+  otherRow = null
 }: ExchangeStreamRowProps) {
   // Lifted here (not `SecurityChecksView`, which only mounts once `▸
   // checks` is expanded) so a fetch this hook's `.fetch()` triggers can
@@ -632,13 +635,17 @@ export function ExchangeStreamRow({
                   {action}
                 </Button>
               ) : null}
-              <AskButton
-                census="action:disabled_reason"
-                control={asks.record}
-                onAsk={() => {
-                  if (askFor && onAskForRecord) onAskForRecord(row, askFor)
-                }}
-              />
+              {/* Only where their half did not arrive: a row holding both
+                 halves, or their signed answer, has nothing to request. */}
+              {isWaitingForTheirRecord(state.kind) ? (
+                <AskButton
+                  census="action:disabled_reason"
+                  control={asks.record}
+                  onAsk={() => {
+                    if (askFor && onAskForRecord) onAskForRecord(row, askFor)
+                  }}
+                />
+              ) : null}
               <AskButton
                 census="action:disabled_reason"
                 control={asks.history}
@@ -760,6 +767,7 @@ export function ExchangeStreamRow({
             highlightedPropertyKey={highlightedCheckKey}
             identity={identity}
             localRecord={localRecord}
+            otherRow={otherRow}
             row={row}
             theirsRecompute={theirsRecompute}
           />

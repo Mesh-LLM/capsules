@@ -1,0 +1,137 @@
+// What the side-by-side group card says about one twin pair: the model asked
+// for on both machines, one column per machine and one for the referee, and a
+// verdict pill each. Pure derivation, so the rules are testable without a
+// component:
+//   - the referee facts follow `attack-cards.ts`'s asked-verdicts rule: only a
+//     ruling this node asked for and holds sealed (`askedVerdict`); another
+//     node's ask is never read, and a mismatch is never inferred from the two
+//     answers;
+//   - a value with no source reads "not recorded", never a guess;
+//   - there is no score, grade or percentage.
+import type { CapsuleRecord } from '@/features/capsules/api/types'
+import type { ExchangeLedgerRow } from '@/features/capsules/lib/exchange-ledger'
+import { shortId } from '@/features/capsules/lib/adjudication-view'
+import { rowModelName, servingProvenance, tokenFlowText } from '@/features/capsules/lib/serving-provenance'
+import { askedVerdict, pairRulingMarks, twinAnswerState, type TwinAnswerState } from '@/features/capsules/lib/twin-bracket'
+
+export type CardTone = 'good' | 'bad' | 'muted'
+
+export type MachineColumn = {
+  label: 'Machine A' | 'Machine B'
+  /** The node this row's record names as the other side; `null` when none. */
+  id: string | null
+  /** "37 → 18 tokens · sealed · confirmed by them" */
+  facts: string
+  /** "Referee: wrong answer" / "Referee: agreed" / ...; `null` when no ruling is held. */
+  pill: { text: string; tone: CardTone } | null
+}
+
+export type TwinGroupCard = {
+  model: string | null
+  machines: MachineColumn[]
+  referee: { id: string | null; capsuleId: string | null; asked: boolean }
+  /** "Swap caught" only when a ruling this node asked for contradicted one answer. */
+  swapCaught: boolean
+  answerState: TwinAnswerState
+  /** "Byte-for-byte compare of the two answers: ..." */
+  compareLine: string
+}
+
+const COMPARE_WORDS: Record<TwinAnswerState, string> = {
+  same: 'same',
+  different: 'different',
+  not_compared: 'pending (one fingerprint hasn’t reached this node)'
+}
+
+function ownRecord(row: ExchangeLedgerRow): CapsuleRecord | null {
+  return (row.raw.mine.record as CapsuleRecord | undefined) ?? null
+}
+
+/** The id the card shows for a machine. */
+function rowId(row: ExchangeLedgerRow): string | null {
+  return row.counterparty ?? row.raw.theirs.peer_id ?? row.raw.theirs.received_from ?? null
+}
+
+function machineFacts(row: ExchangeLedgerRow): string {
+  const own = ownRecord(row)
+  const tokens = own ? servingProvenance(own) : null
+  const flow = tokens ? tokenFlowText(tokens.promptTokens, tokens.completionTokens) : null
+  const sealed = row.raw.mine.state !== 'absent' ? 'sealed' : 'not sealed here'
+  // Said from the pane's state, in the row's own words for a declined or
+  // empty answer; a waiting row says only that it is not confirmed here.
+  const kind = row.rightCellState.kind
+  const their =
+    kind === 'closed'
+      ? 'confirmed by them'
+      : kind === 'contradicted'
+        ? 'their record differs'
+        : kind === 'open_refused'
+          ? 'they declined'
+          : kind === 'open_absent'
+            ? 'they have no record'
+            : 'not confirmed here'
+  return [flow ?? 'tokens not recorded', sealed, their].join(' · ')
+}
+
+export function buildTwinGroupCard(rows: readonly ExchangeLedgerRow[]): TwinGroupCard {
+  const asked = askedVerdict(rows.map((row) => row.raw))
+  const kind = asked?.verdict.kind ?? null
+  const [rowA, rowB] = rows
+
+  const provenances = rows.map((row) => {
+    const own = ownRecord(row)
+    return own ? servingProvenance(own) : null
+  })
+  const model = rowModelName(provenances[0] ?? null, provenances[1] ?? null)
+
+  const verdict = asked?.verdict
+  const marks =
+    verdict?.kind === 'contradicted' && rowA
+      ? pairRulingMarks(rowA.raw, [rowA.counterparty], rowB?.raw ?? null, [rowB?.counterparty], verdict.party)
+      : null
+
+  const pillFor = (row: ExchangeLedgerRow): MachineColumn['pill'] => {
+    if (kind === null) return null
+    if (kind === 'corroborated') return { text: 'Referee: agreed', tone: 'good' }
+    if (kind === 'inconclusive') return { text: 'Referee: inconclusive', tone: 'muted' }
+    if (kind === 'not_comparable') return { text: 'Referee: not comparable', tone: 'muted' }
+    // Contradicted: marked only when exactly one row names the party.
+    const mark = marks?.[row === rowA ? 0 : 1]
+    if (mark === 'wrong') return { text: 'Referee: wrong answer', tone: 'bad' }
+    return mark === 'agreed' ? { text: 'Referee: agreed', tone: 'good' } : null
+  }
+
+  const machine = (row: ExchangeLedgerRow | undefined, label: MachineColumn['label']): MachineColumn => ({
+    label,
+    id: row ? rowId(row) : null,
+    facts: row ? machineFacts(row) : 'not recorded',
+    pill: row ? pillFor(row) : null
+  })
+
+  // The verdict record to open is the one for the ruling shown: a record
+  // whose own verdict differs from the asked ruling is another referee's.
+  const askedWire = rows.map((row) => row.raw.twin?.referee_row).find((r) => r?.state === 'adjudicated')
+  const verdictRow = rows.find((row) => {
+    const twin = row.raw.twin
+    if (!twin?.verdict_capsule_id) return false
+    return !twin.verdict || askedWire?.state !== 'adjudicated' || twin.verdict === askedWire.verdict
+  })
+  const answerState = twinAnswerState(rows)
+  return {
+    model,
+    machines: [machine(rowA, 'Machine A'), machine(rowB, 'Machine B')],
+    referee: {
+      id: asked?.referee ? asked.referee : null,
+      capsuleId: asked ? (verdictRow?.raw.twin?.verdict_capsule_id ?? null) : null,
+      asked: asked !== null
+    },
+    swapCaught: kind === 'contradicted',
+    answerState,
+    compareLine: `Byte-for-byte compare of the two answers: ${COMPARE_WORDS[answerState]}.`
+  }
+}
+
+/** A node id as the card shows it: the first ten characters. */
+export function cardId(id: string | null): string {
+  return id ? shortId(id) : 'not recorded'
+}

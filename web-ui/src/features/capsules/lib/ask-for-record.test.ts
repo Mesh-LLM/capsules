@@ -208,14 +208,14 @@ describe('rowAskControls', () => {
   it('offers both asks at once on a row whose record has not arrived: no timeout', () => {
     for (const kind of ['open_not_given', 'open_not_held', 'open_not_asked'] as const) {
       expect(rowAskControls(input({ kind }))).toEqual({
-        record: { label: 'Ask them for their record', disabledReason: null },
+        record: { label: 'Ask for their record', disabledReason: null },
         history: { label: 'Ask for their history', disabledReason: null }
       })
     }
   })
 
-  it('offers asking again after an answer or a signed statement', () => {
-    for (const kind of ['open_asked', 'open_refused', 'open_absent'] as const) {
+  it('offers asking again after an ask', () => {
+    for (const kind of ['open_asked'] as const) {
       expect(rowAskControls(input({ kind })).record).toEqual({ label: 'Ask again for their record', disabledReason: null })
     }
   })
