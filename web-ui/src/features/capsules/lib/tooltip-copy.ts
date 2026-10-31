@@ -28,11 +28,6 @@ export const HERO_TOOLTIPS = {
 export const OWNER_LINKED_PHRASE = 'linked to your owner account (self-asserted)'
 export const OWNER_NOT_LINKED_PHRASE = 'not linked to an owner'
 
-/** Record push is on by default (#68) but a node may turn it off, so their
- *  record arriving by itself is never promised. */
-export const THEIR_RECORD_ARRIVES_IF_PUSHED =
-  'Their record arrives on its own only if their node sends records (on by default, unless its operator turned it off). Otherwise, ask for it on the exchange row.'
-
 /** p2 item 5: why an action is disabled -- said on hover, never a silent grey. */
 export const SAMPLE_DATA_UNAVAILABLE = 'Not available on sample data.'
 
@@ -253,8 +248,6 @@ export const WITNESS_OFF = 'witness off — your choice'
 export const INTEGRITY_TILE_TOOLTIPS = {
   sealed:
     'Records this node sealed into its log, not counting padding. Sealed means a record can’t change unnoticed; it doesn’t make the contents true.',
-  sharedWithWitness:
-    'How many of your checkpoints a witness you don’t run is holding. Off by your choice until you turn one on.',
   confirmedByOtherSide: 'Exchanges saved on this node that the other side confirmed with their own signed record, checked on this machine.',
   contradicted:
     'Exchanges where your record and theirs disagree: a different request, answer, model or server, or their record not matching its own id.'

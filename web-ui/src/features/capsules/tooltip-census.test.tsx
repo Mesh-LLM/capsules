@@ -18,8 +18,10 @@ import { HARNESS_PANE_B_PAYLOAD } from '@/features/capsules/lib/peer-fixtures'
 import { fixtureMineCell, fixtureTheirsCell } from '@/features/capsules/lib/pushed-half-fixtures'
 import {
   buildSetupSteps,
-  chainStripCaption,
   continuityFact,
+  coverageBadge,
+  recordsStripBreakdown,
+  recordsStripHeading,
   sealedBreakdownText
 } from '@/features/capsules/lib/integrity-view'
 import {
@@ -115,8 +117,7 @@ const REQUIRED = {
   ],
   integrity: [
     'integrity_tile:Sealed',
-    'integrity_tile:Shared with a witness',
-    'integrity_tile:Saved as confirmed',
+    'integrity_tile:Confirmed by the other side',
     'integrity_tile:Disagreements',
     'integrity:chain_strip',
     'integrity:close_card',
@@ -325,7 +326,7 @@ describe('tooltip census -- every chip type the Evidence tab ships has a plain o
     const user = userEvent.setup()
     render(<LedgerPageContent />, { wrapper })
     await user.click(await screen.findByRole('tab', { name: /integrity/i }))
-    await screen.findByText(/Have a witness hold your checkpoints/)
+    await screen.findByText(/Have an outside witness hold your checkpoints/)
     expectCovered(REQUIRED.integrity, censusOnScreen(), 'face')
   })
 })
@@ -392,17 +393,19 @@ describe('tooltip census -- the copy itself', () => {
     const steps = buildSetupSteps({ checkpoint_count: 0 }, null)
     const texts = [
       ...steps.flatMap((step) => [step.title, step.status, step.body ?? '']),
-      chainStripCaption(5, 1, 1),
-      chainStripCaption(5, 1, 3),
-      chainStripCaption(5, 2, null),
-      chainStripCaption(2, null, null),
-      chainStripCaption(1, 0, null),
-      chainStripCaption(8, 1, 8),
-      ...buildSetupSteps({ checkpoint_count: 1 }, { verified: true }, 3).flatMap((step) => [
-        step.title,
-        step.status,
-        step.body ?? ''
-      ]),
+      recordsStripHeading(5, 1),
+      recordsStripHeading(2, null),
+      coverageBadge(5, 1, 1),
+      coverageBadge(5, 2, null),
+      coverageBadge(2, null, null),
+      coverageBadge(1, 0, null),
+      coverageBadge(8, 1, 8),
+      recordsStripBreakdown(5, 3, 1, 1, '2026-09-10T16:28:00Z'),
+      ...buildSetupSteps({ checkpoint_count: 1, witness_configured: true }, { verified: true }, {
+        total: 4,
+        received: 3
+      }).flatMap((step) => [step.title, step.status, step.body ?? '', step.guards]),
+      ...steps.map((step) => step.guards),
       continuityFact(null),
       continuityFact(1),
       continuityFact(3),

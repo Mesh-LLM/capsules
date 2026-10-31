@@ -12,13 +12,15 @@
 //      never a number the page doesn't hold
 //   6. The exceptions-first line above the table, and the Ledger badge's
 //      "This node's copy" rename
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LedgerPageContent } from '@/features/capsules/pages/LedgerPage'
 import { setPluginHost } from '@/plugin-host/host'
 import { createStandaloneHost } from '@/plugin-host/standalone-host'
+import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
+import { fixtureMineCell, fixtureTheirsCell } from '@/features/capsules/lib/pushed-half-fixtures'
 import { CHAIN_BAR_INFO, INTEGRITY_TILE_INFO } from '@/features/capsules/lib/integrity-view'
 import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
 import { HERO_DESCRIPTION } from '@/features/capsules/lib/tooltip-copy'
@@ -527,7 +529,7 @@ describe('LedgerPageContent', () => {
       'Opens Integrity, which lists how to get the other side’s record'
     )
     await user.click(setup)
-    expect(await screen.findByText('Chain integrity')).toBeInTheDocument()
+    expect(await screen.findByText('Will your records hold up later, to someone else?')).toBeInTheDocument()
   })
 
   it('Exchanges empty state is an invitation, never a bare table header over nothing', async () => {
@@ -1144,14 +1146,13 @@ describe('LedgerPageContent — Part B1: Integrity chain strip', () => {
 
     // The four first-person stat cards, with real (non-literal) counts.
     expect(await screen.findByText('Sealed')).toBeInTheDocument()
-    expect(screen.getByText('Shared with a witness')).toBeInTheDocument()
-    expect(screen.getByText('Saved as confirmed')).toBeInTheDocument()
+    expect(screen.getByText('Confirmed by the other side')).toBeInTheDocument()
     expect(screen.getByText('Disagreements')).toBeInTheDocument()
-    expect(screen.getAllByText('2').length).toBeGreaterThan(0) // Sealed 2, Saved as confirmed 2
-    // A prominent, honest zero -- Registered 0 is present in the document,
-    // not suppressed behind a muted "no data" fallback line.
-    expect(screen.getAllByText('0').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('1').length).toBeGreaterThan(0) // Contradicted 1 (chain strip's leading "1" also renders)
+    expect(screen.getByText('Sealed').closest('.panel-shell')).toHaveTextContent('2')
+    // Every count carries its denominator: both exchange rows are the total.
+    // (These fixture rows carry no signed record from the other side, so
+    // neither the confirmed nor the disagreement gate counts them.)
+    expect(await screen.findAllByText('0 of 2')).toHaveLength(2)
 
     // Both old contradictory sentences are gone.
     const bodyText = document.body.textContent ?? ''
@@ -1164,33 +1165,46 @@ describe('LedgerPageContent — Part B1: Integrity chain strip', () => {
     expect(document.getElementById(sealedGlyph.getAttribute('aria-describedby') as string)).toHaveTextContent(
       INTEGRITY_TILE_INFO.sealed
     )
-    const closedGlyph = screen.getByRole('button', { name: 'About Saved as confirmed' })
+    const closedGlyph = screen.getByRole('button', { name: 'About Confirmed by the other side' })
     expect(document.getElementById(closedGlyph.getAttribute('aria-describedby') as string)).toHaveTextContent(
       INTEGRITY_TILE_INFO.confirmedByOtherSide
     )
-    for (const label of ['Sealed', 'Shared with a witness', 'Saved as confirmed', 'Disagreements']) {
+    for (const label of ['Sealed', 'Confirmed by the other side', 'Disagreements']) {
       expect(screen.getByRole('button', { name: `About ${label}` })).toBeInTheDocument()
     }
-    const chainGlyph = screen.getByRole('button', { name: 'About the chain coverage bar' })
+    const chainGlyph = screen.getByRole('button', { name: 'About the coverage bar' })
     expect(document.getElementById(chainGlyph.getAttribute('aria-describedby') as string)).toHaveTextContent(
       CHAIN_BAR_INFO
     )
-    // The terse caption stays on the face -- the (i) explains, never replaces.
-    expect(screen.getByText(/all sealed/)).toBeInTheDocument()
+    // The heading stays on the face -- the (i) explains, never replaces. This
+    // card reports no checkpoint count, so the strip says "not checked".
+    expect(screen.getByText(/Your records · 2 sealed · checkpoints not checked/)).toBeInTheDocument()
+    expect(screen.getByText('checkpoints not checked')).toBeInTheDocument()
   })
 
   it('renders the chain strip + stat cards even with no data, never the old "no integrity fields" fallback', async () => {
-    // Default mocked payloads: fetchPaneA returns rows:[], card:null and
-    // fetchPaneCList returns rows:[] -- an honest all-zero render, not a
-    // muted absence message.
+    // Empty payloads (set explicitly: mocks survive across tests): fetchPaneA
+    // returns rows:[], card:null and fetchPaneCList returns rows:[] -- an
+    // honest empty render, not a muted absence message.
+    const { fetchPaneA, fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
+    vi.mocked(fetchPaneA).mockResolvedValue({ rows: [], operator: null, witness_checkpoint_supplied: false, card: null })
+    vi.mocked(fetchPaneCList).mockResolvedValue({
+      rows: [],
+      row_count: 0,
+      default_sort: '',
+      filters: [],
+      next_after_seq: null,
+      archived_segments: []
+    })
     const user = userEvent.setup()
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /integrity/i }))
 
     expect(await screen.findByText('Sealed')).toBeInTheDocument()
-    expect(screen.getByText('Shared with a witness')).toBeInTheDocument()
-    expect(screen.getByText('Saved as confirmed')).toBeInTheDocument()
+    expect(screen.getByText('Confirmed by the other side')).toBeInTheDocument()
     expect(screen.getByText('Disagreements')).toBeInTheDocument()
+    // No exchanges: "none yet", never a bare 0 with no denominator.
+    expect(screen.getAllByText('none yet').length).toBeGreaterThanOrEqual(3)
 
     const bodyText = document.body.textContent ?? ''
     expect(bodyText).not.toMatch(/history is intact and registered with/i)
@@ -1273,7 +1287,7 @@ describe('LedgerPageContent — Integrity Close card', () => {
     // shows or adds one up.
     expect(card.textContent).not.toMatch(/msat|21000|total|balance/i)
     // Payment records are sealed like the rest, but are not exchanges.
-    expect(await screen.findByText(/1 yours · 0 received from the other side · 2 payment records/)).toBeInTheDocument()
+    expect(await screen.findByText(/1 yours · 0 received · 2 payment records/)).toBeInTheDocument()
   })
 })
 
@@ -1287,7 +1301,7 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
     vi.mocked(useStatusQuery).mockReturnValue({ data: undefined } as never)
   })
 
-  it('Shared with a witness 0 renders at the same weight as any other value, with "off — your choice" under it', async () => {
+  it('step 1 reads "Off · your choice" and the attack it guards against when the node says no witness is set', async () => {
     const { fetchPaneA } = await import('@/features/capsules/api/sidecarClient')
     vi.mocked(fetchPaneA).mockResolvedValue({
       rows: [],
@@ -1299,14 +1313,10 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /integrity/i }))
 
-    const registeredLabel = await screen.findByText('Shared with a witness')
-    const statCard = registeredLabel.closest('.panel-shell')
-    const zero = statCard?.querySelector('.font-mono')
-    expect(zero?.textContent).toBe('0')
-    expect(statCard).toHaveTextContent('off — your choice')
-    // Same element the "bad"-toned Contradicted card would use for a real
-    // value -- no separate muted/apologetic class for a zero.
-    expect(zero?.className).toMatch(/font-semibold/)
+    const step = (await screen.findByTestId('setup-steps')).querySelector('[data-step="checkpoints"]') as HTMLElement
+    expect(within(step).getByText('off · your choice')).toBeInTheDocument()
+    expect(within(step).getByText('Guards against: rewrote the record')).toBeInTheDocument()
+    expect(within(step).getByRole('link', { name: 'Turn on' })).toHaveAttribute('href', '/configuration/plugins')
   })
 
   it('shows the three-step setup checklist, in value order, on a bare node (host reports checkpoint_count 0)', async () => {
@@ -1323,12 +1333,14 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /integrity/i }))
 
-    await screen.findByText(/Have a witness hold your checkpoints/)
-    expect(screen.getByText(/Bind an owner identity/)).toBeInTheDocument()
+    await screen.findByText(/Have an outside witness hold your checkpoints/)
+    expect(screen.getByText(/Bind your records to a key you own/)).toBeInTheDocument()
     expect(screen.getByText(/Get the other side’s record/)).toBeInTheDocument()
-    expect(screen.getByText(/arrives on its own only if their node sends records/)).toBeInTheDocument()
-    expect(screen.getByText(/does not make your records true/)).toBeInTheDocument()
-    expect(screen.getByText(/only your own claim about who you are/)).toBeInTheDocument()
+    expect(screen.getByText(/can only be checked against themselves/)).toBeInTheDocument()
+    expect(screen.getByText(/your own claim about who you are, nothing more/)).toBeInTheDocument()
+    expect(screen.getByText('Guards against: denying your own records')).toBeInTheDocument()
+    expect(screen.getByText('Guards against: left something out')).toBeInTheDocument()
+    expect(screen.getByText('mesh-llm auth init')).toBeInTheDocument()
   })
 
   it('Integrity reads a NULL card as "checkpoint status not reported", never a false "no checkpoint yet"', async () => {
@@ -1347,12 +1359,13 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
     render(<LedgerPageContent />, { wrapper: makeWrapper() })
     await user.click(screen.getByRole('tab', { name: /integrity/i }))
 
-    await screen.findByText(/Have a witness hold your checkpoints/)
+    await screen.findByText(/Have an outside witness hold your checkpoints/)
     // The setup-step body is unique; the two negatives are the false-absence
     // strings that must NOT appear for a not-reported (null) card.
     expect(screen.getByText(/did not report its checkpoint status/)).toBeInTheDocument()
-    expect(screen.queryByText(/does not make your records true/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/can only be checked against themselves/)).not.toBeInTheDocument()
     expect(screen.queryByText(/no checkpoint yet/)).not.toBeInTheDocument()
+    expect(screen.getAllByText('not checked').length).toBeGreaterThan(0)
   })
 
   it('flips step 1 to "witnessed" and shows the witness copy once a checkpoint exists', async () => {
@@ -1387,8 +1400,9 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
     expect(within(witnessList).getByText('c.example')).toBeInTheDocument()
     expect(within(witnessList).getByText('none held yet')).toBeInTheDocument()
     expect(screen.getByText(`witnessed no later than ${formatExchangeTimestamp('2026-09-10')}`)).toBeInTheDocument()
-    // Step 1 no longer shows the "what it does not buy" sentence once done.
-    expect(screen.queryByText(/does not make your records true/)).not.toBeInTheDocument()
+    // Step 1 no longer shows the "can only be checked against themselves" sentence once done.
+    expect(screen.queryByText(/can only be checked against themselves/)).not.toBeInTheDocument()
+    expect(screen.getByText('held by a witness')).toBeInTheDocument()
   })
 
   it('shows the once-per-node facts (retention, capture boundary, identity) exactly once, never per row', async () => {
@@ -1449,14 +1463,96 @@ describe('LedgerPageContent — Part T6: Integrity section completion', () => {
         'Continuity: 1 checkpoint so far. The next one builds on it. A witness is what lets someone else check it too.'
       )
     ).toBeInTheDocument()
-    // Finding 7: the unwitnessed checkpoint is said by step 1 -- not again as
-    // a separate "Checkpointed locally" line.
-    expect(screen.getAllByText(/no witness/i)).toHaveLength(1)
+    // The node did not say whether a witness is set: step 1 says "not checked",
+    // never "off", and there is no separate "Checkpointed locally" line.
+    expect(screen.getAllByText('not checked').length).toBeGreaterThan(0)
     expect(screen.queryByText(/witness: off/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/off · your choice/)).not.toBeInTheDocument()
     const details = screen.getByTestId('integrity-details')
     expect(details.tagName).toBe('DETAILS')
     expect(details).not.toHaveAttribute('open')
     expect(within(details).getByText(/^Capture boundary: the plugin at this node’s serving boundary/)).toBeInTheDocument()
+  })
+
+  it('step 3 is a status with its denominator, carries no "Ask for their record" task, and the page says no "chain"', async () => {
+    const { fetchPaneA, fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
+    vi.mocked(fetchPaneA).mockResolvedValue({
+      rows: [],
+      operator: null,
+      witness_checkpoint_supplied: false,
+      card: { checkpoint_count: 0 }
+    })
+    // Pushed halves arrive as `present-unverified` with the record attached;
+    // a bare `present` only says they hold a record citing ours.
+    const exchange = (key: string, theirs: PaneCRow['theirs']) => ({
+      exchange_key: key,
+      role_tag: 'ASKED',
+      header_state: 'ok',
+      properties: null,
+      has_issue: false,
+      mine: fixtureMineCell(`${key}-m`),
+      theirs,
+      unilateral: theirs.state === 'absent',
+      timestamp: null
+    })
+    vi.mocked(fetchPaneCList).mockResolvedValue({
+      rows: [
+        exchange('a', fixtureTheirsCell('agrees', { capsuleId: 'a'.repeat(64) })),
+        exchange('b', fixtureTheirsCell('disagrees', { capsuleId: 'b'.repeat(64) })),
+        exchange('c', { state: 'present', capsule_id: 'c'.repeat(64) }),
+        exchange('d', { state: 'absent', capsule_id: null })
+      ],
+      row_count: 4,
+      default_sort: '',
+      filters: [],
+      next_after_seq: null,
+      archived_segments: []
+    } as never)
+    const user = userEvent.setup()
+    const { container } = render(<LedgerPageContent />, { wrapper: makeWrapper() })
+    await user.click(screen.getByRole('tab', { name: /integrity/i }))
+
+    // Step 3 and the tiles read the same gate: the agreeing and the
+    // disagreeing pushed halves are held (2 of 4); the bare `present` row and
+    // the absent one are not.
+    const step = (await screen.findByText('2 of 4 received')).closest('li') as HTMLElement
+    expect(within(step).getByText(/You hold both for 2 of 4/)).toBeInTheDocument()
+    const tile = (label: string) => screen.getByText(label).closest('.panel-shell') as HTMLElement
+    expect(tile('Confirmed by the other side')).toHaveTextContent('1 of 4')
+    expect(tile('Disagreements')).toHaveTextContent('1 of 4')
+    expect(within(step).getByRole('button', { name: 'See in Exchanges' })).toBeInTheDocument()
+    expect(screen.queryByText(/ask for their record/i)).not.toBeInTheDocument()
+    // The footer says what this page does and does not check.
+    expect(screen.getByTestId('integrity-footer')).toHaveTextContent(
+      'This page reads the node’s own status and doesn’t re-check it. Open an exchange to see checks redone in your browser.'
+    )
+    expect(container.textContent ?? '').not.toMatch(/\bchain\b/i)
+
+    // "See in Exchanges" switches tabs.
+    await user.click(within(step).getByRole('button', { name: 'See in Exchanges' }))
+    expect(screen.getByRole('tab', { name: /exchanges/i })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('a failed exchange list reads "not checked" on step 3 and both tiles, never "none yet"', async () => {
+    const { fetchPaneA, fetchPaneCList } = await import('@/features/capsules/api/sidecarClient')
+    vi.mocked(fetchPaneA).mockResolvedValue({
+      rows: [],
+      operator: null,
+      witness_checkpoint_supplied: false,
+      card: { checkpoint_count: 0 }
+    })
+    vi.mocked(fetchPaneCList).mockRejectedValue(new Error('pane c unavailable'))
+    const user = userEvent.setup()
+    render(<LedgerPageContent />, { wrapper: makeWrapper() })
+    await user.click(screen.getByRole('tab', { name: /integrity/i }))
+
+    const steps = await screen.findByTestId('setup-steps')
+    const step3 = steps.querySelector('[data-step="ask_peer"]') as HTMLElement
+    await waitFor(() => expect(within(step3).getByText('not checked')).toBeInTheDocument())
+    expect(within(step3).queryByText('none yet')).not.toBeInTheDocument()
+    const tile = (label: string) => screen.getByText(label).closest('.panel-shell') as HTMLElement
+    expect(tile('Confirmed by the other side')).toHaveTextContent('not checked')
+    expect(tile('Disagreements')).toHaveTextContent('not checked')
   })
 
   it('offers a range-wide "Save evidence file" action, distinct from the Exchanges one', async () => {
