@@ -3803,6 +3803,10 @@ pub(crate) mod tests {
             assert!(
                 matches!(pushed_under, Outcome::Refused { .. }),
                 "{profile:?}: the id a push names is no one's: {pushed_under:?}"
+            );
+        }
+    }
+
     /// A record that never leaves this node is in no keyed answer's matched
     /// set (evidencebook#206 row 4, Mesh-LLM/capsules-plugin#161): asked by
     /// `correlation` or `exchange` over a key it sits under, the answer is the
