@@ -778,9 +778,10 @@ async fn record_leg_outcome(
 }
 
 /// Start the catch-up of this node's earlier terms legs that went out
-/// uncovered ([`leg_catch_up`]), once per process: at the first handler with
-/// a host context once this node's own peer id is known, the checkpoint
-/// cadence is on and pushing is. It runs in its own task, so the host's
+/// uncovered ([`leg_catch_up`]), once per process: at the first mesh event
+/// or channel message once this node's own peer id is known, the checkpoint
+/// cadence is on and pushing is. The host reports the peer id on its first
+/// mesh event, so in practice that is soon after start. It runs in its own task, so the host's
 /// ordered channel handling never waits on a provider.
 fn start_leg_catch_up(
     context: &mesh_llm_plugin::PluginContext<'_>,
@@ -1778,6 +1779,8 @@ async fn main() -> anyhow::Result<()> {
         .as_ref()
         .map(checkpoint_cadence::CheckpointHandle::latest_head);
     let checkpoints_for_handler = checkpoints.clone();
+    let capsules_for_events = capsules.clone();
+    let checkpoints_for_events = checkpoints.clone();
 
     let capsules_for_handler = capsules.clone();
     // Local routing choices seal onto the same single-writer chain.
@@ -2030,14 +2033,21 @@ async fn main() -> anyhow::Result<()> {
         })
     })
     .customize(move |plugin| {
-        plugin.on_mesh_event(move |event, _context| {
+        plugin.on_mesh_event(move |event, context| {
             let self_peer = self_peer_for_events.clone();
-            Box::pin(async move {
-                if self_peer.learn(&event.local_peer_id) {
-                    tracing::info!(peer_id = %event.local_peer_id, "own mesh peer id reported by the host");
-                }
-                Ok(())
-            })
+            if self_peer.learn(&event.local_peer_id) {
+                tracing::info!(peer_id = %event.local_peer_id, "own mesh peer id reported by the host");
+            }
+            // The first mesh event names this node's own peer id: the
+            // earliest point a catch-up push can name its sender, so it
+            // starts here, not only at the first channel message.
+            start_leg_catch_up(
+                context,
+                &capsules_for_events,
+                checkpoints_for_events.as_ref(),
+                &self_peer,
+            );
+            Box::pin(async move { Ok(()) })
         })
     })
     .customize(move |plugin| with_admission_hook(plugin, peer_admission, capsules_for_hook))
