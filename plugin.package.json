@@ -284,7 +284,9 @@
           "category_label": "Keeping records",
           "category_summary": "Who else holds a copy of what you sealed. This is what makes a later rewrite provable by someone other than you.",
           "category_order": 2,
-          "setting_order": 10
+          "setting_order": 10,
+          "placeholder": "https://witness.agentactioncapsule.org",
+          "renderer_id": "set-value"
         }
       },
       {
