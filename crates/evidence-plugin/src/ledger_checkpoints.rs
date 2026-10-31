@@ -465,35 +465,45 @@ fn index_arg(value: Option<&Value>, name: &str) -> Result<Option<u64>, PluginErr
 
 /// The chain's last indexed record and how many records it holds: the tip
 /// a fresh chain checkpoint must reach. `None` while it holds none.
-fn chain_tip(ledger_dir: &Path, node_key_id: &str) -> Option<(String, u64)> {
+fn chain_tip(ledger_dir: &Path, node_key_id: &str) -> std::io::Result<Option<(String, u64)>> {
     evidence_log::with_index(ledger_dir, node_key_id, |index| {
         let tip = index.leaves.last()?;
         Some((tip.capsule_id.clone(), index.leaves.len() as u64))
     })
-    .ok()
-    .flatten()
 }
 
 /// Before a chain reply, have the cadence cut a checkpoint over the chain's
 /// tip if none covers it yet (a cut pads the chain like any other; it waits
 /// out the push window rather than fall back). Returns how many records the
-/// chain held when asked, which the reply's checkpoint must reach.
+/// chain held when asked, which the reply's checkpoint must reach; a chain
+/// this node cannot read is refused, so the reply is never left unguarded.
 async fn cover_chain_tip(
     checkpoints: Option<&crate::checkpoint_cadence::CheckpointHandle>,
     ledger_dir: &Path,
     signer: &SigningKey,
-) -> Option<u64> {
+) -> Result<Option<u64>, ReplyError> {
     let (dir, key) = (ledger_dir.to_path_buf(), crate::commitment::key_id(signer));
-    let (tip, held) = tokio::task::spawn_blocking(move || chain_tip(&dir, &key))
+    let Some((tip, held)) = tokio::task::spawn_blocking(move || chain_tip(&dir, &key))
         .await
-        .ok()
-        .flatten()?;
+        .map_err(|e| ReplyError::Node(format!("chain tip task did not complete: {e}")))?
+        .map_err(|e| ReplyError::Node(e.to_string()))?
+    else {
+        return Ok(None);
+    };
     if let Some(handle) = checkpoints {
         if let Err(why) = handle.coverage_for(&tip).await {
             tracing::warn!(%why, "no chain checkpoint cut for a ledger-checkpoint ask");
         }
     }
-    Some(held)
+    Ok(Some(held))
+}
+
+fn plugin_error(error: ReplyError) -> PluginError {
+    match error {
+        ReplyError::Invalid(why) => PluginError::invalid_params(why),
+        ReplyError::NotYet(why) => PluginError::invalid_request(why),
+        ReplyError::Node(why) => PluginError::internal(why),
+    }
 }
 
 /// `GET /ledger-checkpoint?file=<name>[&from=<i>&to=<j>]`. `checkpoints` is
@@ -531,7 +541,9 @@ pub fn with_route(
                     let from = index_arg(args.from.as_ref(), "from")?;
                     let to = index_arg(args.to.as_ref(), "to")?;
                     let covering = if file == CAPSULES_FILE {
-                        cover_chain_tip(checkpoints.as_ref(), &dir, &signer).await
+                        cover_chain_tip(checkpoints.as_ref(), &dir, &signer)
+                            .await
+                            .map_err(plugin_error)?
                     } else {
                         None
                     };
@@ -544,11 +556,7 @@ pub fn with_route(
                             "ledger checkpoint task did not complete: {e}"
                         ))
                     })?
-                    .map_err(|e| match e {
-                        ReplyError::Invalid(why) => PluginError::invalid_params(why),
-                        ReplyError::NotYet(why) => PluginError::invalid_request(why),
-                        ReplyError::Node(why) => PluginError::internal(why),
-                    })
+                    .map_err(plugin_error)
                 })
             }),
     )
@@ -985,7 +993,9 @@ mod tests {
         .unwrap();
         assert!(check(&read, &stale, &node, None).is_err());
         // With no cadence to cut one, the ask is refused, not served stale.
-        let held = cover_chain_tip(None, &ledger, state.signing_key()).await;
+        let held = cover_chain_tip(None, &ledger, state.signing_key())
+            .await
+            .unwrap();
         assert_eq!(held, Some(complete_lines(&read).0.len() as u64));
         let refused = reply(
             &ledger,
@@ -1000,7 +1010,9 @@ mod tests {
 
         let handle =
             crate::checkpoint_cadence::CheckpointHandle::for_tests(state.clone(), "test-log");
-        let held = cover_chain_tip(Some(&handle), &ledger, state.signing_key()).await;
+        let held = cover_chain_tip(Some(&handle), &ledger, state.signing_key())
+            .await
+            .unwrap();
         let fresh = reply(
             &ledger,
             LOG,
@@ -1030,7 +1042,9 @@ mod tests {
             check(&copy, &fresh, &node, None)
         );
         // Asked again with nothing new sealed, the same checkpoint serves.
-        let held = cover_chain_tip(Some(&handle), &ledger, state.signing_key()).await;
+        let held = cover_chain_tip(Some(&handle), &ledger, state.signing_key())
+            .await
+            .unwrap();
         let again = reply(
             &ledger,
             LOG,
