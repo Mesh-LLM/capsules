@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@action-state-group/agent-action-capsule':
+        specifier: 0.10.0
+        version: 0.10.0(@action-state-group/cll@0.3.0(@types/node@26.4.1))
       '@action-state-group/cll':
         specifier: 0.3.0
         version: 0.3.0(@types/node@26.4.1)
@@ -113,6 +116,15 @@ importers:
         version: 5.0.0(@types/node@26.4.1)(jsdom@30.0.1(@noble/hashes@2.4.0))(vite@8.2.2(@types/node@26.4.1)(jiti@2.7.0))
 
 packages:
+
+  '@action-state-group/agent-action-capsule@0.10.0':
+    resolution: {integrity: sha512-H0hlCj2aZEPQIGoloI2/ObVzs+xFSvu00ZKHTTTbFMOr14h5hwILH3fYMKfM2VkdFBT14LYhVFGOtvsKRT9WEw==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@action-state-group/cll': 0.3.0
+    peerDependenciesMeta:
+      '@action-state-group/cll':
+        optional: true
 
   '@action-state-group/cll@0.3.0':
     resolution: {integrity: sha512-mKWEo6Z19+dNrJVX5uF15x0j2wxWbV4O7eTg1ODAX9tNka4LQc5gIiyKfNulcuEVI/E5eL9yeJNCq7a0PFfnLQ==}
@@ -1854,6 +1866,10 @@ packages:
     engines: {node: '>= 6'}
 
 snapshots:
+
+  '@action-state-group/agent-action-capsule@0.10.0(@action-state-group/cll@0.3.0(@types/node@26.4.1))':
+    optionalDependencies:
+      '@action-state-group/cll': 0.3.0(@types/node@26.4.1)
 
   '@action-state-group/cll@0.3.0(@types/node@26.4.1)':
     dependencies:

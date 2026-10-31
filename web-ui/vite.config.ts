@@ -15,6 +15,7 @@ import { scopeToMountRoot } from './scope-css.ts'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const cllBrowser = path.resolve(dirname, 'node_modules/@action-state-group/cll/dist/browser.js')
+const aacBrowser = path.resolve(dirname, 'node_modules/@action-state-group/agent-action-capsule/dist/browser.js')
 
 /**
  * The twin-bracket diff viewer (react-diff-viewer-continued) lists a lazy
@@ -88,7 +89,10 @@ export default defineConfig({
       // The cll package's `browser` condition, named directly: the saved History
       // page bundles the same file (saved-pages.ts), and a test under node
       // must not pick the package's node build.
-      '@cll-browser': cllBrowser
+      '@cll-browser': cllBrowser,
+      // The agent-action-capsule runtime's browser entry (its package `browser`
+      // condition), named directly for the same reason.
+      '@aac-browser': aacBrowser
     }
   },
   define: { 'process.env.NODE_ENV': JSON.stringify('production') },
