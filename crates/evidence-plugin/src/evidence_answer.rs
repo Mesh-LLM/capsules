@@ -97,10 +97,10 @@
 //! is the same whether or not what was asked for exists. It is
 //! `refusal::sign` of the request digest, the reason and `issued_at` alone:
 //! no member names or depends on the asker, so two askers sending the same
-//! bytes in the same second get the same bytes back. What differs between two refusals is only what differs
-//! between the requests (their digest, which covers every member each
-//! carries) and when they were answered (`issued_at`), and the signature
-//! over those.
+//! bytes in the same second get the same bytes back. What differs between
+//! two refusals is only what differs between the requests (their digest,
+//! which covers every member each carries) and when they were answered
+//! (`issued_at`), and the signature over those.
 //!
 //! **Record requests** (record bodies: `record`, `exchange`, `correlation`
 //! with no derivation) get `not_authorized`, never `policy_declined`, when
