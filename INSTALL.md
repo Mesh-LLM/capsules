@@ -19,16 +19,26 @@ more under `evidence-interop/0`, which 0.1.5 answers.
   policy only, and are checked against the policy the peer's commitment pins.
 - **Each ask is recorded,** before it is sent: the request, then the answer, the refusal, or that
   nothing came back in its window.
-- **A paid exchange is sealed as a deal** on the payer's side, with the payer's and the provider's
-  receipts as Evidence Bundles. The deal's steps go to the counterparty of the exchange; the
-  payer's deal report stays on this node.
+- **The payer seals a paid exchange as a deal;** the payer's deal and the provider's own receipt
+  can each be exported as an Evidence Bundle. The deal's steps go to the counterparty of the
+  exchange; the payer's deal report stays on this node.
 - **The Service History** (`service_history/1`): what this node served, per period, as a Standard
   History.
 - **Service evidence agreements** and their coverage on the Exchanges rows, and the **join switch,
   `doctor` and the operator binding** (loop steps 6, 7 and 12).
 - **The Evidence tab says when a peer's answer is not witnessed.**
 
-Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGELOG.md).
+**Changed defaults and readings:**
+
+- **`share_record_at_completion` is now on by default (`counterparty`).** An upgraded node pushes
+  its sealed record of a completed exchange to the counterparty, and accepts the counterparty's,
+  without any setting changed. Set `share_record_at_completion = "off"` to keep 0.1.5's behaviour.
+- **Pushes and evidence requests are accepted on the sender's evidence key,** not the peer id they
+  arrive from.
+- **`served_summary/1` counts only witness receipts it can verify:** `coverage.witnessed` can drop,
+  and a receipt this node cannot check reads `NOT_CHECKED`.
+
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules-plugin/blob/main/CHANGELOG.md).
 
 ## What's new in 0.1.5
 
@@ -64,7 +74,7 @@ install the 0.1.5 package below instead.
 - **Exchange corroboration,** off by default (`share_exchange_corroboration`): another node can ask
   whether this node holds a half of one earlier exchange.
 
-Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGELOG.md).
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules-plugin/blob/main/CHANGELOG.md).
 
 ## What's new in 0.1.4
 
@@ -77,7 +87,7 @@ Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGEL
 - **The console's navigation stays on the Evidence page,** a served exchange with no other side
   reads LOCAL, and twin pairs show on Peers.
 
-Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGELOG.md).
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules-plugin/blob/main/CHANGELOG.md).
 
 ## What's new in 0.1.3
 
@@ -126,7 +136,7 @@ Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGEL
   0.1.1 for this.
 - **The witness indicator** says "off" only when no witness is set.
 
-Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGELOG.md).
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules-plugin/blob/main/CHANGELOG.md).
 
 ## What it sends, and where it listens
 
