@@ -7,6 +7,39 @@ each exchange, and whether this node's log still verifies. It installs and
 runs on an unmodified mesh-llm release (0.77 or newer). No other runtime is
 needed.
 
+## What's new in 0.1.6
+
+**Upgrading from 0.1.5 needs nothing on the other node.** This version answers both interop profile
+identifiers and asks under `evidence-interop/1`; a 0.1.5 node refuses that, and the ask is sent once
+more under `evidence-interop/0`, which 0.1.5 answers.
+
+- **A refusal says whether it was policy.** Under `evidence-interop/1` (Evidence Request -02) a node
+  declines for a limit of its own with `capacity_exceeded`, and refuses a request whose signature
+  does not check with `request_unauthenticated`; `policy_declined` and `not_authorized` are then
+  policy only, and are checked against the policy the peer's commitment pins.
+- **Each ask is recorded,** before it is sent: the request, then the answer, the refusal, or that
+  nothing came back in its window.
+- **The payer seals a paid exchange as a deal;** the payer's deal and the provider's own receipt
+  can each be exported as an Evidence Bundle. The deal's steps go to the counterparty of the
+  exchange; the payer's deal report stays on this node.
+- **The Service History** (`service_history/1`): what this node served, per period, as a Standard
+  History.
+- **Service evidence agreements** and their coverage on the Exchanges rows, and the **join switch,
+  `doctor` and the operator binding** (loop steps 6, 7 and 12).
+- **The Evidence tab says when a peer's answer is not witnessed.**
+
+**Changed defaults and readings:**
+
+- **`share_record_at_completion` is now on by default (`counterparty`).** An upgraded node pushes
+  its sealed record of a completed exchange to the counterparty, and accepts the counterparty's,
+  without any setting changed. Set `share_record_at_completion = "off"` to keep 0.1.5's behaviour.
+- **Pushes and evidence requests are accepted on the sender's evidence key,** not the peer id they
+  arrive from.
+- **`served_summary/1` counts only witness receipts it can verify:** `coverage.witnessed` can drop,
+  and a receipt this node cannot check reads `NOT_CHECKED`.
+
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules-plugin/blob/main/CHANGELOG.md).
+
 ## What's new in 0.1.5
 
 **Upgrade both nodes:** a node on 0.1.4 cannot read this version's evidence answers, and under the
@@ -41,7 +74,7 @@ install the 0.1.5 package below instead.
 - **Exchange corroboration,** off by default (`share_exchange_corroboration`): another node can ask
   whether this node holds a half of one earlier exchange.
 
-Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGELOG.md).
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules-plugin/blob/main/CHANGELOG.md).
 
 ## What's new in 0.1.4
 
@@ -54,7 +87,7 @@ Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGEL
 - **The console's navigation stays on the Evidence page,** a served exchange with no other side
   reads LOCAL, and twin pairs show on Peers.
 
-Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGELOG.md).
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules-plugin/blob/main/CHANGELOG.md).
 
 ## What's new in 0.1.3
 
@@ -103,7 +136,7 @@ Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGEL
   0.1.1 for this.
 - **The witness indicator** says "off" only when no witness is set.
 
-Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules/blob/main/CHANGELOG.md).
+Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules-plugin/blob/main/CHANGELOG.md).
 
 ## What it sends, and where it listens
 
@@ -162,7 +195,7 @@ glibc 2.35 or newer (x86_64 or arm64).
 and set `VERSION` to the release (without the leading `v`):
 
 ```bash
-VERSION=0.1.5
+VERSION=0.1.6
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)  TARGET=aarch64-apple-darwin ;;
   Linux-x86_64)  TARGET=x86_64-unknown-linux-gnu ;;

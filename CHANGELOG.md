@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.6
+
 ### Changed
 
 - **Evidence requests speak `evidence-interop/1` (Evidence Request -02), and a refusal says
@@ -50,6 +52,50 @@
   `served_summary` forms in `tests/fixtures/evidence_answers_5d2d102.json` are rewritten for it
   (nothing else changes); the node's own witness client sets `is_stub: false`, so no served
   checkpoint carries such a stub.
+
+- **`capsule-emit` 0.0.9.** It adds `produce`, the Go-identical Capsule build the deal records are
+  sealed with, and drops `structure`: the Class 1 check of a received half (record push, the
+  referee, an agreement half) now runs through `agent_action_capsule::verify::verify`.
+
+- **Evidence answers, the served summary and the received log come from the `evidencebook` crate
+  (0.0.9).** The plugin's own copies are deleted. evidencebook builds and signs every artifact
+  answer over the plugin's ledger index, and never opens the MMR node store the checkpointer
+  writes. The plugin keeps how a ledger line is read, which requests it answers to whom, and the
+  witness keys.
+  Every answer is byte for byte what it was, except one change for readers of
+  `served_summary/1`. A witness receipt now counts toward `coverage.witnessed` and
+  `coverage.witnesses` only if it verifies under the key this node configures for that witness.
+  Each receipt is also listed in `coverage.witness_receipts` with `PASS`, `NOT_CHECKED` or
+  `FAIL`, and the overall result is in `coverage.witness_check`. A receipt the node cannot check,
+  such as one with no configured key, now reads `NOT_CHECKED` instead of counting as witnessed.
+  Refusals are still signed by `evidence-request`. The build now carries a second
+  `agent-action-capsule` (0.4.1, evidencebook's witness verifier) beside the 0.1.0 the plugin
+  already had. action-state-group/evidencebook#35, Mesh-LLM/capsules-plugin#84, #87, #89, #90,
+  #91, #92, #93.
+- **`share_record_at_completion` is on by default (`counterparty`), reversing the 0.1.3 default.**
+  Every node now pushes its sealed record of a completed exchange to the counterparty and accepts
+  the counterparty's push, with no setting; `off` still does neither. The record goes only to the
+  other side of that exchange; the public checkpoint list shows when exchanges ended.
+  `share_adjudications`, `adjudicate_differing_twins`, `share_standard_history` and
+  `share_history_segments` keep their defaults. Mesh-LLM/capsules-plugin#68.
+- **Pushes and evidence requests are accepted on the sender's evidence key, not the peer id they
+  arrive under (D-34).** A half signed by a key this node knows is held whatever peer id the push
+  declares, and a push under a known peer id signed by an unknown key is refused
+  `signature_unverified`; that refusal now names the refused key (`refused_key_id`) under the
+  node's signature. A signed request's asker is every node its key is bound to, so a counterparty
+  whose transport id rotated still gets its records. A key is known when a host announced it for
+  some peer, when `CAPSULES_PEER_KEYS` lists it under any name (a stopgap for a node with no stable
+  peer id, such as a client-only node; it now authenticates requests too), or when the sender
+  carries a controller declaration: a `controller-binding/0` record (Controller Binding v0,
+  `same_controller_asserted` under `dual_signature/0`, inside its window) binding its key to a key
+  known one of the other two ways, in a push bundle's or a signed request's `controller_binding`
+  member. A key that a carried declaration binds to the receiving node's own key is refused,
+  however else it is known. A served half's named server must be a peer its key is bound to.
+  The `counterparty_half` citing record names the sender's key and how it was accepted
+  (`sender_key_id`, `accepted_via`: `host_announced`, `operator_stopgap` or
+  `controller_declaration`, with the binding's digest); nothing decides on it. A receiver on an
+  earlier release refuses a bundle that carries a declaration `bundle_malformed`. Fixtures for each
+  case are in `vectors/evidence-key-acceptance/`. Mesh-LLM/capsules-plugin#69.
 
 ### Added
 
@@ -268,52 +314,6 @@
   checks each record as loop's `check_join.py` does and keeps each node's latest join and the
   leave that ends it. `join` now shows under `network` the switch, what the reporter
   acknowledged and what it has not yet. Mesh-LLM/capsules-plugin#53.
-
-### Changed
-
-- **`capsule-emit` 0.0.9.** It adds `produce`, the Go-identical Capsule build the deal records are
-  sealed with, and drops `structure`: the Class 1 check of a received half (record push, the
-  referee, an agreement half) now runs through `agent_action_capsule::verify::verify`.
-
-- **Evidence answers, the served summary and the received log come from the `evidencebook` crate
-  (0.0.9).** The plugin's own copies are deleted. evidencebook builds and signs every artifact
-  answer over the plugin's ledger index, and never opens the MMR node store the checkpointer
-  writes. The plugin keeps how a ledger line is read, which requests it answers to whom, and the
-  witness keys.
-  Every answer is byte for byte what it was, except one change for readers of
-  `served_summary/1`. A witness receipt now counts toward `coverage.witnessed` and
-  `coverage.witnesses` only if it verifies under the key this node configures for that witness.
-  Each receipt is also listed in `coverage.witness_receipts` with `PASS`, `NOT_CHECKED` or
-  `FAIL`, and the overall result is in `coverage.witness_check`. A receipt the node cannot check,
-  such as one with no configured key, now reads `NOT_CHECKED` instead of counting as witnessed.
-  Refusals are still signed by `evidence-request`. The build now carries a second
-  `agent-action-capsule` (0.4.1, evidencebook's witness verifier) beside the 0.1.0 the plugin
-  already had. action-state-group/evidencebook#35, Mesh-LLM/capsules-plugin#84, #87, #89, #90,
-  #91, #92, #93.
-- **`share_record_at_completion` is on by default (`counterparty`), reversing the 0.1.3 default.**
-  Every node now pushes its sealed record of a completed exchange to the counterparty and accepts
-  the counterparty's push, with no setting; `off` still does neither. The record goes only to the
-  other side of that exchange; the public checkpoint list shows when exchanges ended.
-  `share_adjudications`, `adjudicate_differing_twins`, `share_standard_history` and
-  `share_history_segments` keep their defaults. Mesh-LLM/capsules-plugin#68.
-- **Pushes and evidence requests are accepted on the sender's evidence key, not the peer id they
-  arrive under (D-34).** A half signed by a key this node knows is held whatever peer id the push
-  declares, and a push under a known peer id signed by an unknown key is refused
-  `signature_unverified`; that refusal now names the refused key (`refused_key_id`) under the
-  node's signature. A signed request's asker is every node its key is bound to, so a counterparty
-  whose transport id rotated still gets its records. A key is known when a host announced it for
-  some peer, when `CAPSULES_PEER_KEYS` lists it under any name (a stopgap for a node with no stable
-  peer id, such as a client-only node; it now authenticates requests too), or when the sender
-  carries a controller declaration: a `controller-binding/0` record (Controller Binding v0,
-  `same_controller_asserted` under `dual_signature/0`, inside its window) binding its key to a key
-  known one of the other two ways, in a push bundle's or a signed request's `controller_binding`
-  member. A key that a carried declaration binds to the receiving node's own key is refused,
-  however else it is known. A served half's named server must be a peer its key is bound to.
-  The `counterparty_half` citing record names the sender's key and how it was accepted
-  (`sender_key_id`, `accepted_via`: `host_announced`, `operator_stopgap` or
-  `controller_declaration`, with the binding's digest); nothing decides on it. A receiver on an
-  earlier release refuses a bundle that carries a declaration `bundle_malformed`. Fixtures for each
-  case are in `vectors/evidence-key-acceptance/`. Mesh-LLM/capsules-plugin#69.
 
 ## 0.1.5
 
