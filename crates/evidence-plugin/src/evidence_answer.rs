@@ -92,9 +92,9 @@
 //! `share_standard_history` off (the default) it goes only to a requester
 //! that has proven it is a node some record of this one names as the other
 //! side of an exchange. Every other requester (unsigned, a signature that
-//! fails, or a proven node no record names) gets `policy_declined`, decided
-//! before the subject is resolved, so the refusal is the same whether or not
-//! what was asked for exists. It is `refusal::sign` of the request digest,
+//! fails, or a proven node no record names) asking for Standard History gets
+//! `policy_declined`, decided before the subject is resolved, so the refusal
+//! is the same whether or not what was asked for exists. It is `refusal::sign` of the request digest,
 //! the reason and `issued_at` alone: no member names or depends on the
 //! asker, so two askers sending the same bytes in the same second get the
 //! same bytes back. What differs between two refusals is only what differs
@@ -102,12 +102,17 @@
 //! carries) and when they were answered (`issued_at`), and the signature
 //! over those.
 //!
-//! Unless records go to any proven node (`peers`), a record request from a
-//! proven node that no record names is refused
-//! `not_authorized` before the subject is resolved too, so a stranger cannot
-//! read this log's size or cadence from which refusal it gets (it reads them
-//! from the checkpoint list). A real counterparty asking for more than its
-//! own records still can.
+//! **Record requests** (record bodies: `record`, `exchange`, `correlation`
+//! with no derivation) get `not_authorized`, never `policy_declined`, when
+//! the asker may not have them. Unless records go to any proven node
+//! (`peers`), a proven node that no record names gets it before the subject
+//! is resolved too, so a stranger cannot read this log's size or cadence
+//! from which refusal it gets (it reads them from the checkpoint list). A
+//! real counterparty asking for more than its own records still can. A
+//! record that never leaves this node (`evidence_log::never_leaves`) is in
+//! no keyed answer's matched set (`LedgerIndex::leaving`): a `correlation`,
+//! `exchange` or `exchange_corroboration/1` answer is the same whether or
+//! not one sits under the key (evidencebook#206 row 4).
 //!
 //! **The wire.** An artifact answer is the interop profile's flat reply
 //! (agent-action-capsule `spec/interop-profile-v0.md` §6.2,
@@ -662,8 +667,8 @@ fn answer_from(
             Subject::Range(a, b) => b.saturating_sub(*a).saturating_add(1),
             Subject::FullHistory => covered,
             Subject::Record(_) => 1,
-            Subject::Correlation(id) => index.correlated(id).len() as u64,
-            Subject::Exchange(half) => index.citing(half).len() as u64,
+            Subject::Correlation(id) => index.leaving(index.correlated(id)).len() as u64,
+            Subject::Exchange(half) => index.leaving(index.citing(half)).len() as u64,
             Subject::Checkpoints => 0,
         };
         if count > MAX_ANSWER_RECORDS {
@@ -678,8 +683,8 @@ fn answer_from(
                 Some(i) if i >= covered => return Err(Reason::CoverageUnsatisfiable),
                 found => found.into_iter().collect(),
             },
-            Subject::Correlation(id) => index.correlated(id).to_vec(),
-            Subject::Exchange(half) => index.citing(half).to_vec(),
+            Subject::Correlation(id) => index.leaving(index.correlated(id)),
+            Subject::Exchange(half) => index.leaving(index.citing(half)),
             Subject::Checkpoints => Vec::new(),
         }
         .into_iter()
@@ -749,10 +754,6 @@ fn corroboration_answer(
     let mut records = corroboration::matching_records(req, &index.chain[at].record, view);
     if records.len() as u64 > MAX_ANSWER_RECORDS {
         return Err(Reason::CapacityExceeded);
-    }
-    let never_leaves = |i: &u64| index.leaves.get(*i as usize).is_none_or(|l| l.never_leaves);
-    if policy_gate_applies() && records.iter().any(never_leaves) {
-        return Err(Reason::NotAuthorized);
     }
     if needs_requester(req, responder) && policy_gate_applies() {
         if cfg!(feature = "mutant-corroboration-filters-per-asker") {
@@ -1953,6 +1954,37 @@ pub(crate) mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// A proven node that no record names gets one reason per kind of
+    /// request, as the module doc says (#157): `policy_declined` for
+    /// Standard History, `not_authorized` for record bodies, under the
+    /// default settings.
+    #[test]
+    fn a_proven_node_no_record_names_gets_one_reason_per_kind_of_request() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let held = node_a_record(&ledger);
+        for request in withheld_requests() {
+            assert_eq!(
+                refused(&ask_by_default(dir.path(), &signed_by("node-z", &request))),
+                Some(Reason::PolicyDeclined),
+                "{request}"
+            );
+        }
+        let pin = held["coverage"].clone();
+        for subject in [
+            held["subject"].clone(),
+            json!({"correlation": "n-1"}),
+            json!({"exchange": "b".repeat(64)}),
+        ] {
+            let request = json!({"subject": subject, "coverage": pin});
+            assert_eq!(
+                refused(&ask_by_default(dir.path(), &signed_by("node-z", &request))),
+                Some(Reason::NotAuthorized),
+                "{subject}"
+            );
         }
     }
 
@@ -3764,6 +3796,56 @@ pub(crate) mod tests {
             assert!(
                 matches!(pushed_under, Outcome::Refused { .. }),
                 "{profile:?}: the id a push names is no one's: {pushed_under:?}"
+    /// A record that never leaves this node is in no keyed answer's matched
+    /// set (evidencebook#206 row 4, Mesh-LLM/capsules-plugin#161): asked by
+    /// `correlation` or `exchange` over a key it sits under, the answer is the
+    /// one a node without it gives, with the same records under the same
+    /// checkpoint, never a refusal that says something is withheld there. In
+    /// the corpus, records 0 and 4 carry nonce `n-1` and one record under
+    /// checkpoint 0 cites the half; record 20, under checkpoint 1, becomes a
+    /// deal report that carries both.
+    #[test]
+    fn a_record_that_never_leaves_changes_no_keyed_answer() {
+        let half = hex::encode(Sha256::digest(b"the counterparty's own half"));
+        let ledger = corpus_ledger();
+        let mut with_report = ledger.clone();
+        with_report[20] = sealed(json!({
+            "action_id": "capsulectl-deal-report",
+            "effect": {"status": "confirmed"},
+            "nonce": "n-1",
+            "references": [{"citation_purpose": "counterparty_half", "digest": half}],
+        }));
+        assert!(crate::evidence_log::never_leaves(&with_report[20]));
+        let requests = [
+            (
+                "correlation",
+                json!({"subject": {"correlation": "n-1"}, "coverage": {"min_freshness": 1}}),
+            ),
+            (
+                "exchange",
+                json!({"subject": {"exchange": half}, "coverage": {"expected_pin": half}}),
+            ),
+        ];
+        let answer = |ledger: &[Value], request: &Value| {
+            let dir = node(ledger);
+            let anchors: Vec<String> = corpus_checkpoints(ledger, &key())
+                .iter()
+                .map(|cp| cp.anchor())
+                .collect();
+            let bytes = signed_by("node-y", request);
+            let Outcome::Answered { wire, .. } = ask(dir.path(), &bytes, "peers") else {
+                panic!("{request}: not answered");
+            };
+            let v = verify_response(&bytes, &wire, &key().verifying_key(), &Default::default());
+            assert_eq!(v["state"], json!("artifact"), "{v}");
+            let at = anchors.iter().position(|a| json!(a) == v["anchor"]);
+            (at, v["records"].clone())
+        };
+        for (what, request) in &requests {
+            assert_eq!(
+                answer(&with_report, request),
+                answer(&ledger, request),
+                "{what}"
             );
         }
     }
