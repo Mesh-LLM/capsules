@@ -407,28 +407,29 @@ fn keep_reply(ledger_dir: &Path, digest: &str, reply: &[u8]) -> std::io::Result<
     let dir = ledger_dir.join(REPLIES_DIR);
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(digest);
-    if path.exists() {
-        return Ok(());
+    // Already kept (by another record, or a call still syncing): only the
+    // directory sync below is left, so the link is durable either way.
+    if !path.exists() {
+        let tmp = dir.join(format!(
+            ".{digest}.{}.{}.tmp",
+            std::process::id(),
+            TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let published = (|| {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)?;
+            file.write_all(reply)?;
+            file.sync_all()?;
+            match std::fs::hard_link(&tmp, &path) {
+                Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
+                _ => Ok(()),
+            }
+        })();
+        let _ = std::fs::remove_file(&tmp);
+        published?;
     }
-    let tmp = dir.join(format!(
-        ".{digest}.{}.{}.tmp",
-        std::process::id(),
-        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
-    ));
-    let published = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
-        file.write_all(reply)?;
-        file.sync_all()?;
-        match std::fs::hard_link(&tmp, &path) {
-            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
-            _ => Ok(()),
-        }
-    })();
-    let _ = std::fs::remove_file(&tmp);
-    published?;
     // The link itself is durable before the record that relies on it.
     std::fs::File::open(&dir)?.sync_all()
 }
