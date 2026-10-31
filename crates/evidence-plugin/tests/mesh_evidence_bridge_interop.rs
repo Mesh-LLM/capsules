@@ -550,9 +550,12 @@ async fn requester_tool_call_round_trips_a_real_dialed_stream() {
         .await
         .expect("peer task finished")
         .expect("peer task did not panic");
+    // A request naming no profile asks under evidence-interop/1.
+    let mut asked = request.clone();
+    asked["profile"] = serde_json::json!("evidence-interop/1");
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&request_bytes).unwrap(),
-        request
+        asked
     );
 
     harness.shutdown_process().await;

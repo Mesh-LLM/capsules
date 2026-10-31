@@ -212,7 +212,7 @@ pub fn build(b: &Build<'_>, view: &LogView<'_>) -> Result<Value, Reason> {
         signed_envelope(b, view, served)?
     };
     let mut reply: Value = serde_json::from_slice(&signed.encode(Binding::Json))
-        .map_err(|_| Reason::PolicyDeclined)?;
+        .map_err(|_| Reason::CapacityExceeded)?;
     // The checkpoints whose receipts go with the answer: every one listed
     // for a checkpoint list and a history card (embedded or not), else the
     // serving one.
@@ -328,11 +328,14 @@ fn signed_envelope(
             Reason::CoverageUnsatisfiable
         }
         AnswerError::DerivationUnsupported => Reason::DerivationUnsupported,
+        AnswerError::NotAuthorized => Reason::NotAuthorized,
+        // A limit or a fault of this node's own: capacity_exceeded under
+        // evidence-interop/1, policy_declined under /0 (`evidence_answer`).
         AnswerError::Sign(e) => {
             tracing::warn!(error = %e, "an evidence answer could not be signed -- declining");
-            Reason::PolicyDeclined
+            Reason::CapacityExceeded
         }
-        _ => Reason::PolicyDeclined,
+        _ => Reason::CapacityExceeded,
     })
 }
 
@@ -369,7 +372,7 @@ fn service_history_envelope(
         b.signing_key,
         b.issued_at,
     )
-    .map_err(|_| Reason::PolicyDeclined)?
+    .map_err(|_| Reason::CapacityExceeded)?
     .artifact;
     let chain = &view.index.chain[..=b.at];
     let cuts: Vec<crate::service_history::Cut<'_>> = chain
@@ -377,7 +380,7 @@ fn service_history_envelope(
         .map(|cp| {
             Ok(crate::service_history::Cut {
                 timestamp: &cp.record.timestamp,
-                leaves: leaf_count(cp.record.mmr_size).map_err(|_| Reason::PolicyDeclined)?,
+                leaves: leaf_count(cp.record.mmr_size).map_err(|_| Reason::CapacityExceeded)?,
             })
         })
         .collect::<Result<_, Reason>>()?;
@@ -392,7 +395,8 @@ fn service_history_envelope(
     let anchor = served.anchor_digest();
     let artifact =
         crate::service_history::artifact(&card, counts, &anchor, &served.record.log_id, log_size)?;
-    envelope::sign(
+    envelope::sign_with_profile(
+        &profile_of(b.request_bytes),
         b.request_bytes,
         envelope::EnvelopeParts {
             subject: b.request.subject.clone(),
@@ -409,8 +413,21 @@ fn service_history_envelope(
     )
     .map_err(|e| {
         tracing::warn!(error = %e, "a Service History could not be signed -- declining");
-        Reason::PolicyDeclined
+        Reason::CapacityExceeded
     })
+}
+
+/// The profile identifier the request octets `sent` name ([`requested_profile`]),
+/// `evidence-interop/0` when they are not a map or name none. The responder
+/// checked it before building (`evidence_answer`), so it is one this node
+/// implements, and the envelope is signed under it.
+pub(crate) fn profile_of(sent: &[u8]) -> String {
+    match serde_json::from_slice::<Value>(sent) {
+        Ok(Value::Object(map)) => requested_profile(&map)
+            .unwrap_or(envelope::PROFILE)
+            .to_string(),
+        _ => envelope::PROFILE.to_string(),
+    }
 }
 
 /// A checkpoint time in the profile's form: UTC, any fraction dropped
@@ -426,7 +443,7 @@ pub(crate) fn inclusion(view: &LogView<'_>, leaf: u64, size: u64) -> Result<Vec<
     view.index
         .inclusion_path(leaf, size)
         .and_then(|path| encode_inclusion_proof(leaf, &path))
-        .ok_or(Reason::PolicyDeclined)
+        .ok_or(Reason::CapacityExceeded)
 }
 
 // ---------------------------------------------------------------------------
@@ -517,7 +534,8 @@ struct Stated {
 /// The profile identifier a request names: its `profile` member, or
 /// `evidence-interop/0` when it has none (profile §3.3 step 2). `None` when
 /// the member is not text. This node answers and checks `evidence-interop/0`
-/// only.
+/// and `evidence-interop/1` ([`envelope::PROFILES`]), each with its own
+/// refusal reasons (IP v1 §6.3).
 pub fn requested_profile(request: &Map<String, Value>) -> Option<&str> {
     match request.get("profile") {
         None => Some(envelope::PROFILE),
@@ -552,10 +570,10 @@ pub fn check(
         Ok(Value::Object(map)) => requested_profile(&map).map(str::to_string),
         _ => None,
     };
-    if asked.as_deref() != Some(env.profile.as_str()) {
+    let Some(asked) = asked.filter(|p| p == &env.profile) else {
         return fail("the answer is not under the profile the request named");
-    }
-    env.verify_for(key, sent)
+    };
+    env.verify_for_profile(&asked, key, sent)
         .map_err(|e| CheckError::Answer(e.to_string()))?;
     if env.subject != request.subject || env.derivation != request.derivation {
         return fail("the answer is not for the requested subject or derivation");
@@ -2610,8 +2628,11 @@ mod tests {
             .unwrap()
         };
         assert!(ask(2, 0, false).is_ok());
-        // Leaf 20 is under the last checkpoint only.
-        assert_eq!(ask(20, 0, false).unwrap_err(), Reason::PolicyDeclined);
+        // Leaf 20 is under the last checkpoint only: no proof to it under
+        // the first, a fault of this node's own (the responder keeps such a
+        // record out before it builds). capacity_exceeded, which the
+        // responder sends as policy_declined to an evidence-interop/0 request.
+        assert_eq!(ask(20, 0, false).unwrap_err(), Reason::CapacityExceeded);
         assert_eq!(ask(2, 0, true).unwrap_err(), Reason::NoSuchSubject);
     }
 }

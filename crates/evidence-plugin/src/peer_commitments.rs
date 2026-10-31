@@ -48,9 +48,19 @@ pub const DIR: &str = "peer-commitments";
 /// `NOT_CHECKED`. The rest (`request_malformed`, `deadline_unmet`,
 /// `coverage_unsatisfiable`, `retention_expired`) blame the request and
 /// read `MATCH`.
+///
+/// That is the reading of a refusal to an `evidence-interop/0` request.
+/// Under `evidence-interop/1` (IP v1 §6.3, ER -02) a responder declines for
+/// its own load or limits with `capacity_exceeded` and refuses a requester
+/// authentication that does not verify with `request_unauthenticated`, so
+/// `policy_declined` and `not_authorized` are statements about policy and
+/// are judged against the pinned policy like the reasons above.
+/// `capacity_exceeded` reads `NOT_CHECKED` (no policy promises past a limit)
+/// and `request_unauthenticated` blames the request.
 const WITHHOLDING_REASONS: [Reason; 2] = [Reason::DerivationUnsupported, Reason::NoSuchSubject];
 
-/// Refusal reasons the wire cannot tell apart from an honest limit.
+/// Refusal reasons the wire cannot tell apart from an honest limit under
+/// `evidence-interop/0`; policy only under /1.
 const AMBIGUOUS_REASONS: [Reason; 2] = [Reason::PolicyDeclined, Reason::NotAuthorized];
 
 fn path(data_dir: &Path, peer_id: &str) -> Option<PathBuf> {
@@ -106,13 +116,29 @@ pub fn policy_check(pinned: Option<&Value>, request: &Value, reason: &str) -> Va
         return json!({"status": "NOT_CHECKED", "why": "no commitment held for the peer"});
     };
     let status = |status: &str, why: &str| json!({"status": status, "why": why, "policy_digest": pinned["policy_digest"]});
-    if AMBIGUOUS_REASONS.iter().any(|r| r.token() == reason) {
+    let v1 = request.get("profile").and_then(Value::as_str)
+        == Some(evidence_request::envelope::PROFILE_V1);
+    // A request over the responder's size limit is refused before its
+    // profile is read, so with /0's tokens (`evidence_answer`): its
+    // `policy_declined` is that limit, not policy.
+    let oversize = evidence_request::jcs::to_string(request).map_or(true, |text| {
+        text.len() > crate::evidence_answer::MAX_REQUEST_BYTES
+    });
+    let v1 = v1 && !oversize;
+    let ambiguous = AMBIGUOUS_REASONS.iter().any(|r| r.token() == reason);
+    if reason == Reason::CapacityExceeded.token() {
+        return status(
+            "NOT_CHECKED",
+            "the responder states a limit of its own, which no policy promises past",
+        );
+    }
+    if ambiguous && !v1 {
         return status(
             "NOT_CHECKED",
             "an honest responder also sends this reason for limits no policy promises past",
         );
     }
-    let withholds = WITHHOLDING_REASONS.iter().any(|r| r.token() == reason);
+    let withholds = ambiguous || WITHHOLDING_REASONS.iter().any(|r| r.token() == reason);
     if !withholds {
         return status("MATCH", "the refusal blames the request");
     }

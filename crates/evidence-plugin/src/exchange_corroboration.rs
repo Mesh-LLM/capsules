@@ -136,7 +136,8 @@ pub(crate) fn matching_records(
 /// The artifact's `entries` for `records` under `anchor`, one per half, each
 /// with the half's inclusion proof at the anchor in the profile's
 /// `cll-inclusion-proof` form, in hex. `NoSuchSubject` when none is committed
-/// there; `PolicyDeclined` when a record or its proof cannot be read back.
+/// there; `CapacityExceeded` (a fault of this node's own) when a record or
+/// its proof cannot be read back.
 pub(crate) fn entries(
     id: &str,
     anchor: &CheckpointRecord,
@@ -148,9 +149,9 @@ pub(crate) fn entries(
     }
     let mut entries = Vec::with_capacity(records.len());
     for &i in records {
-        let record = view.record_at(i).ok_or(Reason::PolicyDeclined)?;
+        let record = view.record_at(i).ok_or(Reason::CapacityExceeded)?;
         let body: Value =
-            serde_json::from_slice(&record.body).map_err(|_| Reason::PolicyDeclined)?;
+            serde_json::from_slice(&record.body).map_err(|_| Reason::CapacityExceeded)?;
         let proof = crate::evidence_artifact::inclusion(view, i, anchor.mmr_size)?;
         entries.push(json!({
             "half": record.digest,
@@ -227,7 +228,10 @@ pub fn verify(
     let digest = evidence_request::digest::request_digest(sent);
     if response.get("reason").is_some() {
         return match refusal::verify_for(response, key, &digest) {
-            Ok(reason) => Verified::Refusal(reason),
+            Ok(reason) => match crate::evidence_answer::registered_under_request(sent, reason) {
+                Ok(reason) => Verified::Refusal(reason),
+                Err(why) => Verified::Failed(format!("the refusal does not conform: {why}")),
+            },
             Err(e) => Verified::Failed(format!("the refusal does not verify: {e}")),
         };
     }

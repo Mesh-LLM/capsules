@@ -423,20 +423,23 @@ pub(crate) struct Cut<'a> {
 /// stream's checkpoints from its first to the anchor, and `model(i)` the
 /// model the record at leaf `i` states it served, `None` for a record that
 /// is not a served exchange. `policy_declined` when the anchor is not at a
-/// period boundary, a time does not parse, or the stream is older than
-/// [`MAX_PERIODS`] periods.
+/// period boundary (ISH §6.1 item 2, the same for every requester);
+/// `capacity_exceeded`, a limit or fault of this node's own, when a time
+/// does not parse or the stream is older than [`MAX_PERIODS`] periods. Under
+/// `evidence-interop/0` the responder sends `policy_declined` for those too
+/// (`evidence_answer`).
 pub(crate) fn period_counts(
     chain: &[Cut<'_>],
     model: &dyn Fn(u64) -> Option<String>,
 ) -> Result<Value, Reason> {
     let policy = &Definition::active().policy;
-    let anchor = chain.last().ok_or(Reason::PolicyDeclined)?;
+    let anchor = chain.last().ok_or(Reason::CapacityExceeded)?;
     if !policy.is_boundary(anchor.timestamp) {
         return Err(Reason::PolicyDeclined);
     }
-    let first = unix_time(chain[0].timestamp).ok_or(Reason::PolicyDeclined)?;
+    let first = unix_time(chain[0].timestamp).ok_or(Reason::CapacityExceeded)?;
     let anchor_period =
-        policy.period_of(unix_time(anchor.timestamp).ok_or(Reason::PolicyDeclined)?);
+        policy.period_of(unix_time(anchor.timestamp).ok_or(Reason::CapacityExceeded)?);
     // Deliberately broken in one CI build: the period the anchor opens is
     // counted too.
     let last_counted = if cfg!(feature = "mutant-service-history-counts-open-period") {
@@ -446,7 +449,7 @@ pub(crate) fn period_counts(
     };
     let first_period = policy.first_period(first);
     if last_counted - first_period >= MAX_PERIODS {
-        return Err(Reason::PolicyDeclined);
+        return Err(Reason::CapacityExceeded);
     }
     // Per counted period, the served exchanges per model.
     let periods = (first_period..=last_counted).count();
@@ -455,7 +458,7 @@ pub(crate) fn period_counts(
     let (mut committed_at, mut from_leaf, mut closed) = (i64::MIN, 0u64, i64::MIN);
     for cut in chain {
         // A checkpoint's time is never taken as earlier than the one before.
-        committed_at = committed_at.max(unix_time(cut.timestamp).ok_or(Reason::PolicyDeclined)?);
+        committed_at = committed_at.max(unix_time(cut.timestamp).ok_or(Reason::CapacityExceeded)?);
         let mut k = policy.period_of(committed_at);
         // The first checkpoint at a boundary commits into the period it
         // closes; every period before its time is closed from then on.
@@ -481,7 +484,7 @@ pub(crate) fn period_counts(
             profile_time(policy.start_of(k + 1)),
         );
         let (Some(from), Some(to)) = (from, to) else {
-            return Err(Reason::PolicyDeclined);
+            return Err(Reason::CapacityExceeded);
         };
         list.push(json!({"from": from, "to": to, "cells": cells(by_model, policy.floor)}));
     }
@@ -542,13 +545,14 @@ pub(crate) fn artifact(
     stream: &str,
     log_size: u64,
 ) -> Result<Vec<u8>, Reason> {
-    let mut card_value: Value = serde_json::from_slice(card).map_err(|_| Reason::PolicyDeclined)?;
+    let mut card_value: Value =
+        serde_json::from_slice(card).map_err(|_| Reason::CapacityExceeded)?;
     if jcs::to_string(&card_value)
-        .map_err(|_| Reason::PolicyDeclined)?
+        .map_err(|_| Reason::CapacityExceeded)?
         .as_bytes()
         != card
     {
-        return Err(Reason::PolicyDeclined);
+        return Err(Reason::CapacityExceeded);
     }
     // Deliberately broken in one CI build: the card is rebuilt from its
     // checkpoint list, without the consistency proofs.
@@ -559,7 +563,7 @@ pub(crate) fn artifact(
             }
         }
     }
-    let card_text = jcs::to_string(&card_value).map_err(|_| Reason::PolicyDeclined)?;
+    let card_text = jcs::to_string(&card_value).map_err(|_| Reason::CapacityExceeded)?;
     let art = json!({
         "anchor": anchor,
         "coverage_declaration": coverage_declaration(anchor, stream, log_size),
@@ -573,7 +577,7 @@ pub(crate) fn artifact(
     });
     jcs::to_string(&art)
         .map(String::into_bytes)
-        .map_err(|_| Reason::PolicyDeclined)
+        .map_err(|_| Reason::CapacityExceeded)
 }
 
 /// The anchor-dependent half of the Standard coverage declaration

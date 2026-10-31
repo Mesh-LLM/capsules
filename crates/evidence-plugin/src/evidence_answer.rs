@@ -11,10 +11,14 @@
 //! and who asks.
 //!
 //! **Order, cheapest first.** Every step that can refuse runs before the
-//! work after it, so a request is turned away before it costs anything:
+//! work after it, so a request is turned away before it costs anything. The
+//! reasons below are those of an `evidence-interop/1` request; to a /0 one,
+//! or before the profile is read, `capacity_exceeded` is sent as
+//! `policy_declined` and `request_unauthenticated` as `not_authorized`
+//! ([`under_profile`]), the tokens /0 used for the same causes:
 //!
-//! 1. the request's size ([`MAX_REQUEST_BYTES`]) → `policy_declined`, before
-//!    it is parsed;
+//! 1. the request's size ([`MAX_REQUEST_BYTES`]) → `capacity_exceeded`, before
+//!    it is parsed (so `policy_declined`, as the profile is not read yet);
 //! 2. parsing → `request_malformed` / `coverage_unsatisfiable`, and a
 //!    malformed `requester_auth` (or a signed request with no `audience`)
 //!    → `request_malformed`;
@@ -24,7 +28,8 @@
 //!    `not_authorized`, before anything is looked up;
 //! 5. who asks (`requester_auth`), before the ledger is read: a signature
 //!    that fails its window, its key, its `audience` (this node), its nonce
-//!    or its stated id → refused; a valid signature under a key no host
+//!    or its stated id → `request_unauthenticated` (`capacity_exceeded` while
+//!    this node does not know its own id); a valid signature under a key no host
 //!    binds → read as unsigned where the answer needs no identity, refused
 //!    otherwise; an unsigned request whose answer depends on who asks →
 //!    refused (see below);
@@ -32,11 +37,15 @@
 //!    one names → refused, before the subject is looked up;
 //! 7. resolution against the index → the crate's reason;
 //! 8. the number of records (or checkpoints) the answer would carry, counted
-//!    from the index without reading one → `policy_declined` over
+//!    from the index without reading one → `capacity_exceeded` over
 //!    [`MAX_ANSWER_RECORDS`] / [`MAX_ANSWER_CHECKPOINTS`];
 //! 9. the sharing-policy gate on each of those records → `not_authorized`;
 //! 10. building and signing; an answer larger than [`MAX_ANSWER_BYTES`] on
-//!     the wire → `policy_declined`.
+//!     the wire, or a fault building it → `capacity_exceeded`.
+//!
+//! `not_authorized` and `policy_declined` are then statements about policy
+//! only (ER -02 §4.2, §11), which a requester may hold against the policy
+//! this node's commitment pins (`peer_commitments::policy_check`).
 //!
 //! Every refusal is signed by this node's key and binds the digest of the
 //! request bytes as received (`refusal::sign`). Nothing here unwraps or
@@ -259,25 +268,46 @@ fn answer_as(request_bytes: &[u8], responder: &Responder<'_>) -> (Outcome, Asker
     (outcome, asker)
 }
 
+/// The token a refusal for `reason` carries under the profile the request
+/// asked for (IP v1 §6.3). The responder decides in `evidence-interop/1`'s
+/// terms: `capacity_exceeded` for a limit or fault of its own,
+/// `request_unauthenticated` for a requester authentication that does not
+/// verify. `evidence-interop/0` pins ER -01, which registers neither, so a
+/// /0 request (or one whose profile is not known yet) gets the token /0
+/// used for the same cause: `policy_declined` and `not_authorized`.
+fn under_profile(reason: Reason, v1: bool) -> Reason {
+    match reason {
+        Reason::CapacityExceeded if !v1 => Reason::PolicyDeclined,
+        Reason::RequestUnauthenticated if !v1 => Reason::NotAuthorized,
+        reason => reason,
+    }
+}
+
+/// Whether the request octets ask for `evidence-interop/1`.
+fn asks_v1(request_bytes: &[u8]) -> bool {
+    evidence_artifact::profile_of(request_bytes) == evidence_request::envelope::PROFILE_V1
+}
+
 fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Asker) -> Outcome {
     let digest = request_digest(request_bytes);
-    let refuse = |reason: Reason, subject_kind: Option<&'static str>| match refusal::sign(
-        &digest,
-        reason,
-        responder.now,
-        responder.signing_key,
-    ) {
-        Ok(r) => Outcome::Refused {
-            wire: refusal_wire(&r, responder),
-            reason,
-            subject_kind,
-        },
-        Err(e) => Outcome::Unanswerable(format!("could not sign a {reason} refusal: {e}")),
+    // Set once the request's profile is read; until then a refusal carries
+    // the tokens /0 registers, which /1 registers too.
+    let v1 = std::cell::Cell::new(false);
+    let refuse = |reason: Reason, subject_kind: Option<&'static str>| {
+        let reason = under_profile(reason, v1.get());
+        match refusal::sign(&digest, reason, responder.now, responder.signing_key) {
+            Ok(r) => Outcome::Refused {
+                wire: refusal_wire(&r, responder),
+                reason,
+                subject_kind,
+            },
+            Err(e) => Outcome::Unanswerable(format!("could not sign a {reason} refusal: {e}")),
+        }
     };
 
     // 1. Size, before parsing.
     if request_bytes.len() > MAX_REQUEST_BYTES {
-        return refuse(Reason::PolicyDeclined, None);
+        return refuse(Reason::CapacityExceeded, None);
     }
     // 2. Parse.
     let req = match request::parse_json(request_bytes) {
@@ -293,9 +323,12 @@ fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Ask
         _ => return refuse(Reason::RequestMalformed, kind),
     };
     // A profile this node does not implement (profile §3.3 step 4).
-    if evidence_artifact::requested_profile(&map) != Some(evidence_request::envelope::PROFILE) {
+    let Some(profile) = evidence_artifact::requested_profile(&map)
+        .filter(|p| evidence_request::envelope::PROFILES.contains(p))
+    else {
         return refuse(Reason::RequestMalformed, kind);
-    }
+    };
+    v1.set(profile == evidence_request::envelope::PROFILE_V1);
     if form == Form::Malformed {
         return refuse(Reason::RequestMalformed, kind);
     }
@@ -315,7 +348,7 @@ fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Ask
         return refuse(Reason::NotAuthorized, kind);
     }
     // 5. Who asks: the requester's signature, before anything is looked up.
-    let principal = match requester(&map, form, &req, now, responder, asker) {
+    let principal = match requester(&map, form, &req, now, responder, asker, v1.get()) {
         Ok(principal) => principal,
         Err(reason) => return refuse(reason, kind),
     };
@@ -338,7 +371,7 @@ fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Ask
                 wire,
                 subject_kind: req.subject.form().token(),
             },
-            _ => refuse(Reason::PolicyDeclined, kind),
+            _ => refuse(Reason::CapacityExceeded, kind),
         },
         Ok(Ok(Err(reason))) => refuse(reason, kind),
         Ok(Err(e)) | Err(e) => Outcome::Unanswerable(format!("the ledger could not be read: {e}")),
@@ -403,7 +436,10 @@ fn needs_counterparty(req: &Request, responder: &Responder<'_>) -> bool {
 /// `None` for an unsigned one this answer does not need, or the refusal.
 ///
 /// A malformed `requester_auth` is `request_malformed`. A signature that
-/// fails any check is refused whatever was asked. An unsigned request is
+/// fails any check is refused whatever was asked: under `evidence-interop/1`
+/// (`v1`) `request_unauthenticated`, or `capacity_exceeded` for a request
+/// this node cannot check because it does not know its own id yet; under
+/// /0 as below. An unsigned request is
 /// refused when the answer depends on who asks. The refusal for a record is
 /// `not_authorized`; for Standard History it is `policy_declined`, the one
 /// refusal every requester that is not a proven counterparty gets (R-8).
@@ -416,6 +452,7 @@ fn requester(
     now: evidence_request::time::UtcTime,
     responder: &Responder<'_>,
     asker: &mut Asker,
+    v1: bool,
 ) -> Result<Option<Principal>, Reason> {
     let needed = needs_requester(req, responder);
     let refused = if carries_records(req) {
@@ -484,6 +521,21 @@ fn requester(
                     // also when its nonce could not be held (u290 §2).
                     if failure.reads_as_unsigned() && !needed {
                         return Ok(None);
+                    }
+                    if v1 {
+                        // A limit of this node's own, not the request's: the
+                        // audience cannot be checked before this node knows
+                        // its own id, or the key's nonces fill its replay
+                        // cache.
+                        let own_id_unknown = responder.node_id.is_none()
+                            && matches!(failure, requester_auth::Failure::AudienceMismatch { .. });
+                        let full =
+                            matches!(failure, requester_auth::Failure::ReplayCacheFull { .. });
+                        return Err(if own_id_unknown || full {
+                            Reason::CapacityExceeded
+                        } else {
+                            Reason::RequestUnauthenticated
+                        });
                     }
                     Err(if needed {
                         refused
@@ -609,7 +661,7 @@ fn answer_from(
             Subject::Checkpoints => 0,
         };
         if count > MAX_ANSWER_RECORDS {
-            return Err(Reason::PolicyDeclined);
+            return Err(Reason::CapacityExceeded);
         }
         let records: Vec<u64> = match &req.subject {
             // The resolver refused a range reaching past the anchor.
@@ -633,7 +685,7 @@ fn answer_from(
         records
     } else if !served_summary {
         if at as u64 + 1 > MAX_ANSWER_CHECKPOINTS {
-            return Err(Reason::PolicyDeclined);
+            return Err(Reason::CapacityExceeded);
         }
         Vec::new()
     } else {
@@ -684,7 +736,7 @@ fn corroboration_answer(
     #[allow(unused_mut)]
     let mut records = corroboration::matching_records(req, &index.chain[at].record, view);
     if records.len() as u64 > MAX_ANSWER_RECORDS {
-        return Err(Reason::PolicyDeclined);
+        return Err(Reason::CapacityExceeded);
     }
     let never_leaves = |i: &u64| index.leaves.get(*i as usize).is_none_or(|l| l.never_leaves);
     if policy_gate_applies() && records.iter().any(never_leaves) {
@@ -863,23 +915,33 @@ pub fn now_utc() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-/// A signed `policy_declined` refusal of `request_bytes`, given without
-/// reading the ledger: this node is already answering as many requests as it
-/// takes at once.
+/// `reason`, when the profile the request octets `sent` asked for registers
+/// it (IP v1 §6.3): evidence-interop/0 the eight ER -01 tokens, /1 the ten of
+/// ER -02. A refusal carries no profile, so its reason is read by its
+/// request's.
+pub(crate) fn registered_under_request(sent: &[u8], reason: Reason) -> Result<Reason, String> {
+    let profile = evidence_artifact::profile_of(sent);
+    if evidence_request::envelope::refusal_reasons(&profile).contains(&reason) {
+        Ok(reason)
+    } else {
+        Err(format!("{reason} is not a refusal reason under {profile}"))
+    }
+}
+
+/// A signed refusal of `request_bytes`, given without reading the ledger:
+/// this node is already answering as many requests as it takes at once.
+/// `capacity_exceeded` to an `evidence-interop/1` request, `policy_declined`
+/// to a /0 one ([`under_profile`]).
 pub fn decline_busy(request_bytes: &[u8], responder: &Responder<'_>) -> Outcome {
     let digest = request_digest(request_bytes);
-    match refusal::sign(
-        &digest,
-        Reason::PolicyDeclined,
-        responder.now,
-        responder.signing_key,
-    ) {
+    let reason = under_profile(Reason::CapacityExceeded, asks_v1(request_bytes));
+    match refusal::sign(&digest, reason, responder.now, responder.signing_key) {
         Ok(r) => Outcome::Refused {
             wire: refusal_wire(&r, responder),
-            reason: Reason::PolicyDeclined,
+            reason,
             subject_kind: None,
         },
-        Err(e) => Outcome::Unanswerable(format!("could not sign a policy_declined refusal: {e}")),
+        Err(e) => Outcome::Unanswerable(format!("could not sign a {reason} refusal: {e}")),
     }
 }
 
@@ -919,9 +981,12 @@ pub fn verify_response(
     let not_evidence = |why: String| json!({"state": "not_evidence", "why": why});
     let digest = request_digest(sent);
     if response.get("reason").is_some() {
-        return match refusal::verify_for(response, key, &digest) {
+        return match refusal::verify_for(response, key, &digest)
+            .map_err(|e| e.to_string())
+            .and_then(|reason| registered_under_request(sent, reason))
+        {
             Ok(reason) => json!({"state": "refusal", "reason": reason.token()}),
-            Err(e) => not_evidence(e.to_string()),
+            Err(why) => not_evidence(why),
         };
     }
     let Ok(req) = request::parse_json(sent) else {
@@ -1324,6 +1389,197 @@ pub(crate) mod tests {
         };
         assert_eq!(reason, Reason::PolicyDeclined);
         assert!(refusal::verify_for(&wire, &key.verifying_key(), &request_digest(bytes)).is_ok());
+    }
+
+    /// The reasons ER -02 adds go only to an `evidence-interop/1` request
+    /// (IP v1 §6.3); a /0 request gets the token /0 used for the same cause.
+    #[test]
+    fn under_profile_keeps_the_02_reasons_to_v1() {
+        for (reason, v0) in [
+            (Reason::CapacityExceeded, Reason::PolicyDeclined),
+            (Reason::RequestUnauthenticated, Reason::NotAuthorized),
+            (Reason::PolicyDeclined, Reason::PolicyDeclined),
+            (Reason::NotAuthorized, Reason::NotAuthorized),
+            (Reason::NoSuchSubject, Reason::NoSuchSubject),
+        ] {
+            assert_eq!(under_profile(reason, true), reason);
+            assert_eq!(under_profile(reason, false), v0, "{reason}");
+        }
+    }
+
+    /// A request whose signature fails is refused `request_unauthenticated`
+    /// under evidence-interop/1, `not_authorized` under /0, before the ledger
+    /// is read either way; a busy node declines a /1 request
+    /// `capacity_exceeded` and a /0 one `policy_declined`.
+    #[test]
+    fn a_v1_request_is_refused_with_the_02_reasons() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let record = node_a_record(&ledger);
+        for (profile, want) in [
+            (Some("evidence-interop/1"), Reason::RequestUnauthenticated),
+            (Some("evidence-interop/0"), Reason::NotAuthorized),
+            (None, Reason::NotAuthorized),
+        ] {
+            let mut request = record.clone();
+            if let Some(p) = profile {
+                request["profile"] = json!(p);
+            }
+            requester_auth::sign(
+                requester_auth::Channel::LedgerFetch,
+                &mut request,
+                &asker_key("node-a"),
+                now(),
+                RESPONDER,
+            );
+            let bytes = serde_json::to_vec(&request).unwrap();
+            let reads = evidence_log::index_reads();
+            let outcome = ask_with(dir.path(), &bytes, "peers", false);
+            assert_eq!(evidence_log::index_reads(), reads, "the ledger was read");
+            assert_eq!(
+                outcome.wire_bytes(),
+                Some(refusal_of(&bytes, want)),
+                "{profile:?}"
+            );
+        }
+
+        let key = key();
+        let (announced, replay) = (announced(), ReplayCache::default());
+        let responder = Responder {
+            ledger_dir: Path::new("/nonexistent"),
+            signing_key: &key,
+            now: NOW,
+            history_segments: "peers",
+            share_standard_history: true,
+            share_exchange_corroboration: false,
+            keys: Keys {
+                announced: &announced,
+                configured: None,
+                own_key: None,
+            },
+            replay: &replay,
+            node_id: Some(RESPONDER),
+            policy_digest: None,
+        };
+        for (bytes, want) in [
+            (
+                &br#"{"subject":{"checkpoints":null},"coverage":{"min_freshness":1},"profile":"evidence-interop/1"}"#[..],
+                Reason::CapacityExceeded,
+            ),
+            (
+                &br#"{"subject":{"checkpoints":null},"coverage":{"min_freshness":1}}"#[..],
+                Reason::PolicyDeclined,
+            ),
+        ] {
+            let Outcome::Refused { wire, reason, .. } = decline_busy(bytes, &responder) else {
+                panic!("declined");
+            };
+            assert_eq!(reason, want);
+            assert_eq!(
+                refusal::verify_for(&wire, &key.verifying_key(), &request_digest(bytes)),
+                Ok(want)
+            );
+        }
+    }
+
+    /// A refusal is read by its request's profile (IP v1 §6.3): an -02 reason
+    /// answering a /0 or profile-less request is not a conforming refusal;
+    /// answering a /1 request it is.
+    #[test]
+    fn the_requester_reads_a_refusal_by_its_requests_profile() {
+        let key = key();
+        let signed = |sent: &[u8], reason: Reason| -> Value {
+            let r = refusal::sign(&request_digest(sent), reason, NOW, &key).unwrap();
+            serde_json::to_value(r.to_json()).unwrap()
+        };
+        let v0 = br#"{"subject":{"checkpoints":null},"coverage":{"min_freshness":1}}"#;
+        let v1 = br#"{"subject":{"checkpoints":null},"coverage":{"min_freshness":1},"profile":"evidence-interop/1"}"#;
+        for reason in [Reason::CapacityExceeded, Reason::RequestUnauthenticated] {
+            let got = verify_response(
+                v0,
+                &signed(v0, reason),
+                &key.verifying_key(),
+                &Default::default(),
+            );
+            assert_eq!(got["state"], json!("not_evidence"), "{reason}: {got}");
+            let got = verify_response(
+                v1,
+                &signed(v1, reason),
+                &key.verifying_key(),
+                &Default::default(),
+            );
+            assert_eq!(got, json!({"state": "refusal", "reason": reason.token()}));
+        }
+        let got = verify_response(
+            v0,
+            &signed(v0, Reason::PolicyDeclined),
+            &key.verifying_key(),
+            &Default::default(),
+        );
+        assert_eq!(got["state"], json!("refusal"));
+    }
+
+    /// A bound key whose nonces fill its replay cache is refused before the
+    /// ledger is read: `capacity_exceeded` under evidence-interop/1, a limit
+    /// of this node's own; under /0 what it was before, `not_authorized`
+    /// for a record.
+    #[test]
+    fn a_full_replay_cache_is_capacity_exceeded_under_v1() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let record = node_a_record(&ledger);
+        let key_id = hex::encode(asker_key("node-a").verifying_key().to_bytes());
+        for (profile, want) in [
+            (Some("evidence-interop/1"), Reason::CapacityExceeded),
+            (None, Reason::NotAuthorized),
+        ] {
+            let replay = ReplayCache::default();
+            for i in 0..requester_auth::MAX_NONCES_PER_KEY {
+                replay.first_use(&key_id, &format!("held-{i}"), i64::MAX / 2, 0, true);
+            }
+            let mut request = record.clone();
+            if let Some(p) = profile {
+                request["profile"] = json!(p);
+            }
+            let bytes = signed_by("node-a", &request);
+            let reads = evidence_log::index_reads();
+            let outcome = ask_cached(dir.path(), &bytes, "peers", false, &replay);
+            assert_eq!(evidence_log::index_reads(), reads, "the ledger was read");
+            assert_eq!(
+                outcome.wire_bytes(),
+                Some(refusal_of(&bytes, want)),
+                "{profile:?}"
+            );
+        }
+    }
+
+    /// The corroboration path reads a refusal by its request's profile too.
+    #[test]
+    fn a_corroboration_refusal_is_read_by_its_requests_profile() {
+        use crate::exchange_corroboration::{request_for, verify, Verified};
+        let key = key();
+        for (profile, conforms) in [(None, false), (Some("evidence-interop/1"), true)] {
+            let mut request = request_for("deal-1");
+            if let Some(p) = profile {
+                request["profile"] = json!(p);
+            }
+            let sent = serde_json::to_vec(&request).unwrap();
+            let r =
+                refusal::sign(&request_digest(&sent), Reason::CapacityExceeded, NOW, &key).unwrap();
+            let got = verify(
+                &sent,
+                &r.to_json(),
+                &key.verifying_key(),
+                &Default::default(),
+            );
+            match got {
+                Verified::Refusal(reason) if conforms => {
+                    assert_eq!(reason, Reason::CapacityExceeded)
+                }
+                Verified::Failed(_) if !conforms => {}
+                other => panic!("{profile:?}: {other:?}"),
+            }
+        }
     }
 
     /// A node whose clock cannot be written as an `issued_at` signs nothing.
@@ -2763,7 +3019,7 @@ pub(crate) mod tests {
     /// §3.3 step 4), never answered as `evidence-interop/0`. One naming
     /// `evidence-interop/0`, or none, is answered under it.
     #[test]
-    fn a_request_for_another_profile_is_malformed() {
+    fn a_request_for_a_profile_not_implemented_is_malformed() {
         let ledger = corpus_ledger();
         let dir = node(&ledger);
         let with_profile = |profile: Value| {
@@ -2771,21 +3027,30 @@ pub(crate) mod tests {
             req["profile"] = profile;
             serde_json::to_vec(&req).unwrap()
         };
-        for profile in [json!("evidence-interop/1"), json!(""), json!(0)] {
+        for profile in [json!("evidence-interop/2"), json!(""), json!(0)] {
             assert_eq!(
                 refused(&ask(dir.path(), &with_profile(profile.clone()), "peers")),
                 Some(Reason::RequestMalformed),
                 "{profile}"
             );
         }
-        for bytes in [
-            with_profile(json!("evidence-interop/0")),
-            CHECKPOINTS.to_vec(),
+        // Each identifier this node implements is answered under itself
+        // (IP §3.3); a request with none asks for evidence-interop/0.
+        for (bytes, answered_under) in [
+            (
+                with_profile(json!("evidence-interop/0")),
+                "evidence-interop/0",
+            ),
+            (CHECKPOINTS.to_vec(), "evidence-interop/0"),
+            (
+                with_profile(json!("evidence-interop/1")),
+                "evidence-interop/1",
+            ),
         ] {
             let Outcome::Answered { wire, .. } = ask(dir.path(), &bytes, "peers") else {
                 panic!("answered");
             };
-            assert_eq!(wire["profile"], json!("evidence-interop/0"));
+            assert_eq!(wire["profile"], json!(answered_under));
         }
     }
 

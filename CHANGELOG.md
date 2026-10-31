@@ -4,6 +4,31 @@
 
 ### Changed
 
+- **Evidence requests speak `evidence-interop/1` (Evidence Request -02), and a refusal says
+  whether it was policy.** The node answers a request under `evidence-interop/0` or `/1`,
+  whichever it names (a request with none asks for /0), and asks under /1. Under /1 it declines for
+  a limit or fault of its own with `capacity_exceeded`: a full stranger pool, a request, answer, or
+  record or checkpoint count over its limit, a Service History older than its period limit, an
+  answer it cannot build. A request whose signature, key binding, audience, deadline window or
+  replay check fails gets `request_unauthenticated` (`capacity_exceeded` while the node does not
+  know its own id). `not_authorized` and `policy_declined` are then policy only. A /0 request
+  gets the tokens it got before.
+  - On the asking side, `policy_check` judges a /1 refusal's `policy_declined` and
+    `not_authorized` against the policy the peer's commitment pins: withholding what the policy
+    gives any asker is a `MISMATCH`. `capacity_exceeded` reads `NOT_CHECKED` and
+    `request_unauthenticated` `MATCH`; a /0 refusal reads as before.
+  - A peer that implements only /0 (every release before this one) refuses a /1 ask
+    `request_malformed`, so the ask is sent once more under /0, with its nonce suffixed
+    `/evidence-interop-0`. The book of asks holds both.
+  - A Service History is served under either identifier with the same artifact
+    (agent-action-capsule#484).
+  - The commitment and its `history_card` staple do not change.
+  - `evidence-request` 0.3.0 and `evidencebook` 0.0.11 (its move to 0.3, and the envelope signed
+    under the profile the request names).
+  - A refusal is read by its request's profile: an -02 reason answering a /0 ask is not a
+    conforming refusal. A full replay cache is `capacity_exceeded` under /1, not
+    `request_unauthenticated`. A request the caller signed is sent as given.
+  - Mesh-LLM/capsules-plugin#114.
 - **The Evidence tab says when a peer's answer is not witnessed.** A history or record that checks
   only against the peer's own signatures is no longer shown as verified (no ✓, no "checks out"):
   it says no witness this node trusts has vouched for that log, or that this node has no witness
