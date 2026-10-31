@@ -43,29 +43,54 @@ export const HERO_DESCRIPTION =
 /** Peers table column headers. */
 export const PEER_COLUMN_TOOLTIPS = {
   exchanges: 'Distinct exchanges with this peer. Your record and theirs of the same exchange count once.',
-  confirmed: 'How many of your exchanges with them are confirmed by their own signed record, checked on this machine.',
-  match:
-    'How many of their records hold the same request and answer as yours, and how many disagree, including records your node refused for naming another server or model.',
-  adjudication:
-    'Verdicts sealed about this peer’s answers, and how many exchanges they looked at. None means no verdict has been sealed about this peer.',
-  witness:
-    'Whether this peer’s records are held by a witness they don’t run. Not shown yet: this view doesn’t have that data.',
+  rewrote:
+    'Whether the records you hold of this peer are sealed: signed when the exchange happened, so a later edit would show.',
+  leftOut:
+    'How many of their signed records name the same request, answer and model as yours, out of all your exchanges with them. A record that differs is counted as differing.',
+  swapped:
+    'What a referee you asked ruled about this peer’s answers, out of how many were checked. Not tested means you asked no referee.',
   period: 'The date of your latest exchange with this peer.'
+} as const
+
+/** The sentence above the Peers table: a count, then why the names are not evidence. */
+export function peersHeaderSentence(count: number): string {
+  return `${count} ${count === 1 ? 'peer' : 'peers'} on the record. Names are self-reported; only signed records count.`
+}
+
+/** The line under the Peers table. */
+export const PEERS_FOOTER = 'Nothing here changes routing. Records stay on this node and are never sent to anyone.'
+
+/** The peer drawer's three rows and its footer. */
+export const PEER_DRAWER = {
+  rewroteTitle: 'Rewrote the record',
+  leftOutTitle: 'Left something out',
+  swappedTitle: 'Swapped the model',
+  rewroteSealed:
+    'Your record is signed and sealed when it happened, so a later edit would show.',
+  rewroteTheirs: 'Theirs is signed with their key. Neither side can edit it quietly.',
+  leftOutMatched: 'Their signed record names the same request, answer and model as yours.',
+  leftOutNone: 'No signed record from them has been checked against yours yet.',
+  leftOutDiffer: 'Their signed record differs from yours on the request, the answer or the model.',
+  historyNotCompared: 'You haven’t compared full histories yet.',
+  historyChecked: 'Their full history was checked on this machine.',
+  historyFailed: 'Their full history was fetched and did not check out.',
+  historyRefused: 'They refused to show their full history.',
+  swappedNone: 'You haven’t asked a referee to compare this peer’s answers, so nothing is checked.',
+  swappedSealed: 'The ruling is a record sealed on this node.',
+  routing: 'Routing: unchanged. This page shows records, nothing more.',
+  openExchanges: 'Open in Exchanges',
+  askHistory: 'Ask a peer for their history',
+  openVerdict: 'Open the verdict'
 } as const
 
 /** The Peers row's alias line, and the table's second group. */
 export const PEER_ALIAS_TOOLTIP =
   'The ids this peer uses: the key it signs with, its mesh node and its endpoint, as they appear on your records.'
-export const ADVERTISED_UNUSED_TOOLTIP = 'Nodes the mesh told you about that you haven’t exchanged with.'
 export const PEER_NEEDS_A_LOOK_LABEL = 'Needs a look'
 
 /** The peer's self-reported identity note. */
 export const SELF_REPORTED_TOOLTIP =
   'This identity is self-reported: it’s what the peer says about itself. Only the records they signed, checked on this machine, count as evidence.'
-
-/** The one line at the top of the peer inspector. */
-export const PEER_INSPECTOR_HEADER =
-  'What you’ve recorded with this peer. Their log, as shown to you, is what they and others let you see.'
 
 /** The drill's "Their log, as shown to you" hover follows the
  *  section's state: "checked" only once a fetched log was checked

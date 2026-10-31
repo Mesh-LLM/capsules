@@ -65,14 +65,12 @@ const REQUIRED = {
   hero: [] as string[],
   peers: [
     'peer_column:exchanges',
-    'peer_column:confirmed',
-    'peer_column:match',
-    'peer_column:adjudication',
-    'peer_column:witness',
+    'peer_column:rewrote',
+    'peer_column:leftOut',
+    'peer_column:swapped',
     'peer_column:period',
-    'peer:self_reported',
-    'peer_attention:disagreements',
-    'peer_attention:differingAnswers',
+    // A disagreement and a differing answer are the Left-something-out and Swapped columns now;
+    // the self-reported note is the sentence above the table.
     'peer_attention:logFailed',
     'peers:through_split'
   ],
@@ -282,7 +280,7 @@ function expectCovered(required: readonly string[], seen: Map<string, string>, w
 describe('tooltip census -- every chip type the Evidence tab ships has a plain one-line tooltip', () => {
   it('Peers + hero: every column header, the identity note and each counted badge', async () => {
     render(<LedgerPageContent />, { wrapper })
-    await screen.findByText(/Nodes you have dealt with/)
+    await screen.findByText(/on the record\. Names are self-reported/)
     const seen = censusOnScreen()
     expectCovered(REQUIRED.hero, seen, 'face')
     expectCovered(REQUIRED.peers, seen, 'face')
@@ -343,7 +341,6 @@ describe('tooltip census -- the copy itself', () => {
       ...Object.values(COPY.HERO_TOOLTIPS),
       ...Object.values(COPY.PEER_COLUMN_TOOLTIPS),
       COPY.SELF_REPORTED_TOOLTIP,
-      COPY.PEER_INSPECTOR_HEADER,
       ...Object.values(COPY.PEER_ATTENTION).flatMap((entry) => [entry.tooltip(1), entry.tooltip(2)]),
       ...Object.values(COPY.ROW_STATE_TOOLTIPS),
       ...Object.values(COPY.CLOSED_CELL_TOOLTIPS),
@@ -357,7 +354,6 @@ describe('tooltip census -- the copy itself', () => {
       COPY.CONTINUITY_TOOLTIP,
       COPY.SAVE_EVIDENCE_FILE_TOOLTIP,
       COPY.PEER_ALIAS_TOOLTIP,
-      COPY.ADVERTISED_UNUSED_TOOLTIP,
       ...Object.values(COPY.STAGE_CELL_TOOLTIPS),
       ...Object.values(COPY.HANDOFF_TOOLTIPS),
       COPY.TWIN_NO_VERDICT_TOOLTIP,

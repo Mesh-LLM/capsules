@@ -1,17 +1,11 @@
-// Part 2 — the Peer Inspector modal,
-// replacing the old card's inline `expanded` accordion. Opened today from
-// a `PeerTableRow` click (rebuilt the row as a
-// table cell, not a card). Mirrors the Logs Request Inspector shell
-// (SharedModal + TabPanel) verbatim -- Overview / Their history / Timeline /
-// Exchanges tabs. The per-exchange
-// drill-down (`PeerExchangeInspector`) nests inside this modal, opened from
-// either the Timeline chart or the Exchanges list -- both drive the SAME
-// `selectedPoint` state, never a second, divergent detail view.
-import { useState } from 'react'
+// The peer drawer, opened from a `PeerTableRow`: the three ways a stranger
+// could cheat, one row each with its badge, a sentence and where to look next,
+// then the ids this peer uses and a routing line. Every figure is one the page
+// already holds (`peerFacts`); one with no source here reads "not checked".
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { StatusPill } from '@/components/ui/status-pill'
 import {
   SharedModal,
   SharedModalBody,
@@ -20,172 +14,177 @@ import {
   SharedModalHeader,
   SharedModalTitle
 } from '@/components/ui/SharedModal'
-import { TabPanel } from '@/components/ui/TabPanel'
+import { StatusBadge } from '@/components/ui/StatusBadge'
 import type { PaneBRow } from '@/features/capsules/api/sidecarTypes'
-import { toneForState } from '@/features/capsules/lib/assurance-tone'
-import type { PeerTimelinePoint } from '@/features/capsules/lib/peer-exchange-timeline'
 import type { PeerMeshStatus } from '@/features/capsules/lib/peer-mesh-status'
-import { peerDisplayId, theirChainSummary } from '@/features/capsules/lib/peer-row-view'
-import { dealingsLines } from '@/features/capsules/lib/peer-routing-view'
-import { PeerExchangeInspector } from '@/features/capsules/components/PeerExchangeInspector'
-import { PeerHistoryTab } from '@/features/capsules/components/PeerHistoryTab'
-import { RefereeVerdictCounts } from '@/features/capsules/components/RefereeVerdictCounts'
 import {
-  PEER_INSPECTOR_HEADER,
-  ROUTING_NOT_ON_THIS_PAGE,
-  YOUR_DEALINGS_TITLE
-} from '@/features/capsules/lib/tooltip-copy'
-import { PeerTimeline } from '@/features/capsules/components/PeerTimeline'
-import { formatExchangeTimestamp } from '@/features/capsules/lib/local-time'
+  meshMetaLine,
+  peerDisplayId,
+  peerFacts,
+  peerIdentityAliases,
+  periodRangeText,
+  STATE_FAILED,
+  STATE_REFUSED,
+  STATE_VERIFIED,
+  type PeerBadge,
+  type PeerFacts
+} from '@/features/capsules/lib/peer-row-view'
+import { PEER_DRAWER } from '@/features/capsules/lib/tooltip-copy'
 
 export type PeerInspectorProps = {
   open: boolean
   onClose: () => void
   row: PaneBRow | null
   meshStatus: PeerMeshStatus | null
-  points: readonly PeerTimelinePoint[]
   /** How the page names this peer (`peer-names.ts`); defaults to its id. */
   name?: string
+  /** The row's three facts (`peerFacts`); read from `row` when not given. */
+  facts?: PeerFacts
+  /** Where "Open in Exchanges" and "Open the verdict" go. With none, the
+   *  buttons are not drawn rather than drawn dead. */
+  onOpenExchanges?: () => void
 }
 
-type PeerInspectorTab = 'overview' | 'history' | 'timeline' | 'exchanges'
+const short = (id: string) => (id.length > 10 ? `${id.slice(0, 10)}…` : id)
 
-function PeerOverviewTab({ row }: { row: PaneBRow }) {
-  const chain = theirChainSummary(row)
-
-  // Accountability only: no liveness line (mesh status, latency, online) --
-  // that is the Network tab's -- and no per-drill "self-reported" line, which
-  // the Peers legend says once.
-  return (
-    <div className="flex flex-col gap-3 text-sm text-fg-dim">
-      {/* §7.5: the drill answers "should I stop dealing with anyone?" --
-         your dealings with them, then routing at the bottom. */}
-      <section aria-label={YOUR_DEALINGS_TITLE} className="flex flex-col gap-2">
-        <h3 className="text-xs font-medium text-foreground">{YOUR_DEALINGS_TITLE}</h3>
-        {dealingsLines(row).map((line) => (
-          <p key={line}>{line}</p>
-        ))}
-      </section>
-      <RefereeVerdictCounts row={row} />
-      <p className="text-fg-faint">{chain.text}</p>
-      <section
-        aria-label={ROUTING_NOT_ON_THIS_PAGE.sectionTitle}
-        className="flex flex-col gap-2 border-t border-border-soft pt-3"
-      >
-        <h3 className="text-xs font-medium text-foreground">{ROUTING_NOT_ON_THIS_PAGE.sectionTitle}</h3>
-        <p>{ROUTING_NOT_ON_THIS_PAGE.text}</p>
-      </section>
-    </div>
-  )
-}
-
-function PeerExchangesTab({
-  points,
-  onSelectPoint
-}: {
-  points: readonly PeerTimelinePoint[]
-  onSelectPoint: (point: PeerTimelinePoint) => void
-}) {
-  if (points.length === 0) {
-    return <p className="text-xs text-fg-faint">No individually detailed exchanges on this view yet.</p>
+function historySentence(row: PaneBRow): string {
+  switch (row.history?.state) {
+    case STATE_VERIFIED:
+      return PEER_DRAWER.historyChecked
+    case STATE_FAILED:
+      return PEER_DRAWER.historyFailed
+    case STATE_REFUSED:
+      return PEER_DRAWER.historyRefused
+    default:
+      return PEER_DRAWER.historyNotCompared
   }
+}
+
+function DrawerRow({
+  title,
+  badge,
+  detail,
+  action
+}: {
+  title: string
+  badge: PeerBadge
+  detail: ReactNode
+  action?: { label: string; onClick: () => void } | null
+}) {
   return (
-    <ul className="flex flex-col gap-1.5">
-      {points.map((point) => (
-        <li key={point.exchangeId}>
-          <button
-            className="w-full rounded border border-border-soft px-2.5 py-2 text-left text-xs text-fg-dim hover:bg-panel-strong"
-            onClick={() => onSelectPoint(point)}
-            type="button"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-foreground">{point.exchangeId}</span>
-              <StatusPill dot label={point.reconciliation} tone={toneForState(point.reconciliation)} />
-            </div>
-            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-fg-faint">
-              <span>{formatExchangeTimestamp(point.timestamp)}</span>
-              <span aria-hidden="true">·</span>
-              <span>{point.direction === 'requested' ? 'you → them' : 'them → you'}</span>
-              {point.direction === 'requested' ? (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span>{point.adjudication ? point.adjudication.verdict : 'no verdict'}</span>
-                </>
-              ) : null}
-            </div>
-          </button>
-        </li>
-      ))}
-    </ul>
+    <section aria-label={title} className="flex flex-col gap-1.5 border-b border-border-soft py-3 first:pt-0">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-medium text-foreground">{title}</h3>
+        <StatusBadge size="caption" tone={badge.tone}>
+          {badge.text}
+        </StatusBadge>
+      </div>
+      <p className="text-sm text-fg-dim">{detail}</p>
+      {action ? (
+        <Button className="self-start" onClick={action.onClick} size="sm" type="button" variant="outline">
+          {action.label}
+        </Button>
+      ) : null}
+    </section>
   )
 }
 
-export function PeerInspector({ open, onClose, row, points, name }: PeerInspectorProps) {
-  const [selectedPoint, setSelectedPoint] = useState<PeerTimelinePoint | null>(null)
+function swappedSentence(facts: PeerFacts): string {
+  const { swapped } = facts
+  if (swapped.checked === 0) return PEER_DRAWER.swappedNone
+  const count = `${swapped.tally}.`
+  if (swapped.caught === 0) return `${count} ${PEER_DRAWER.swappedSealed}`
+  const other = swapped.otherNode ? `The same request also went to ${short(swapped.otherNode)}. ` : ''
+  const referee = swapped.referee ? `Referee ${short(swapped.referee)} re-answered it and ` : 'A referee '
+  return `${count} ${other}${referee}ruled this peer’s answer wrong. ${PEER_DRAWER.swappedSealed}`
+}
+
+export function PeerInspector({ open, onClose, row, meshStatus, name, facts, onOpenExchanges }: PeerInspectorProps) {
+  const shown = facts ?? (row ? peerFacts(row) : null)
+  const ids = row ? peerIdentityAliases(row) : null
+  const exchanges = row?.exchange_count ?? 0
+  const subtitle = row
+    ? [
+        ids?.nodeId ? `node ${short(ids.nodeId)}` : null,
+        meshMetaLine(meshStatus),
+        `${exchanges} ${exchanges === 1 ? 'exchange' : 'exchanges'}`,
+        periodRangeText(row.last_seen, row.last_seen)
+      ]
+        .filter((part): part is string => !!part && part !== '—')
+        .join(' · ')
+    : ''
+  const idsLine =
+    ids?.signingKeyId || ids?.nodeId || ids?.endpointId
+      ? `Ids they use: ${ids.signingKeyId ? `${short(ids.signingKeyId)} signs` : 'signing key not checked'}${
+          ids.nodeId || ids.endpointId
+            ? ` · ${ids.nodeId && ids.endpointId ? 'node and endpoint' : ids.nodeId ? 'node' : 'endpoint'} ${short(
+                (ids.nodeId ?? ids.endpointId) as string
+              )}`
+            : ''
+        }`
+      : 'Ids they use: not checked'
+  const actionFor = onOpenExchanges ? (label: string) => ({ label, onClick: onOpenExchanges }) : () => null
 
   return (
-    <>
-      <SharedModal
-        onOpenChange={(nextOpen) => {
-          if (!nextOpen) onClose()
-        }}
-        open={open}
-      >
-        {open && row ? (
-          <SharedModalContent className="flex max-h-[min(calc(100dvh-4rem),44rem)] max-w-2xl flex-col overflow-hidden">
-            <SharedModalHeader className="relative shrink-0">
-              <SharedModalTitle className="font-mono">{name ?? peerDisplayId(row)}</SharedModalTitle>
-              <SharedModalDescription>{PEER_INSPECTOR_HEADER}</SharedModalDescription>
-              <DialogPrimitive.Close asChild>
-                <Button
-                  aria-label="Close peer inspector"
-                  className="ui-control-ghost absolute right-2 top-2 size-8 rounded-[var(--radius)] text-fg-dim lg:right-4 lg:top-4"
-                  size="icon"
-                  type="button"
-                  variant="ghost"
-                >
-                  <X aria-hidden="true" className="size-4" />
-                </Button>
-              </DialogPrimitive.Close>
-            </SharedModalHeader>
-            <SharedModalBody className="min-h-0 flex-1 overflow-y-auto p-0">
-              {/* Four tabs share the drill's width and a long label
-                 wraps, so the strip never clips "Exchanges" off its end. */}
-              <TabPanel<PeerInspectorTab>
-                ariaLabel="Peer inspector sections"
-                contentClassName="px-5 pb-5 pt-4"
-                defaultValue="overview"
-                listClassName="h-auto min-h-[56px] w-full"
-                stretchTabs
-                triggerClassName="h-auto min-h-[44px] whitespace-normal px-2 py-2 text-center leading-tight"
-                tabs={[
-                  {
-                    value: 'overview',
-                    label: 'Overview',
-                    content: <PeerOverviewTab row={row} />
-                  },
-                  {
-                    value: 'history',
-                    label: 'Their log, as shown to you',
-                    content: <PeerHistoryTab row={row} />
-                  },
-                  {
-                    value: 'timeline',
-                    label: 'Timeline',
-                    content: <PeerTimeline onSelectPoint={setSelectedPoint} points={points} row={row} />
-                  },
-                  {
-                    value: 'exchanges',
-                    label: 'Exchanges',
-                    content: <PeerExchangesTab onSelectPoint={setSelectedPoint} points={points} />
-                  }
-                ]}
-              />
-            </SharedModalBody>
-          </SharedModalContent>
-        ) : null}
-      </SharedModal>
-      <PeerExchangeInspector onClose={() => setSelectedPoint(null)} point={selectedPoint} />
-    </>
+    <SharedModal
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose()
+      }}
+      open={open}
+    >
+      {open && row && shown ? (
+        <SharedModalContent className="flex max-h-[min(calc(100dvh-4rem),44rem)] max-w-2xl flex-col overflow-hidden">
+          <SharedModalHeader className="relative shrink-0">
+            <SharedModalTitle className="font-mono">{name ?? peerDisplayId(row)}</SharedModalTitle>
+            <SharedModalDescription>{subtitle}</SharedModalDescription>
+            <DialogPrimitive.Close asChild>
+              <Button
+                aria-label="Close peer inspector"
+                className="ui-control-ghost absolute right-2 top-2 size-8 rounded-[var(--radius)] text-fg-dim lg:right-4 lg:top-4"
+                size="icon"
+                type="button"
+                variant="ghost"
+              >
+                <X aria-hidden="true" className="size-4" />
+              </Button>
+            </DialogPrimitive.Close>
+          </SharedModalHeader>
+          <SharedModalBody className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4">
+            <DrawerRow
+              action={actionFor(PEER_DRAWER.openExchanges)}
+              badge={shown.rewrote}
+              detail={
+                shown.leftOut.matched > 0
+                  ? `${PEER_DRAWER.rewroteSealed} ${PEER_DRAWER.rewroteTheirs}`
+                  : PEER_DRAWER.rewroteSealed
+              }
+              title={PEER_DRAWER.rewroteTitle}
+            />
+            <DrawerRow
+              action={actionFor(PEER_DRAWER.askHistory)}
+              badge={shown.leftOut}
+              detail={`${
+                shown.leftOut.differ > 0
+                  ? PEER_DRAWER.leftOutDiffer
+                  : shown.leftOut.matched > 0
+                    ? PEER_DRAWER.leftOutMatched
+                    : PEER_DRAWER.leftOutNone
+              } ${historySentence(row)}`}
+              title={PEER_DRAWER.leftOutTitle}
+            />
+            <DrawerRow
+              action={shown.swapped.checked > 0 ? actionFor(PEER_DRAWER.openVerdict) : null}
+              badge={shown.swapped}
+              detail={swappedSentence(shown)}
+              title={PEER_DRAWER.swappedTitle}
+            />
+            <div className="flex flex-col gap-1 pt-3 text-xs text-fg-faint">
+              <p className="font-mono">{idsLine}</p>
+              <p>{PEER_DRAWER.routing}</p>
+            </div>
+          </SharedModalBody>
+        </SharedModalContent>
+      ) : null}
+    </SharedModal>
   )
 }

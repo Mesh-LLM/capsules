@@ -4,7 +4,7 @@
 // the online-status filter is retired
 // along with the row's own online badge/latency/Route button; only the
 // Alarm filter remains.
-import { render, screen, within } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { LedgerPeersTable } from '@/features/capsules/components/LedgerPeersTable'
@@ -14,13 +14,8 @@ import {
   PEER_TAB_HARNESS_MESH_PEERS
 } from '@/features/capsules/lib/peer-fixtures'
 import { advertisedOnlyPeers, deriveMeshStatus } from '@/features/capsules/lib/peer-mesh-status'
-import {
-  advertisedOnlyRowView,
-  dealtWithRowView,
-  PEER_COLUMN_INFO,
-  SELF_REPORTED_DETAIL,
-  SELF_REPORTED_NOTE
-} from '@/features/capsules/lib/peer-row-view'
+import { dealtWithRowView, PEER_COLUMN_INFO } from '@/features/capsules/lib/peer-row-view'
+import { PEERS_FOOTER, peersHeaderSentence } from '@/features/capsules/lib/tooltip-copy'
 
 const [CLEAN_ROW, ALARMED_ROW] = HARNESS_PANE_B_PAYLOAD.rows
 
@@ -30,33 +25,42 @@ function buildFixtureProps() {
   const dealtWithRawRows = [CLEAN_ROW, ALARMED_ROW]
   const advertisedRawPeers = advertisedOnlyPeers(dealtWithRawRows, PEER_TAB_HARNESS_MESH_PEERS)
   const dealtWith = dealtWithRawRows.map((row) => dealtWithRowView(row))
-  const advertisedUnused = advertisedRawPeers.map((peer) => advertisedOnlyRowView(peer.shortId ?? peer.id))
   return {
     dealtWith,
-    advertisedUnused,
     dealtWithRawRows,
     advertisedUnusedRawPeers: advertisedRawPeers,
-    meshStatus: { statusFor, peers: PEER_TAB_HARNESS_MESH_PEERS },
-    exchangeSourcesFor: () => [],
-    recordsById: new Map()
+    meshStatus: { statusFor, peers: PEER_TAB_HARNESS_MESH_PEERS }
   }
 }
 
-describe('LedgerPeersTable — two row groups, never merged', () => {
-  it('renders "Nodes you have dealt with" and "Nodes advertised but unused" as separate groups', () => {
-    const props = buildFixtureProps()
-    render(<LedgerPeersTable {...props} />)
+describe('LedgerPeersTable — one list of the nodes you have dealt with', () => {
+  it('says how many peers are on the record, and that only signed records count', () => {
+    render(<LedgerPeersTable {...buildFixtureProps()} />)
+    expect(screen.getByTestId('peers-header')).toHaveTextContent(peersHeaderSentence(2))
+    expect(peersHeaderSentence(2)).toBe('2 peers on the record. Names are self-reported; only signed records count.')
+    expect(peersHeaderSentence(1)).toBe('1 peer on the record. Names are self-reported; only signed records count.')
+  })
 
-    expect(screen.getByText(/Nodes you have dealt with · 2/)).toBeInTheDocument()
-    expect(screen.getByText(/Nodes advertised but unused · 1/)).toBeInTheDocument()
+  it('lists the dealt-with peers and drops "Nodes advertised but unused" from Evidence', () => {
+    render(<LedgerPeersTable {...buildFixtureProps()} />)
     expect(screen.getByText(CLEAN_ROW.peer_id ?? '')).toBeInTheDocument()
     expect(screen.getByText(ALARMED_ROW.peer_id ?? '')).toBeInTheDocument()
-    // the fixture's third mesh peer ("unused-node.local", shortId
-    // "11223344") has no matching Pane B row -- it must appear ONLY in the
-    // advertised group, never in the dealt-with one.
-    const advertisedGroup = screen.getByText(/Nodes advertised but unused · 1/).closest('tbody')
-    expect(advertisedGroup).not.toBeNull()
-    expect(within(advertisedGroup as HTMLElement).getByText('11223344')).toBeInTheDocument()
+    expect(screen.queryByText(/advertised but unused/i)).not.toBeInTheDocument()
+    expect(screen.queryByText('11223344')).not.toBeInTheDocument()
+  })
+
+  it('has the three attack columns plus Exchanges and Last, and no witnessed column', () => {
+    render(<LedgerPeersTable {...buildFixtureProps()} />)
+    const names = screen.getAllByRole('columnheader').map((h) => h.textContent ?? '')
+    for (const label of ['Peer', 'Exchanges', 'Rewrote the record', 'Left something out', 'Swapped the model', 'Last']) {
+      expect(names.some((name) => name.startsWith(label))).toBe(true)
+    }
+    expect(screen.queryByRole('columnheader', { name: /witnessed/i })).not.toBeInTheDocument()
+  })
+
+  it('ends with the routing footer', () => {
+    render(<LedgerPeersTable {...buildFixtureProps()} />)
+    expect(screen.getByTestId('peers-footer')).toHaveTextContent(PEERS_FOOTER)
   })
 
   it('names each peer through the page’s namer, and search finds a peer by that name', async () => {
@@ -69,14 +73,6 @@ describe('LedgerPeersTable — two row groups, never merged', () => {
     await user.type(screen.getByRole('textbox'), 'mac-mini')
     expect(screen.getByText('Ethans-Mac-Mini (e7c7916261)')).toBeInTheDocument()
     expect(screen.queryByText(ALARMED_ROW.peer_id ?? '')).not.toBeInTheDocument()
-  })
-
-  it('a zero-dealings peer in the advertised group shows "no exchanges yet" with "—" accountability columns', () => {
-    const props = buildFixtureProps()
-    render(<LedgerPeersTable {...props} />)
-
-    expect(screen.getByText('no exchanges yet')).toBeInTheDocument()
-    expect(screen.getAllByText('—').length).toBeGreaterThan(0)
   })
 
   it('never carries a percentage or ratio ramp on any peer figure', () => {
@@ -102,8 +98,7 @@ describe('LedgerPeersTable — no "match this filter" when nothing is filtered',
   it('an empty group with no search or filter set says "None yet.", never "match this filter"', () => {
     const props = { ...buildFixtureProps(), dealtWith: [], dealtWithRawRows: [] }
     render(<LedgerPeersTable {...props} />)
-    const dealtWithGroup = screen.getByText(/Nodes you have dealt with · 0/).closest('tbody') as HTMLElement
-    expect(within(dealtWithGroup).getByText('None yet.')).toBeInTheDocument()
+    expect(screen.getByText('None yet.')).toBeInTheDocument()
     expect(screen.queryByText(/match this filter/)).not.toBeInTheDocument()
   })
 
@@ -112,12 +107,11 @@ describe('LedgerPeersTable — no "match this filter" when nothing is filtered',
     render(<LedgerPeersTable {...buildFixtureProps()} />)
     await user.type(screen.getByLabelText('Search peers'), 'no-such-peer')
     expect(screen.getByText('No exchanges match this filter.')).toBeInTheDocument()
-    expect(screen.getByText('No advertised peers match this filter.')).toBeInTheDocument()
   })
 })
 
 describe('LedgerPeersTable — toolbar', () => {
-  it('search filters both groups to the matching peer only', async () => {
+  it('search filters the list to the matching peer only', async () => {
     const user = userEvent.setup()
     const props = buildFixtureProps()
     render(<LedgerPeersTable {...props} />)
@@ -144,28 +138,23 @@ describe('LedgerPeersTable — toolbar', () => {
 
   it('the Columns menu hides a column, Reset view restores it', async () => {
     const user = userEvent.setup()
-    const props = buildFixtureProps()
-    render(<LedgerPeersTable {...props} />)
+    render(<LedgerPeersTable {...buildFixtureProps()} />)
 
-    // Each header now carries an (i) info glyph, so its accessible name is the
-    // label plus the glyph's description -- match on the label substring.
-    expect(screen.getByRole('columnheader', { name: /^Same request & answer/ })).toBeInTheDocument()
-    // Plain-language names (UX §2).
-    expect(screen.getByRole('columnheader', { name: /^Saved as confirmed/ })).toBeInTheDocument()
+    // Each header carries an (i) glyph, so its accessible name is the label plus the glyph's description.
+    expect(screen.getByRole('columnheader', { name: /^Left something out/ })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /columns/i }))
-    await user.click(screen.getByRole('menuitemcheckbox', { name: 'Same request & answer' }))
-    expect(screen.queryByRole('columnheader', { name: /^Same request & answer/ })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('menuitemcheckbox', { name: 'Left something out' }))
+    expect(screen.queryByRole('columnheader', { name: /^Left something out/ })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /reset view/i }))
-    expect(screen.getByRole('columnheader', { name: /^Same request & answer/ })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /^Left something out/ })).toBeInTheDocument()
   })
 
-  it('the period column is "Last dealt with", never the word "Period" or "Window"', () => {
-    const props = buildFixtureProps()
-    render(<LedgerPeersTable {...props} />)
+  it('the date column is "Last", never the word "Period" or "Window"', () => {
+    render(<LedgerPeersTable {...buildFixtureProps()} />)
 
-    expect(screen.getByRole('columnheader', { name: /^Last dealt with/ })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /^Last/ })).toBeInTheDocument()
     expect(screen.queryByRole('columnheader', { name: /^Period/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('columnheader', { name: /^Window/ })).not.toBeInTheDocument()
   })
@@ -174,45 +163,14 @@ describe('LedgerPeersTable — toolbar', () => {
     const props = buildFixtureProps()
     render(<LedgerPeersTable {...props} />)
 
-    // The Confirmed header's (i) carries the UX §8 sentence verbatim.
-    const confirmedGlyph = screen.getByRole('button', { name: 'About Saved as confirmed' })
-    const confirmedDesc = document.getElementById(confirmedGlyph.getAttribute('aria-describedby') as string)
-    expect(confirmedDesc).toHaveTextContent(PEER_COLUMN_INFO.confirmed)
-    expect(PEER_COLUMN_INFO.confirmed).toContain('confirmed by their own signed record, checked on this machine')
+    const leftOutGlyph = screen.getByRole('button', { name: 'About Left something out' })
+    const leftOutDesc = document.getElementById(leftOutGlyph.getAttribute('aria-describedby') as string)
+    expect(leftOutDesc).toHaveTextContent(PEER_COLUMN_INFO.leftOut)
 
     // Every visible accountability column header has its own (i) glyph.
-    for (const label of [
-      'Exchanges',
-      'Saved as confirmed',
-      'Same request & answer',
-      'Disputes judged',
-      'Their records witnessed'
-    ]) {
+    for (const label of ['Exchanges', 'Rewrote the record', 'Left something out', 'Swapped the model']) {
       expect(screen.getByRole('button', { name: `About ${label}` })).toBeInTheDocument()
     }
-  })
-
-  it('the Columns toggle names the period column "Last dealt with", never "Period"/"Window"', async () => {
-    const user = userEvent.setup()
-    const props = buildFixtureProps()
-    render(<LedgerPeersTable {...props} />)
-
-    await user.click(screen.getByRole('button', { name: /columns/i }))
-    expect(screen.getByRole('menuitemcheckbox', { name: 'Last dealt with' })).toBeInTheDocument()
-    expect(screen.queryByRole('menuitemcheckbox', { name: 'Period' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('menuitemcheckbox', { name: 'Window' })).not.toBeInTheDocument()
-  })
-
-  it('says "self-reported" once, in a legend under the table, with the fuller sentence behind its (i)', () => {
-    const props = buildFixtureProps()
-    render(<LedgerPeersTable {...props} />)
-
-    expect(screen.getByTestId('peers-legend')).toHaveTextContent(SELF_REPORTED_NOTE)
-    expect(screen.getAllByText(new RegExp(SELF_REPORTED_NOTE))).toHaveLength(1)
-    const glyph = screen.getByRole('button', { name: 'About the self-reported note' })
-    expect(document.getElementById(glyph.getAttribute('aria-describedby') as string)).toHaveTextContent(
-      SELF_REPORTED_DETAIL
-    )
   })
 
   it('Reset view is not shown while the view is at its default, never greyed', () => {

@@ -1,10 +1,8 @@
-// The Peers table -- review §3-F: "table with the
-// Exchanges toolbar (Search / Filter / Columns / Export / Save evidence
-// file / Reset view)"; two row groups, "Nodes you have dealt with" /
-// "Nodes advertised but unused", NEVER merged into one sorted list (they're
-// two separate `<TableBody>` sections fed by two separate arrays -- no
-// shared sort key could accidentally interleave them). No column here is
-// sortable (R-B: no sort/no default order/no ranking by outcome) -- headers
+// The Peers table: one row per node you have dealt with, a column per way a
+// stranger could cheat (rewrote the record, left something out, swapped the
+// model), and the Exchanges-style toolbar (Search / Filter / Columns / Export /
+// Save evidence file / Reset view). Nodes the mesh advertised but you never
+// dealt with are Network's, not listed here. No column here is sortable (R-B: no sort/no default order/no ranking by outcome) -- headers
 // are plain text, not `DataTableColumnHeader`, so there is no sort control
 // to wire up in the first place.
 //
@@ -27,9 +25,7 @@ import {
 import { FilterPopover, type FilterValueOption } from '@/components/ui/FilterPopover'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import type { CapsuleRecord } from '@/features/capsules/api/types'
 import { PeerTableRow } from '@/features/capsules/components/PeerTableRow'
-import type { PeerExchangeSource } from '@/features/capsules/lib/peer-exchange-timeline'
 import { peerEvidenceBundle, peerRowsToCsv } from '@/features/capsules/lib/peer-export'
 import type { PeerMeshStatusIndex } from '@/features/capsules/lib/peer-mesh-status'
 import { saveTextFile } from '@/features/capsules/lib/exchange-export'
@@ -37,25 +33,27 @@ import type { PaneBRow } from '@/features/capsules/api/sidecarTypes'
 import {
   ALL_PEER_TABLE_COLUMNS,
   PEER_COLUMN_INFO,
-  SELF_REPORTED_DETAIL,
-  SELF_REPORTED_NOTE,
   type PeerTableColumnKey,
   type PeerTableRowView
 } from '@/features/capsules/lib/peer-row-view'
 import { InfoHover } from '@/features/capsules/components/InfoHover'
 import type { SplitPeer } from '@/features/capsules/lib/split-stage'
-import { ADVERTISED_UNUSED_TOOLTIP, PEER_NEEDS_A_LOOK_LABEL, SPLIT_TOOLTIPS } from '@/features/capsules/lib/tooltip-copy'
+import {
+  PEER_NEEDS_A_LOOK_LABEL,
+  PEERS_FOOTER,
+  peersHeaderSentence,
+  SPLIT_TOOLTIPS
+} from '@/features/capsules/lib/tooltip-copy'
 import type { Peer } from '@/features/app-tabs/types'
 
 // Plain-language column names (UX §2). One label drives both the header and
 // the Columns dropdown -- never "Period"/"Window" (bookkeeping vocabulary).
 const COLUMN_LABELS: Record<PeerTableColumnKey, string> = {
   exchanges: 'Exchanges',
-  confirmed: 'Saved as confirmed',
-  match: 'Same request & answer',
-  adjudication: 'Disputes judged',
-  witness: 'Their records witnessed',
-  period: 'Last dealt with'
+  rewrote: 'Rewrote the record',
+  leftOut: 'Left something out',
+  swapped: 'Swapped the model',
+  period: 'Last'
 }
 const ALL_COLUMNS: PeerTableColumnKey[] = [...ALL_PEER_TABLE_COLUMNS]
 
@@ -111,12 +109,11 @@ function GroupHeaderRow({
 
 export type LedgerPeersTableProps = {
   dealtWith: readonly PeerTableRowView[]
-  advertisedUnused: readonly PeerTableRowView[]
   dealtWithRawRows: readonly PaneBRow[]
   advertisedUnusedRawPeers: readonly Peer[]
   meshStatus: PeerMeshStatusIndex
-  exchangeSourcesFor: (peerId: string) => readonly PeerExchangeSource[]
-  recordsById: ReadonlyMap<string, CapsuleRecord>
+  /** Where the drawer's "Open in Exchanges" and "Open the verdict" go. */
+  onOpenExchanges?: () => void
   /** Nodes that ran part of a request this node sent to a split's
    *  coordinator: a third group, never merged with the other two. */
   throughSplit?: readonly SplitPeer[]
@@ -127,12 +124,10 @@ export type LedgerPeersTableProps = {
 
 export function LedgerPeersTable({
   dealtWith,
-  advertisedUnused,
   dealtWithRawRows,
   advertisedUnusedRawPeers,
   meshStatus,
-  exchangeSourcesFor,
-  recordsById,
+  onOpenExchanges,
   throughSplit = [],
   peerName = asGiven
 }: LedgerPeersTableProps) {
@@ -141,7 +136,7 @@ export function LedgerPeersTable({
   const [visibleColumns, setVisibleColumns] = useState<Set<PeerTableColumnKey>>(new Set(ALL_COLUMNS))
 
   const trimmedSearch = search.trim().toLowerCase()
-  const allRows = useMemo(() => [...dealtWith, ...advertisedUnused], [dealtWith, advertisedUnused])
+  const allRows = dealtWith
 
   function passesFilters(view: PeerTableRowView): boolean {
     return alarmFilter.has(alarmValue(view)) && matchesSearch(view, trimmedSearch, peerName(view.displayId))
@@ -152,12 +147,7 @@ export function LedgerPeersTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `passesFilters` closes over the state values and the namer already listed
     [dealtWith, alarmFilter, trimmedSearch, peerName]
   )
-  const visibleAdvertised = useMemo(
-    () => advertisedUnused.filter(passesFilters),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `passesFilters` closes over the state values and the namer already listed
-    [advertisedUnused, alarmFilter, trimmedSearch, peerName]
-  )
-  const visibleRows = useMemo(() => [...visibleDealtWith, ...visibleAdvertised], [visibleDealtWith, visibleAdvertised])
+  const visibleRows = visibleDealtWith
   const visibleThroughSplit = throughSplit.filter(
     (peer) =>
       peer.nodeId.toLowerCase().includes(trimmedSearch) || peerName(peer.nodeId).toLowerCase().includes(trimmedSearch)
@@ -172,7 +162,8 @@ export function LedgerPeersTable({
   // actually narrowing it; with nothing set, the group is simply empty.
   const narrowed = trimmedSearch !== '' || activeFilterGroups > 0
 
-  const columnCount = 1 + visibleColumns.size
+  // The Peer and Open cells are always there.
+  const columnCount = 2 + visibleColumns.size
 
   function resetView() {
     setSearch('')
@@ -186,9 +177,9 @@ export function LedgerPeersTable({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-soft pb-2">
-        <p className="type-caption font-mono text-fg-dim">
-          {visibleRows.length === allRows.length ? visibleRows.length : `${visibleRows.length} of ${allRows.length}`}{' '}
-          shown
+        <p className="text-sm text-foreground" data-testid="peers-header">
+          {peersHeaderSentence(allRows.length)}
+          {visibleRows.length === allRows.length ? '' : ` ${visibleRows.length} shown.`}
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
@@ -304,14 +295,11 @@ export function LedgerPeersTable({
       <Table aria-label="Peers">
         <TableHeader className="bg-panel-strong">
           <TableRow className="border-border-soft hover:bg-panel-strong">
-            <TableHead className="type-label h-9 px-3 text-fg-faint">Peer / identity</TableHead>
+            <TableHead className="type-label h-9 px-3 text-fg-faint">Peer</TableHead>
             {ALL_COLUMNS.map((column) =>
               visibleColumns.has(column) ? (
                 <TableHead className="type-label h-9 px-3 text-fg-faint" key={column}>
                   <span className="inline-flex items-center gap-1">
-                    {/* The period column's header is the real date window across
-                       the visible rows (e.g. `22–26 Sep`), never the word
-                       "Period"; every other column keeps its plain label. */}
                     {COLUMN_LABELS[column]}
                     {/* Terse header on the face; what the column means and what
                        evidence backs it live behind the (i). */}
@@ -324,10 +312,12 @@ export function LedgerPeersTable({
                 </TableHead>
               ) : null
             )}
+            <TableHead className="type-label h-9 px-3 text-fg-faint">
+              <span className="sr-only">Open</span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          <GroupHeaderRow columnCount={columnCount} count={visibleDealtWith.length} label="Nodes you have dealt with" />
           {visibleDealtWith.length === 0 ? (
             <TableRow className="border-border-soft">
               <TableCell className="h-16 text-center text-xs text-fg-dim" colSpan={columnCount}>
@@ -337,36 +327,10 @@ export function LedgerPeersTable({
           ) : (
             visibleDealtWith.map((view) => (
               <PeerTableRow
-                exchangeSources={exchangeSourcesFor(view.displayId)}
                 key={view.key}
                 meshStatus={meshStatus.statusFor(view.displayId)}
                 name={peerName(view.displayId)}
-                recordsById={recordsById}
-                view={view}
-                visibleColumns={visibleColumns}
-              />
-            ))
-          )}
-        </TableBody>
-        <TableBody>
-          <GroupHeaderRow
-            columnCount={columnCount}
-            count={visibleAdvertised.length}
-            label="Nodes advertised but unused"
-            tooltip={ADVERTISED_UNUSED_TOOLTIP}
-          />
-          {visibleAdvertised.length === 0 ? (
-            <TableRow className="border-border-soft">
-              <TableCell className="h-16 text-center text-xs text-fg-dim" colSpan={columnCount}>
-                {narrowed ? 'No advertised peers match this filter.' : 'None yet.'}
-              </TableCell>
-            </TableRow>
-          ) : (
-            visibleAdvertised.map((view) => (
-              <PeerTableRow
-                key={view.key}
-                meshStatus={meshStatus.statusFor(view.displayId)}
-                name={peerName(view.displayId)}
+                onOpenExchanges={onOpenExchanges}
                 view={view}
                 visibleColumns={visibleColumns}
               />
@@ -396,11 +360,8 @@ export function LedgerPeersTable({
           </TableBody>
         ) : null}
       </Table>
-      {/* One legend line under the table: every peer name here is what that
-         peer says about itself (UX §2), said once rather than on each row. */}
-      <p className="mt-2 inline-flex items-center gap-1 text-fg-faint text-xs" data-testid="peers-legend">
-        Peer names are {SELF_REPORTED_NOTE}.
-        <InfoHover census="peer:self_reported" describes="the self-reported note" label={SELF_REPORTED_DETAIL} />
+      <p className="mt-2 text-fg-faint text-xs" data-testid="peers-footer">
+        {PEERS_FOOTER}
       </p>
     </div>
   )

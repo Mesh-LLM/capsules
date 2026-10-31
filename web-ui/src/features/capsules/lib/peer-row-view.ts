@@ -7,6 +7,7 @@ import type { PaneBConfirmedSibling, PaneBRow, PaneCRow } from '@/features/capsu
 import { deriveRightCellState } from '@/features/capsules/lib/exchange-row-state'
 import type { PeerMeshStatus } from '@/features/capsules/lib/peer-mesh-status'
 import { peerTwinTally, peerTwinText } from '@/features/capsules/lib/peer-twins'
+import { parseVerdict } from '@/features/capsules/lib/adjudication-view'
 import { peerSettlementText } from '@/features/capsules/lib/settlement-view'
 import { PEER_ATTENTION, PEER_COLUMN_TOOLTIPS, SELF_REPORTED_TOOLTIP } from '@/features/capsules/lib/tooltip-copy'
 
@@ -542,7 +543,137 @@ export type PeerTableRowView = {
   /** This peer's twin pairs, as facts (`peerTwinText`); `null` when no twin
    *  pair names it. */
   twins: string | null
+  /** The three columns the table and the drawer share (`peerFacts`). */
+  facts: PeerFacts
   row: PaneBRow | null
+}
+
+// ---------------------------------------------------------------------------
+// The three ways a stranger could cheat, per peer: the Peers table's three
+// badge columns and the drawer's three rows read these. Every figure is one the
+// page already holds (pane B for the peer, pane C for the pairs); one with no
+// source here reads "not checked", never a guess.
+// ---------------------------------------------------------------------------
+
+export type PeerBadgeTone = 'good' | 'warn' | 'bad' | 'muted'
+export type PeerBadge = { text: string; tone: PeerBadgeTone }
+
+export type PeerSwappedFacts = PeerBadge & {
+  /** Pairs a referee this node asked ruled on, naming a ruling on the answers
+   *  (an inconclusive one counts; a not-comparable one is no check at all). */
+  checked: number
+  /** Of those, the pairs where the referee ruled THIS peer's answer wrong. */
+  caught: number
+  /** "1 caught of 3 checked", or "not checked" with none asked. */
+  tally: string
+  /** The other machine the same request also went to, when known. */
+  otherNode: string | null
+  /** The referee that ruled on the caught pair, when there is one. */
+  referee: string | null
+}
+
+export type PeerFacts = {
+  /** The peer served at least one of your sealed exchanges. */
+  rewrote: PeerBadge
+  /** Their signed records that name the same request, answer and model as yours. */
+  leftOut: PeerBadge & { matched: number; total: number; differ: number }
+  swapped: PeerSwappedFacts
+  /** This node asked this peer to referee a pair. */
+  actedAsReferee: boolean
+}
+
+/** Every id this peer is known by on this page: pane C names a counterparty by
+ *  the same display id, a verdict names a node by node id. */
+function peerIds(row: PaneBRow, displayId: string): ReadonlySet<string> {
+  const { signingKeyId, endpointId, nodeId } = peerIdentityAliases(row)
+  return new Set(
+    [displayId, row.peer_id, row.node?.peer_id, signingKeyId, endpointId, nodeId].filter(
+      (id): id is string => typeof id === 'string' && id.length > 0
+    )
+  )
+}
+
+/** Reads the same thing `askedVerdicts` (attack-cards.ts) reads: only a verdict
+ *  this node asked for and holds as a sealed record (`twin.referee_row`
+ *  adjudicated on this node's own rows). A verdict another node delivered, and
+ *  any mismatch inferred from the two answers, never count. */
+export function peerSwappedFacts(
+  ids: ReadonlySet<string>,
+  exchangeRows: readonly PaneCRow[]
+): PeerSwappedFacts {
+  const pairs = new Map<string, { wire: string | null; otherKey: string | null; referee: string | null }>()
+  for (const row of exchangeRows) {
+    const bracket = row.twin?.bracket_id
+    if (!bracket || !row.counterparty || !ids.has(row.counterparty)) continue
+    const recorded = row.twin?.referee_row
+    const asked = recorded?.state === 'adjudicated'
+    const prior = pairs.get(bracket)
+    if (prior && (prior.wire !== null || !asked)) continue
+    pairs.set(bracket, {
+      wire: asked ? recorded.verdict : null,
+      otherKey: row.twin?.other_row ?? null,
+      referee: asked ? recorded.referee : null
+    })
+  }
+  let checked = 0
+  let caught = 0
+  let cleared = 0
+  let otherNode: string | null = null
+  let referee: string | null = null
+  for (const pair of pairs.values()) {
+    const verdict = parseVerdict(pair.wire)
+    if (!verdict || verdict.kind === 'not_comparable') continue
+    checked += 1
+    if (verdict.kind === 'corroborated') cleared += 1
+    // A referee that ruled the OTHER answer wrong cleared this peer.
+    else if (verdict.kind === 'contradicted') {
+      if (ids.has(verdict.party)) {
+        caught += 1
+        otherNode = exchangeRows.find((r) => r.exchange_key === pair.otherKey)?.counterparty ?? otherNode
+        referee = pair.referee ?? referee
+      } else cleared += 1
+    }
+  }
+  const badge: PeerBadge =
+    caught > 0
+      ? { text: 'Contradicted by referee', tone: 'bad' }
+      : cleared > 0
+        ? { text: 'Corroborated by referee', tone: 'good' }
+        : checked > 0
+          ? { text: 'Inconclusive', tone: 'muted' }
+          : { text: 'Not tested', tone: 'muted' }
+  return {
+    ...badge,
+    checked,
+    caught,
+    tally: checked === 0 ? 'not checked' : `${caught} caught of ${checked} checked`,
+    otherNode,
+    referee
+  }
+}
+
+export function peerFacts(row: PaneBRow, exchangeRows: readonly PaneCRow[] = []): PeerFacts {
+  const displayId = peerDisplayId(row) ?? ''
+  const ids = peerIds(row, displayId)
+  const total = row.exchange_count ?? 0
+  const matched = confirmedByOtherSide(row).confirmed
+  const differ = matchTally(row).mismatch
+  const refereed = exchangeRows.some((exchange) => {
+    const recorded = exchange.twin?.referee_row
+    const named = recorded?.state === 'adjudicated' ? recorded.referee : exchange.twin?.referee_node_id
+    return !!named && ids.has(named)
+  })
+  return {
+    rewrote: total > 0 ? { text: 'Sealed', tone: 'good' } : { text: 'not checked', tone: 'muted' },
+    leftOut:
+      total === 0
+        ? { text: 'not checked', tone: 'muted', matched, total, differ }
+        : differ > 0
+          ? { text: `${differ} differ`, tone: 'bad', matched, total, differ }
+          : { text: `${matched} / ${total} matched`, tone: matched === total ? 'good' : 'warn', matched, total, differ },
+    swapped: peerSwappedFacts(ids, exchangeRows),
+    actedAsReferee: refereed
+  }
 }
 
 function twinsText(peerId: string, exchangeRows: readonly PaneCRow[]): string | null {
@@ -581,14 +712,11 @@ export function dealtWithRowView(
     attention: peerAttention(row, resolveTimestamp),
     payments: peerSettlementText(row.settlement),
     twins: twinsText(displayId, exchangeRows),
+    facts: peerFacts(row, exchangeRows),
     row
   }
 }
 
-/** "Nodes advertised but unused" -- a peer the mesh knows about but this
- *  node has never exchanged with. Every accountability column renders `—`
- *  (nothing to report, not "0 of 0") -- there is no `PaneBRow` to derive
- *  one from. */
 // ---------------------------------------------------------------------------
 // Column keys -- shared between `PeerTableRow` and `LedgerPeersTable`'s
 // Columns toggle. Lives here (a non-component module) rather than in either
@@ -596,14 +724,13 @@ export function dealtWithRowView(
 // only-export-components lint rule.
 // ---------------------------------------------------------------------------
 
-export type PeerTableColumnKey = 'exchanges' | 'confirmed' | 'match' | 'adjudication' | 'witness' | 'period'
+export type PeerTableColumnKey = 'exchanges' | 'rewrote' | 'leftOut' | 'swapped' | 'period'
 
 export const ALL_PEER_TABLE_COLUMNS: ReadonlySet<PeerTableColumnKey> = new Set<PeerTableColumnKey>([
   'exchanges',
-  'confirmed',
-  'match',
-  'adjudication',
-  'witness',
+  'rewrote',
+  'leftOut',
+  'swapped',
   'period'
 ])
 
@@ -613,24 +740,3 @@ export const ALL_PEER_TABLE_COLUMNS: ReadonlySet<PeerTableColumnKey> = new Set<P
 // is, what backs it, what it does NOT establish). The `confirmed` line is the
 // task's blessed wording verbatim.
 export const PEER_COLUMN_INFO: Record<PeerTableColumnKey, string> = PEER_COLUMN_TOOLTIPS
-
-export function advertisedOnlyRowView(displayId: string): PeerTableRowView {
-  return {
-    key: displayId,
-    displayId,
-    hasDealings: false,
-    aliasLine: null,
-    identityNote: 'no exchanges yet',
-    exchangeCount: 0,
-    confirmedByOtherSide: '—',
-    match: '—',
-    adjudicationCompact: '—',
-    witnessCompact: '—',
-    period: '—',
-    alarm: { present: false, text: '', tone: 'warn' },
-    attention: [],
-    payments: null,
-    twins: null,
-    row: null
-  }
-}

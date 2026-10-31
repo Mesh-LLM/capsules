@@ -265,11 +265,9 @@ describe('LedgerPageContent', () => {
 
     expect(await screen.findByText('peer-1')).toBeInTheDocument()
 
-    // §3E -- the role-aware
-    // headline. `useStatusQuery` is globally mocked to `{ data: undefined }`
-    // in this file (no mesh-status peers), so "advertised" is honestly 0
-    // even though one peer was dealt with on the record.
-    expect(screen.getByText('0 peers advertised · 1 you have dealt with on the record.')).toBeInTheDocument()
+    // The header counts the peers on the record; nodes only advertised are Network's.
+    expect(screen.getByText(/^1 peer on the record\./)).toBeInTheDocument()
+    expect(screen.queryByText(/peers? advertised/)).not.toBeInTheDocument()
   })
 
   it('Peers empty state is an invitation, never a bare "No peer exchanges recorded yet."', async () => {
