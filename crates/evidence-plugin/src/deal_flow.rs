@@ -1532,6 +1532,106 @@ mod tests {
         );
     }
 
+    /// A deal closed `open`, then a late leg sealed outcome 4, close 5 and
+    /// report R2. Returns the ids of the report R1 and of steps 4 and 5 and R2.
+    fn late_round(dir: &Path, t: i64) -> (Value, [Value; 3]) {
+        let state = open(dir);
+        paid_exchange(&state, t);
+        state.deals().tick(&state, t + OPEN_AFTER);
+        state
+            .deals()
+            .on_paid(&state, EXCHANGE, &hex64('b'), 1000, t + OPEN_AFTER + 30);
+        let ids: Vec<Value> = deal_capsules(dir)
+            .iter()
+            .map(|c| c["capsule_id"].clone())
+            .collect();
+        assert_eq!(ids.len(), 7);
+        (
+            ids[3].clone(),
+            [ids[4].clone(), ids[5].clone(), ids[6].clone()],
+        )
+    }
+
+    /// As if `ids` had never been journaled (nor, so, appended).
+    fn unjournal(dir: &Path, ids: &[&Value]) {
+        let path = ledger(dir).join(PAYLOADS_FILE);
+        let kept: Vec<String> = lines(&path)
+            .into_iter()
+            .filter(|l| !ids.contains(&&l["capsule_id"]))
+            .map(|l| l.to_string())
+            .collect();
+        std::fs::write(&path, kept.join("\n") + "\n").unwrap();
+    }
+
+    fn journaled(dir: &Path, record_type: &str) -> Vec<Value> {
+        lines(&ledger(dir).join(PAYLOADS_FILE))
+            .into_iter()
+            .filter(|l| l["record_type"] == record_type)
+            .collect()
+    }
+
+    /// Close 5 sealed, its report not (the state saved with no report): the
+    /// next start must not take the first close's report for it, and seals
+    /// the report of close 5.
+    #[test]
+    fn a_report_of_an_earlier_close_is_not_taken_for_the_latest() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = 1_790_000_000;
+        let (first_report, [_, _, second_report]) = late_round(dir.path(), t);
+        unjournal(dir.path(), &[&second_report]);
+        let path = ledger(dir.path()).join(STATE_FILE);
+        let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved[EXCHANGE]["steps"].as_array().unwrap().len(), 5);
+        saved[EXCHANGE]["report"] = Value::Null;
+        std::fs::write(&path, saved.to_string()).unwrap();
+
+        let state = open(dir.path());
+        state.deals().recover(&state, t + OPEN_AFTER + 100);
+        let reports = journaled(dir.path(), deal::REPORT_TYPE);
+        assert_eq!(reports.len(), 2, "R1 and one new report");
+        let new = &reports[1];
+        assert_ne!(new["capsule_id"], first_report);
+        assert_eq!(new["close_seq"], 5);
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved[EXCHANGE]["report"], new["capsule_id"]);
+        state.deals().recover(&state, t + OPEN_AFTER + 200);
+        assert_eq!(journaled(dir.path(), deal::REPORT_TYPE).len(), 2);
+    }
+
+    /// A crash mid-round: outcome 4 journaled and appended, close 5 not, the
+    /// state still at the first close with the leg due. The next start finds
+    /// outcome 4 and seals close 5 and its report once, with no second outcome.
+    #[test]
+    fn a_round_cut_after_its_outcome_is_closed_once_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = 1_790_000_000;
+        let (first_report, [_, close, second_report]) = late_round(dir.path(), t);
+        unjournal(dir.path(), &[&close, &second_report]);
+        let path = ledger(dir.path()).join(STATE_FILE);
+        let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let steps = saved[EXCHANGE]["steps"].as_array().unwrap()[..3].to_vec();
+        saved[EXCHANGE]["steps"] = json!(steps);
+        saved[EXCHANGE]["report"] = first_report;
+        saved[EXCHANGE]["late"] = json!(true);
+        std::fs::write(&path, saved.to_string()).unwrap();
+
+        for _ in 0..2 {
+            let state = open(dir.path());
+            state.deals().recover(&state, t + OPEN_AFTER + 100);
+            let seqs = |record_type| -> Vec<i64> {
+                journaled(dir.path(), record_type)
+                    .iter()
+                    .map(|l| l["seq"].as_i64().unwrap())
+                    .collect()
+            };
+            assert_eq!(seqs(deal::TYPE_OUTCOME), [2, 4], "no second outcome 4");
+            assert_eq!(seqs(deal::TYPE_CLOSE), [3, 5]);
+            let reports = journaled(dir.path(), deal::REPORT_TYPE);
+            assert_eq!(reports.len(), 2);
+            assert_eq!(reports[1]["close_seq"], 5);
+        }
+    }
+
     /// A state saved by 0.1.6: the late legs were stored after the close
     /// `open` and nothing more sealed, and there is no `late`. The next start
     /// seals the one round they settle, and only once.
