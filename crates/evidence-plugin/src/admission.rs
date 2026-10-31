@@ -430,7 +430,8 @@ impl Admission {
         }
         let rows = peer.as_deref().map(|peer| self.base.read(peer, at, now));
         let mut block = self.block(peer.as_deref(), verdict, source, rows.as_ref(), event);
-        if let Some(rule) = &self.price {
+        // The pack is cited as read only when it ran.
+        if let (Some(rule), Some(price::Read::Checked { .. })) = (&self.price, &priced) {
             if let Some(Value::Array(reads)) = block.get_mut("reads") {
                 reads.push(rule.reads(&self.salt));
             }
@@ -1145,6 +1146,9 @@ mod tests {
         let answer = admission.answer(&priced(&remote(STRANGER), rates(1, 1)));
         assert_eq!(answer.reason.as_deref(), Some("admission NO (deny_list)"));
         assert!(sealed_block(&capsules).get("price").is_none());
+        assert!(!serde_json::to_string(&sealed_block(&capsules))
+            .unwrap()
+            .contains("terms_pack"));
     }
 
     #[test]
@@ -1167,6 +1171,14 @@ mod tests {
             Some("admission NO (price_rule: rate_cap)")
         );
         assert_eq!(sealed_block(&capsules)["price"]["outcome"], "deny");
+        // "rate_cap": null sets no cap either.
+        let null_caps = r#"{"format":"policy-profile/v0","packs":[{"pack":"asg/inference","parameters":{"rate_cap":null}}]}"#;
+        let (admission, _capsules, _dir) = priced_admission(Some(null_caps), true);
+        let answer = admission.answer(&priced(&remote(STRANGER), rates(1_000_000_000_000, 1)));
+        assert_eq!(
+            answer.reason.as_deref(),
+            Some("admission NO (price_rule: rate_cap)")
+        );
         // And a cap the operator set stands over the default.
         let (admission, _capsules, _dir) = priced_admission(Some(CAPS), true);
         let answer = admission.answer(&priced(&remote(STRANGER), rates(1_999_999, 7_999_999)));

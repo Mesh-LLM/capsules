@@ -8,7 +8,8 @@
 //! peer's `Pricing` on the `backend_selected` event as `pricing`, and says so
 //! by listing [`PRICING_CAPABILITY`]. With the capability, an event without
 //! `pricing` is a free route, rates 0, unless it names no model: the host's
-//! no-model fallback never prices its pick, so its rates are missing. Without it the host never sends a
+//! no-model fallback never prices its pick, so that attempt is treated like
+//! one from an older host (`no_price_without_model`). Without it the host never sends a
 //! price, so a paid route cannot be told from a free one. Under the operator's
 //! own profile that is NO ([`Read::Unavailable`], fail closed). Under the
 //! shipped default alone, the pack is not run and the record says the price
@@ -105,8 +106,9 @@ pub enum Read {
     /// `no_price_without_model` on the host's no-model fallback).
     NotChecked(&'static str),
     /// NO, failing closed, for the reason given: `host_lacks_backend_pricing`
-    /// (the operator's profile is in force but the host sends no price) or
-    /// `guard_error` (the engine refused the action or the decision, logged).
+    /// or `no_price_without_model` (the operator's profile is in force but
+    /// the attempt carries no price it can trust), or `guard_error` (the
+    /// engine refused the action or the decision, logged).
     Unavailable(&'static str),
 }
 
@@ -342,6 +344,11 @@ fn with_default_caps(raw: &[u8], (input, output): (u64, u64)) -> anyhow::Result<
         return Ok(raw.to_vec());
     };
     let caps = parameters.entry("rate_cap").or_insert_with(|| json!({}));
+    // `"rate_cap": null` is "no values" to the profile decoder: it sets no
+    // cap, so it gets the shipped ones too.
+    if caps.is_null() {
+        *caps = json!({});
+    }
     if let Some(caps) = caps.as_object_mut() {
         caps.entry("max_input_msat_per_million")
             .or_insert(json!(input));
