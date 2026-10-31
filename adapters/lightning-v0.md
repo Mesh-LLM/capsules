@@ -191,9 +191,11 @@ method such as `processor_reported`, never `preimage_verified`. The observation 
 keeps `preimage` optional, so a reader for such a rail leaves it absent and the record shape does
 not change.
 
-A settlement record for a card rail seals no card number, no last four digits, no customer or
-processor account id, and no amount beyond the `(currency, decade)` band. This plugin holds no
-card settlements today; the rule stands for the reader that adds them.
+A settlement record for a card rail seals no card number, no last four digits, and no customer
+or processor account id. It seals the amount as charged, in its currency, as a Lightning record
+seals its exact `amount_msat`: the record goes to the counterparty, which needs the exact amount
+to reconcile against the charge. This plugin holds no card settlements today; the rule stands for
+the reader that adds them.
 
 ## Sources
 
