@@ -21,7 +21,8 @@ shipped); an older one keeps the leg bare.
   first): at most 64 per start, to the peer each leg's sealed exchange record names. It re-sends
   sealed records only and moves no money. A provider that reads bundles adds the proof to the leg
   it already holds; an older one keeps the leg bare (recorded as `no_inclusion`), and that leg is
-  not re-sent.
+  not re-sent. Each leg also carries this node's controller binding, as its chat halves to that
+  peer do.
 - **Signed checkpoints over the ledger files.** received-capsules, received-provenance,
   received-inclusion, the three adjudication files and the chain itself each have a node-signed
   checkpoint with a range proof, on the owner console at

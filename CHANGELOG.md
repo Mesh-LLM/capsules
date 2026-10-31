@@ -55,6 +55,10 @@
   did not arrive, or that the receiver refused, is retried at the next start. At most 64 pushes
   per start, and a peer that cannot be reached is skipped for the rest of that start. It re-sends
   sealed records only and moves no money. Mesh-LLM/capsules-plugin#187.
+- **A settlement leg is pushed with this node's own controller binding,** as the chat halves to
+  the same peer are, so the provider's citing record names the operator binding it was accepted
+  under. It goes only to that exchange's counterparty, which already receives the binding with the
+  chat halves; nothing new is disclosed. Mesh-LLM/capsules-plugin#189, #193.
 
 ## 0.1.7
 
