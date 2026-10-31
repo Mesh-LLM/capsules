@@ -73,8 +73,6 @@ pub enum Outcome {
     Covered,
     /// The receiver took the leg with no inclusion: it predates bundles.
     NoInclusion,
-    /// The receiver refused the push for good.
-    Refused,
 }
 
 impl Outcome {
@@ -82,7 +80,6 @@ impl Outcome {
         match self {
             Outcome::Covered => "covered",
             Outcome::NoInclusion => "no_inclusion",
-            Outcome::Refused => "refused",
         }
     }
 }
@@ -222,19 +219,18 @@ impl Run {
     }
 }
 
-/// How a push of `capsule` ended; `None` when no receiver answered for good:
-/// the push did not arrive, or the receiving bridge refused it only because
-/// its own citing record did not seal, which asks for a retry.
+/// How a push of `capsule` ended; `None` when it did not end for good: the
+/// push did not arrive, or the receiver refused it. A refusal is retried at
+/// the next start like a push that did not arrive, since most clear on the
+/// receiver's side (a key it has not polled yet after a restart,
+/// `signature_unverified`; a newer checkpoint, `checkpoint_stale`; its
+/// sharing turned back on); the per-peer skip in [`Run`] keeps that to one
+/// push per peer per start.
 pub fn outcome_of(capsule: &Value, pushed: &anyhow::Result<Value>) -> Option<Outcome> {
     match pushed {
         Ok(reply) if names_inclusion(capsule, reply) => Some(Outcome::Covered),
         Ok(_) => Some(Outcome::NoInclusion),
-        Err(error) => {
-            let Refused(reply) = error.downcast_ref::<Refused>()?;
-            let reason = reply.get("reason").and_then(Value::as_str);
-            (reason != Some(crate::record_push_bridge::SEAL_FAILED_REFUSAL_REASON))
-                .then_some(Outcome::Refused)
-        }
+        Err(_) => None,
     }
 }
 
@@ -561,9 +557,10 @@ mod tests {
         assert_eq!(attempts, MAX_PER_RUN, "a run attempts at most its bound");
     }
 
-    /// `no_inclusion` and `refused` are final like `covered`: such a leg is
-    /// not sent again. A push that never arrived, or one the receiving bridge
-    /// asked to retry, records nothing and stays due.
+    /// `no_inclusion` is final like `covered`: such a leg is not sent again.
+    /// A push that never arrived, or one the receiver refused (whatever the
+    /// reason, `signature_unverified` after its restart included), records
+    /// nothing and stays due.
     #[test]
     fn a_leg_with_a_final_outcome_is_not_sent_again() {
         let dir = tempfile::tempdir().unwrap();
@@ -602,8 +599,13 @@ mod tests {
                 ended.push((*id, outcome.wire()));
             }
         }
-        assert_eq!(ended, [("older", "no_inclusion"), ("refused", "refused")]);
+        assert_eq!(ended, [("older", "no_inclusion")]);
         let next = plan_from(&records, &super::ended(dir.path()));
-        assert_eq!(ids(&next.due), ["unreached", "retry"]);
+        assert_eq!(ids(&next.due), ["refused", "unreached", "retry"]);
+        assert_eq!(
+            outcome_of(&leg("refused"), &refusal("signature_unverified")),
+            None,
+            "a key the receiver has not polled yet is retried"
+        );
     }
 }

@@ -20,9 +20,9 @@
   bare is pushed once more, under a checkpoint, when the node starts with the cadence on, to the
   peer its sealed exchange record names; the provider, already holding the leg, adds its
   checkpoint and inclusion proof. Each push's outcome is kept in
-  `ledger/covered-terms-legs.jsonl` (`covered`, `no_inclusion` from a receiver that predates
-  bundles, or `refused`), and a leg with an outcome is not pushed again; one that did not arrive
-  is retried at the next start. At most 64 pushes per start, and a peer that cannot be reached is
+  `ledger/covered-terms-legs.jsonl` (`covered`, or `no_inclusion` from a receiver that predates
+  bundles), and a leg with an outcome is not pushed again; one that did not arrive, or that the
+  receiver refused, is retried at the next start. At most 64 pushes per start, and a peer that cannot be reached is
   skipped for the rest of that start. It re-sends sealed records only and moves no money.
   Mesh-LLM/capsules-plugin#187.
 
