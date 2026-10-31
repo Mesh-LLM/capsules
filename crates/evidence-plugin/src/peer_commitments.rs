@@ -21,6 +21,9 @@
 //! - `MISMATCH` when the policy answers it to a stranger (`stranger_safe`)
 //!   and the refusal withholds it (`derivation_unsupported`,
 //!   `no_such_subject`);
+//! - `MATCH` for a policy refusal under `evidence-interop/1` of record bodies
+//!   the policy gives no one (`range` and `full_history`, or any record-body
+//!   subject while `share_history_segments` is `off`);
 //! - `NOT_CHECKED` otherwise: a `policy_declined` or `not_authorized`, which
 //!   honest responders also send for load, size and signature limits, or an
 //!   answer that depends on who asks, which the policy alone does not
@@ -170,10 +173,39 @@ pub fn policy_check(pinned: Option<&Value>, request: &Value, reason: &str) -> Va
             "the pinned policy answers this to any asker, and the refusal withholds it by policy",
         );
     }
+    if ambiguous && answered_to_no_one(pinned, request, form) {
+        return status(
+            "MATCH",
+            "the pinned policy answers record bodies of this subject to no one",
+        );
+    }
     status(
         "NOT_CHECKED",
         "whether this is answered depends on who asks",
     )
+}
+
+/// Whether the pinned policy gives `request`'s record bodies to no asker,
+/// so a policy refusal of it is what the policy says for everyone (#172):
+/// `range` and `full_history` with no derivation, under every setting (the
+/// evidencebook#114 ruling, as `evidence_answer` applies it), and every
+/// record-body subject while `share_history_segments` is `off`. A
+/// derivation is answered by its own rules, so it is never one of these.
+fn answered_to_no_one(pinned: &Value, request: &Value, form: &str) -> bool {
+    if request.get("derivation").is_some() {
+        return false;
+    }
+    let segments = pinned
+        .pointer(&format!(
+            "/policy/{}",
+            crate::share_policy::HISTORY_SEGMENTS_KEY
+        ))
+        .and_then(Value::as_str);
+    match form {
+        "range" | "full_history" => true,
+        "record" | "exchange" | "correlation" => segments == Some("off"),
+        _ => false,
+    }
 }
 
 /// The request's subject form token (`full_history`, `checkpoints`, ...).

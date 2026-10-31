@@ -353,6 +353,7 @@ fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Ask
         Err(reason) => return refuse(reason, kind),
     };
     let principal_nodes = principal.as_ref().map_or(&[][..], |p| &p.node_ids[..]);
+    let principal_key = principal.as_ref().map(|p| p.key_id.as_str());
 
     let key_id = hex::encode(responder.signing_key.verifying_key().to_bytes());
     let built = evidence_log::with_index(responder.ledger_dir, &key_id, |index| {
@@ -361,6 +362,7 @@ fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Ask
             &req,
             request_bytes,
             principal_nodes,
+            principal_key,
             responder,
             &view,
         ))
@@ -586,6 +588,7 @@ fn answer_from(
     req: &Request,
     request_bytes: &[u8],
     principal: &[String],
+    principal_key: Option<&str>,
     responder: &Responder<'_>,
     view: &LogView<'_>,
 ) -> Result<Value, Reason> {
@@ -594,9 +597,12 @@ fn answer_from(
     // is resolved: Standard History unless it is shared, and record bodies
     // unless they go to any peer. A node no record names learns nothing of
     // this log's size or cadence from which refusal it gets.
+    // For record bodies, the holder of a key a cited half verified under is
+    // a counterparty too (#172); Standard History keeps the id rule.
     if needs_counterparty(req, responder)
         && policy_gate_applies()
         && !is_counterparty(index, principal)
+        && !(carries_records(req) && holds_a_cited_key(index, principal_key))
     {
         return Err(if carries_records(req) {
             Reason::NotAuthorized
@@ -694,7 +700,13 @@ fn answer_from(
 
     // 9. Who may have these records.
     if policy_gate_applies()
-        && !may_serve_all(index, &records, principal, responder.history_segments)
+        && !may_serve_all_to(
+            index,
+            &records,
+            principal,
+            principal_key,
+            responder.history_segments,
+        )
     {
         return Err(Reason::NotAuthorized);
     }
@@ -809,12 +821,37 @@ fn is_counterparty(index: &LedgerIndex, principal: &[String]) -> bool {
     })
 }
 
+/// Whether `principal_key` is the key some cited half of this node verified
+/// under (`Leaf::counterparty_key`): its holder is the other side of that
+/// exchange.
+fn holds_a_cited_key(index: &LedgerIndex, principal_key: Option<&str>) -> bool {
+    principal_key.is_some_and(|key| {
+        index.leaves.iter().any(|leaf| {
+            !leaf.padding && !leaf.never_leaves && leaf.counterparty_key.as_deref() == Some(key)
+        })
+    })
+}
+
 /// Whether every record in `records` may go to `principal` under
 /// `history_segments` (see the module doc).
 fn may_serve_all(
     index: &LedgerIndex,
     records: &[u64],
     principal: &[String],
+    history_segments: &str,
+) -> bool {
+    may_serve_all_to(index, records, principal, None, history_segments)
+}
+
+/// [`may_serve_all`], for a request signed under `principal_key`: under
+/// `counterparties` a citing record also goes to the holder of the key its
+/// cited half verified under (`Leaf::counterparty_key`), the other side of
+/// that exchange, whatever id it asks under (#172).
+fn may_serve_all_to(
+    index: &LedgerIndex,
+    records: &[u64],
+    principal: &[String],
+    principal_key: Option<&str>,
     history_segments: &str,
 ) -> bool {
     if records.is_empty() {
@@ -831,7 +868,10 @@ fn may_serve_all(
         !leaf.never_leaves
             && proven
             && (history_segments == "peers"
-                || (!leaf.padding && names(principal, leaf.counterparty.as_deref())))
+                || (!leaf.padding
+                    && (names(principal, leaf.counterparty.as_deref())
+                        || principal_key
+                            .is_some_and(|key| leaf.counterparty_key.as_deref() == Some(key)))))
     })
 }
 
@@ -3676,6 +3716,106 @@ pub(crate) mod tests {
             ask_with(dir.path(), &signed_by("node-z", &n1), "peers", true),
             Outcome::Answered { .. }
         ));
+    }
+
+    /// An `exchange` request about a half this node accepted on node-b's
+    /// key, cited by the record `emit_citing_record` seals (no
+    /// `x-mesh-poc-v1` block), is answered to node-b under `counterparties`,
+    /// under either profile, and refused `not_authorized` to node-a, and to
+    /// whoever the push named itself (Mesh-LLM/capsules-plugin#172, loop step
+    /// 07). In the corpus that record cites `foreign_half()`, pushed under
+    /// the id `node-pushed-under`.
+    #[test]
+    fn an_exchange_goes_to_the_node_that_sent_the_half_it_asks_about() {
+        let half = crate::evidence_request_parity::foreign_half();
+        let dir = node(&corpus_ledger());
+        for profile in [None, Some("evidence-interop/0"), Some("evidence-interop/1")] {
+            let mut request =
+                json!({"subject": {"exchange": half}, "coverage": {"expected_pin": half}});
+            if let Some(p) = profile {
+                request["profile"] = json!(p);
+            }
+            let bytes = signed_by("node-b", &request);
+            let Outcome::Answered { wire, .. } =
+                ask_with(dir.path(), &bytes, "counterparties", false)
+            else {
+                panic!("{profile:?}: not answered to node-b");
+            };
+            let v = verify_response(&bytes, &wire, &key().verifying_key(), &Default::default());
+            assert_eq!(v["state"], json!("artifact"), "{profile:?}: {v}");
+            for other in ["node-a", "node-z"] {
+                assert_eq!(
+                    refused(&ask_with(
+                        dir.path(),
+                        &signed_by(other, &request),
+                        "counterparties",
+                        false
+                    )),
+                    Some(Reason::NotAuthorized),
+                    "{profile:?}: {other} holds no key the half verified under"
+                );
+            }
+            let pushed_under = ask_with(
+                dir.path(),
+                &signed_by("node-pushed-under", &request),
+                "counterparties",
+                false,
+            );
+            assert!(
+                matches!(pushed_under, Outcome::Refused { .. }),
+                "{profile:?}: the id a push names is no one's: {pushed_under:?}"
+            );
+        }
+    }
+
+    /// Step 6 admits the holder of a cited half's key to record bodies even
+    /// when no record names it by id (#172): here the corpus's citing record
+    /// is resealed as accepted on node-z's key, and node-z, a proven node no
+    /// record names, is answered the exchange; node-b, named elsewhere but
+    /// not the key the half verified under, is refused it. Standard History
+    /// keeps the id rule.
+    #[test]
+    fn a_counterparty_known_only_by_the_key_its_half_verified_under_is_answered() {
+        let half = crate::evidence_request_parity::foreign_half();
+        let mut ledger = corpus_ledger();
+        let at = ledger
+            .iter()
+            .position(|r| evidence_log::counterparty_half_citations(r).contains(&half))
+            .unwrap();
+        let mut citing = ledger[at].clone();
+        citing["model_attestation"]["compute_attestation"]["received_half"]["sender_key_id"] =
+            json!(hex::encode(asker_key("node-z").verifying_key().to_bytes()));
+        citing.as_object_mut().unwrap().remove("capsule_id");
+        ledger[at] = sealed(citing);
+        let dir = node(&ledger);
+        let request = json!({"subject": {"exchange": half}, "coverage": {"expected_pin": half},
+                             "profile": "evidence-interop/1"});
+        let bytes = signed_by("node-z", &request);
+        let Outcome::Answered { wire, .. } = ask_with(dir.path(), &bytes, "counterparties", false)
+        else {
+            panic!("node-z holds the key the half verified under");
+        };
+        let v = verify_response(&bytes, &wire, &key().verifying_key(), &Default::default());
+        assert_eq!(v["state"], json!("artifact"), "{v}");
+        assert_eq!(
+            refused(&ask_with(
+                dir.path(),
+                &signed_by("node-b", &request),
+                "counterparties",
+                false
+            )),
+            Some(Reason::NotAuthorized)
+        );
+        assert_eq!(
+            refused(&ask_with(
+                dir.path(),
+                &signed_by("node-z", &withheld_requests()[0]),
+                "counterparties",
+                false
+            )),
+            Some(Reason::PolicyDeclined),
+            "Standard History keeps the id rule"
+        );
     }
 
     /// Who asked is recorded with the request's digest: the verified key and

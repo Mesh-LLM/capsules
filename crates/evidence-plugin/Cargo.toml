@@ -74,6 +74,9 @@ mutant-corroboration-uses-standard-history-gate = []
 mutant-corroboration-filters-per-asker = []
 # Counts two halves with the same role as agreeing.
 mutant-corroboration-role-equality = []
+# Names no counterparty for a citing record (`received_half`), so an exchange
+# request is refused to the node that sent the half (#172).
+mutant-citing-record-names-no-counterparty = []
 # The Service History's mutants: each builds it with one fault, and CI
 # requires the named test to FAIL (gates/mutants.json).
 # Embeds a card rebuilt without its consistency proofs, not the direct card.

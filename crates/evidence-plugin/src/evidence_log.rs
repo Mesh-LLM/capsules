@@ -126,6 +126,10 @@ pub struct Leaf {
     /// The other side of the exchange this record is of, if it names one
     /// (`evidence_panes::full_counterparty_node_id`).
     pub counterparty: Option<String>,
+    /// For a citing record, the key the cited half verified under
+    /// (`citing_key`): a request signed under it is from the other side of
+    /// that exchange.
+    pub counterparty_key: Option<String>,
     /// A local routing choice, a record of this node's asks
     /// (`crate::ask_book`), an owner-maintenance record or a deal's report:
     /// it never leaves this node, whoever asks.
@@ -152,6 +156,29 @@ pub(crate) mod tests_between_reads {
             writer();
         }
     }
+}
+
+/// The key a citing record (`CapsuleState::emit_citing_record`) holds a
+/// half under: `received_half.sender_key_id`, which the receiver seals only
+/// for a push it accepted on that key (`accepted_via`), so it is the key the
+/// half verified under. The node holding that key is the other side of the
+/// exchange the half is of, so a request signed under it may have the
+/// citing record (Mesh-LLM/capsules-plugin#172). The record's
+/// `received_from` is the pusher's own word (`record_push_receive`) and
+/// names no one.
+fn citing_key(record: &Value) -> Option<String> {
+    if cfg!(feature = "mutant-citing-record-names-no-counterparty") {
+        return None;
+    }
+    if counterparty_half_citations(record).is_empty() {
+        return None;
+    }
+    let half = record.pointer("/model_attestation/compute_attestation/received_half")?;
+    half.get("accepted_via")?;
+    half.get("sender_key_id")
+        .and_then(Value::as_str)
+        .filter(|k| !k.is_empty())
+        .map(str::to_string)
 }
 
 /// A deal capsule: one of a deal's steps (`deal_id`) or its report. A link
@@ -423,12 +450,14 @@ impl LedgerIndex {
                     .then(|| self.deal_counterparty(&capsule_id))
                     .flatten()
             });
+        let counterparty_key = citing_key(&record);
         self.leaves.push(Leaf {
             capsule_id,
             offset,
             len: body.len() as u64,
             padding,
             counterparty,
+            counterparty_key,
             never_leaves: never_leaves(&record),
             facts: leaf_facts(&record),
         });
@@ -941,6 +970,58 @@ mod tests {
             .iter()
             .map(|cp| cp.line())
             .collect()
+    }
+
+    /// The record `emit_citing_record` seals for a half it accepted on a key
+    /// carries that key in the index (`counterparty_key`, #172), and names no
+    /// counterparty from `received_from`, the pusher's own word. A citing
+    /// record of a push accepted on no key carries none.
+    #[test]
+    fn a_sealed_citing_record_carries_the_key_its_half_verified_under() {
+        use crate::capsule_emit::{CapsuleState, ReceivedHalfProvenance};
+        let dir = tempfile::tempdir().unwrap();
+        let state = CapsuleState::open(dir.path(), "node-under-test").unwrap();
+        let key = "b".repeat(64);
+        let via = crate::peer_keys::AcceptedVia::HostAnnounced;
+        let prov = |foreign: &'static str, accepted: bool| ReceivedHalfProvenance {
+            foreign_capsule_id: foreign,
+            received_from: "any-id-the-pusher-names",
+            via: "push",
+            received_at: "2026-09-25T00:00:00Z",
+            signature_ok: true,
+            digest_match: None,
+            foreign_agent_input_digest: None,
+            foreign_agent_output_digest: None,
+            sender_key_id: accepted.then_some(key.as_str()),
+            accepted_via: accepted.then_some(&via),
+            controller_binding: None,
+            same_controller_as_receiver: None,
+            own_half_capsule_id: None,
+        };
+        let accepted: &'static str = "d".repeat(64).leak();
+        let unkeyed: &'static str = "e".repeat(64).leak();
+        let citing = state
+            .emit_citing_record(&prov(accepted, true))
+            .unwrap()
+            .unwrap()
+            .capsule;
+        state
+            .emit_citing_record(&prov(unkeyed, false))
+            .unwrap()
+            .unwrap();
+        assert!(
+            crate::evidence_panes::full_counterparty_node_id(&citing).is_none(),
+            "the sealed shape carries no x-mesh-poc-v1 block"
+        );
+        let leaves = with_index(state.ledger_dir(), &key_id(), |index| {
+            [accepted, unkeyed].map(|half| {
+                let leaf = &index.leaves[index.citing(half)[0] as usize];
+                (leaf.counterparty.clone(), leaf.counterparty_key.clone())
+            })
+        })
+        .unwrap();
+        assert_eq!(leaves[0], (None, Some(key.clone())));
+        assert_eq!(leaves[1], (None, None));
     }
 
     #[test]

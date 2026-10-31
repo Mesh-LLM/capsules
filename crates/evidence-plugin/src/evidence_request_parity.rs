@@ -184,12 +184,22 @@ pub(crate) fn corpus_ledger() -> Vec<Value> {
             }}},
         })),
     ];
+    // The citing record in the shape `CapsuleState::emit_citing_record`
+    // seals it for a push accepted on node-b's key: no `x-mesh-poc-v1`
+    // block, the half's key in `received_half` (Mesh-LLM/capsules-plugin#172).
+    // `received_from` is the pusher's own word, here an id no key is bound
+    // to.
     ledger.push(sealed(json!({
         "action_type": "fyi",
         "references": [{"type": "capsule", "digest_alg": "SHA-256", "digest": foreign_half(), "citation_purpose": "counterparty_half"}],
-        "model_attestation": {"compute_attestation": {"x-mesh-poc-v1": {
-            "role": "served",
-            "serving_provenance": {"model_canonical_ref": "model-z", "requesting_party": "node-b"},
+        "model_attestation": {"compute_attestation": {"received_half": {
+            "cited_capsule_id": foreign_half(),
+            "received_from": "node-pushed-under",
+            "via": "push",
+            "received_at": "2026-09-25T00:00:00Z",
+            "signature_ok": true,
+            "sender_key_id": hex::encode(asker_key("node-b").verifying_key().to_bytes()),
+            "accepted_via": "host_announced",
         }}},
     })));
     let judged = ledger[0]["capsule_id"].clone();
