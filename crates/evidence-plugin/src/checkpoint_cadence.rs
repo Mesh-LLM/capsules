@@ -315,6 +315,20 @@ impl CheckpointHandle {
         }
     }
 
+    /// A handle over `ledger_dir`'s checkpoint state with no interval task,
+    /// padding through `capsules` as [`spawn`] does.
+    #[cfg(test)]
+    pub(crate) fn for_tests(capsules: Arc<CapsuleState>, log_id: &str) -> Self {
+        let (mut state, _) = CheckpointState::load(
+            capsules.ledger_dir(),
+            log_id.to_string(),
+            CheckpointCadenceConfig::default(),
+        )
+        .unwrap();
+        state.set_padding_sink(Box::new(LedgerPadder(capsules.clone())));
+        Self::new(state, capsules.signing_key().clone())
+    }
+
     pub fn latest_head(&self) -> LatestHead {
         self.latest_head.clone()
     }

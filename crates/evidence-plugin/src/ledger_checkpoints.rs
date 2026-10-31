@@ -454,12 +454,48 @@ fn index_arg(value: Option<&Value>, name: &str) -> Result<Option<u64>, PluginErr
         .ok_or_else(|| PluginError::invalid_params(format!("{name} must be a leaf index")))
 }
 
-/// `GET /ledger-checkpoint?file=<name>[&from=<i>&to=<j>]`.
+/// The chain's last indexed record: the tip a fresh chain checkpoint must
+/// reach. `None` while the chain holds no record.
+fn chain_tip(ledger_dir: &Path, node_key_id: &str) -> Option<String> {
+    evidence_log::with_index(ledger_dir, node_key_id, |index| {
+        index.leaves.last().map(|leaf| leaf.capsule_id.clone())
+    })
+    .ok()
+    .flatten()
+}
+
+/// Before a chain reply, have the cadence cut a checkpoint over the chain's
+/// tip if none covers it yet, so a copy read just before the ask is covered
+/// whole. The cut pads the chain like any other. Without a cadence, or when
+/// the cut fails, the reply serves the newest checkpoint there is.
+async fn cover_chain_tip(
+    checkpoints: Option<&crate::checkpoint_cadence::CheckpointHandle>,
+    ledger_dir: &Path,
+    signer: &SigningKey,
+) {
+    let Some(handle) = checkpoints else {
+        return;
+    };
+    let (dir, key) = (ledger_dir.to_path_buf(), crate::commitment::key_id(signer));
+    let tip = tokio::task::spawn_blocking(move || chain_tip(&dir, &key))
+        .await
+        .ok()
+        .flatten();
+    if let Some(tip) = tip {
+        if let Err(why) = handle.coverage_for(&tip).await {
+            tracing::warn!(%why, "no chain checkpoint cut for a ledger-checkpoint ask");
+        }
+    }
+}
+
+/// `GET /ledger-checkpoint?file=<name>[&from=<i>&to=<j>]`. `checkpoints` is
+/// the cadence's handle, which cuts the chain's checkpoints.
 pub fn with_route(
     builder: DeclarativePluginBuilder,
     ledger_dir: std::path::PathBuf,
     node_log_id: String,
     signer: SigningKey,
+    checkpoints: Option<crate::checkpoint_cadence::CheckpointHandle>,
 ) -> DeclarativePluginBuilder {
     builder.http_item(
         http::get("/ledger-checkpoint")
@@ -467,12 +503,17 @@ pub fn with_route(
             .description(
                 "A signed checkpoint over one of this node's ledger files and a range proof \
                  of a span of its lines, for checking a copy of the file offline. Cuts a \
-                 checkpoint when the file has grown since its last one.",
+                 checkpoint when the file has grown since its last one; for the chain, when \
+                 no checkpoint covers its last record yet.",
             )
             .input::<LedgerCheckpointArgs>()
             .handle(move |args, _context| {
-                let (dir, log_id, signer) =
-                    (ledger_dir.clone(), node_log_id.clone(), signer.clone());
+                let (dir, log_id, signer, checkpoints) = (
+                    ledger_dir.clone(),
+                    node_log_id.clone(),
+                    signer.clone(),
+                    checkpoints.clone(),
+                );
                 Box::pin(async move {
                     let file = args
                         .file
@@ -481,6 +522,9 @@ pub fn with_route(
                         .to_string();
                     let from = index_arg(args.from.as_ref(), "from")?;
                     let to = index_arg(args.to.as_ref(), "to")?;
+                    if file == CAPSULES_FILE {
+                        cover_chain_tip(checkpoints.as_ref(), &dir, &signer).await;
+                    }
                     tokio::task::spawn_blocking(move || {
                         reply(&dir, &log_id, &signer, &file, from, to)
                     })
@@ -552,7 +596,13 @@ pub fn check(
     {
         return Err("the reply's checkpoint is not the one its statement states".into());
     }
-    if rule == LeafRule::Sha256Line && !cp.log_id.ends_with(&format!("/ledger/{file}")) {
+    // A file's checkpoint is of that file's log; the chain's is of the
+    // node's own log, never a file's.
+    let file_log = match rule {
+        LeafRule::Sha256Line => cp.log_id.ends_with(&format!("/ledger/{file}")),
+        LeafRule::CapsuleId => !cp.log_id.contains("/ledger/"),
+    };
+    if !file_log {
         return Err(format!(
             "the checkpoint's log {} is not {file}'s",
             cp.log_id
@@ -883,6 +933,74 @@ mod tests {
         let (all, _) = complete_lines(&copy);
         let dropped: Vec<u8> = all[1..].iter().flat_map(|l| [*l, b"\n"].concat()).collect();
         assert!(check(&dropped, &reply, &node, None).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_chain_ask_cuts_a_checkpoint_over_records_sealed_since_the_last() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = std::sync::Arc::new(
+            crate::capsule_emit::CapsuleState::open(dir.path(), "ledger-checkpoint-test").unwrap(),
+        );
+        let deals = state.deals();
+        let h = |c: char| c.to_string().repeat(64);
+        deals.on_invoice(&*state, "exchange-1", &h('a'), 1000, 1_790_000_000);
+        deals.on_exchange(
+            &*state,
+            "exchange-1",
+            &crate::deal_flow::SealedExchange {
+                capsule_id: &h('e'),
+                peer: "peer-node",
+                request_digest: &h('d'),
+                model: "model-x",
+            },
+            1_790_000_001,
+        );
+        crate::deal_receipt::tests::cut(&state);
+        let ledger = state.ledger_dir().to_path_buf();
+        let node = crate::commitment::key_id(state.signing_key());
+        // A record sealed after the last checkpoint, as step 07's outcome is.
+        state.pad_one().unwrap();
+        let read = std::fs::read(ledger.join(CAPSULES_FILE)).unwrap();
+        let stale = reply(&ledger, LOG, state.signing_key(), CAPSULES_FILE, None, None).unwrap();
+        assert!(check(&read, &stale, &node, None).is_err());
+
+        let handle =
+            crate::checkpoint_cadence::CheckpointHandle::for_tests(state.clone(), "test-log");
+        cover_chain_tip(Some(&handle), &ledger, state.signing_key()).await;
+        let fresh = reply(&ledger, LOG, state.signing_key(), CAPSULES_FILE, None, None).unwrap();
+        assert!(
+            fresh["checkpoint"]["mmr_size"].as_u64() > stale["checkpoint"]["mmr_size"].as_u64()
+        );
+        // The cut padded the chain: the copy is read after the ask, up to the
+        // checkpoint's last leaf, and holds the record read before it.
+        let leaves = fresh["range_proof"]["to_index"].as_u64().unwrap() as usize + 1;
+        let after = std::fs::read(ledger.join(CAPSULES_FILE)).unwrap();
+        let (all, _) = complete_lines(&after);
+        assert!(all.len() >= leaves && leaves >= complete_lines(&read).0.len());
+        let copy: Vec<u8> = all[..leaves]
+            .iter()
+            .flat_map(|l| [*l, b"\n"].concat())
+            .collect();
+        assert!(
+            check(&copy, &fresh, &node, None).is_ok(),
+            "{:?}",
+            check(&copy, &fresh, &node, None)
+        );
+        // Asked again with nothing new sealed, the same checkpoint serves.
+        cover_chain_tip(Some(&handle), &ledger, state.signing_key()).await;
+        let again = reply(&ledger, LOG, state.signing_key(), CAPSULES_FILE, None, None).unwrap();
+        assert_eq!(again["checkpoint"], fresh["checkpoint"]);
+    }
+
+    #[test]
+    fn a_file_checkpoint_relabelled_as_the_chain_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), &lines(0..3));
+        let mut reply = whole(dir.path());
+        reply["file"] = json!(CAPSULES_FILE);
+        reply["leaf_digest"] = json!(LEAF_CAPSULE_ID);
+        let err = check(lines(0..3).as_bytes(), &reply, &key_id(), None).unwrap_err();
+        assert!(err.contains("is not capsules.jsonl's"), "{err}");
     }
 
     #[test]

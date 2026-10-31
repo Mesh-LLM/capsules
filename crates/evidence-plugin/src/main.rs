@@ -1729,6 +1729,7 @@ async fn main() -> anyhow::Result<()> {
         data_dir.join("ledger"),
         log_id.clone(),
         capsules_for_routing_choice.signing_key().clone(),
+        checkpoints.clone(),
     );
     let plugin = history_page::with_route(
         plugin,

@@ -71,7 +71,16 @@ invalid request. Save the reply as JSON for the check below.
 ```
 
 For `capsules.jsonl`, `leaf_digest` is `"capsule_id"` and the checkpoint is the newest one of
-the chain in `checkpoints.jsonl`; the route cuts none.
+the chain in `checkpoints.jsonl`. When no chain checkpoint covers the chain's last record yet,
+the ask first has the cadence cut one, as a record push does (at most one cut per push window,
+padded to the bucket like every chain checkpoint). With the cadence off, or when that cut
+fails, the reply serves the newest chain checkpoint there is.
+
+**Taking a copy the reply covers.** Ask first, then read the file. The file only grows, so the
+reply's checkpoint covers the copy's first `range_proof.to_index + 1` lines (for a whole-file
+reply); keep exactly those as the copy. Every record sealed before the ask is among them. A
+copy read before the ask can be shorter than the checkpoint, since the chain's cut pads it and
+the other files may grow; ask for `from=0&to=<lines - 1>` in that case.
 
 ## Checking a copy offline: `capsules ledger-check`
 
@@ -92,7 +101,8 @@ What it checks, in order:
    rule.
 2. `checkpoint_cose` verifies (`cll::checkpoint::verify_checkpoint_cose_offline`), is signed by
    `--key`, and states exactly the reply's `checkpoint`, whose own signature verifies too. A
-   non-chain file's checkpoint must be that file's log (`…/ledger/<file>`).
+   non-chain file's checkpoint must be that file's log (`…/ledger/<file>`); the chain's must be
+   the node's own log, never a file's.
 3. The range proof covers exactly the range asked for (the whole file by default).
 4. The copy ends in a newline and holds exactly `j - i + 1` lines.
 5. Each copied line's body digest: the SHA-256 of its bytes, or for the chain its recomputed
