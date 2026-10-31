@@ -12,9 +12,10 @@
 //!   [`MIN_SETTLED`] exchange with the peer whose book reads `settled`.
 //! - **disputes**: `not_read` until this node holds a verdict about the peer;
 //!   then no adverse adjudication about it in the last
-//!   [`DISPUTE_PERIOD_DAYS`] days, counted exactly as `verdict_counts::fold`
-//!   counts verdicts (verified, asked for by this node, once per referee and
-//!   pair). Adverse is a `contradicted` verdict naming the peer.
+//!   [`DISPUTE_PERIOD_DAYS`] days. The verdicts are the ones
+//!   `verdict_counts::fold` counts (verified, asked for by this node, once
+//!   per referee and pair), each with its sealed time, and the evaluator
+//!   windows them. Adverse is a `contradicted` verdict naming the peer.
 //! - **corroboration**: this node holds the peer's pushed half for at least
 //!   [`MIN_HELD_HALVES`] exchange ("no half, no deal above T0").
 //!
@@ -172,41 +173,38 @@ struct CardEntry {
     in_flight: bool,
 }
 
-/// The local rows' inputs for one peer, as [`Base::read`] resolves them.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct LocalFacts {
-    pub settled: usize,
-    pub held_halves: usize,
-    /// Verdicts about the peer this node holds, of any kind.
-    pub verdicts: usize,
-    pub adverse: usize,
+/// One adjudication about a peer that this node holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeldVerdict {
+    /// Its sealed time; `None` when it does not read, which counts as in the
+    /// period.
+    pub at: Option<DateTime<Utc>>,
+    /// A `contradicted` verdict naming the peer.
+    pub adverse: bool,
 }
 
-/// What the evaluator reads beside [`LocalFacts`] for one peer: the
-/// denominator and each verdict's time, which it windows itself.
+/// This node's own book with one peer, as its records name the peer.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Book {
-    /// Distinct exchanges with the peer in this node's own book, settled or
-    /// not.
-    pub exchanges: usize,
-    /// Each verdict about the peer this node holds, as [`LocalFacts::verdicts`]
-    /// counts them: its sealed time (`None` when it does not read, which
-    /// counts as in the period) and whether it is adverse.
-    pub verdicts: Vec<(Option<DateTime<Utc>>, bool)>,
+pub struct LocalFacts {
+    /// The exchanges, by exchange id, of this node's records that name the
+    /// peer, settled or not.
+    pub exchanges: BTreeSet<String>,
+    /// Those of [`LocalFacts::exchanges`] whose book reads `settled`.
+    pub settled: BTreeSet<String>,
+    /// Every verdict about the peer, of any kind.
+    pub verdicts: Vec<HeldVerdict>,
 }
 
 /// The local rows' inputs from one read of this node's chain.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Facts {
-    /// Per peer node id (lowercase): settled exchanges and adverse verdicts.
+    /// Per peer node id (lowercase).
     pub by_peer: HashMap<String, LocalFacts>,
-    /// Per peer node id (lowercase): the exchange count and the verdicts'
-    /// times.
-    pub books: HashMap<String, Book>,
     /// The halves held, by the key the receiver verified each under
-    /// (`sender_key_id`). A receiver records no transport-attested node id
-    /// (`record_push_bridge`), so a half is the peer's when its key is the
-    /// peer's announced key.
+    /// (`sender_key_id`): for each, the exchange it is a half of (the
+    /// exchange id of this node's own half, else the half's capsule id). A
+    /// receiver records no transport-attested node id (`record_push_bridge`),
+    /// so a half is the peer's when its key is the peer's announced key.
     pub halves_by_key: HashMap<String, BTreeSet<String>>,
 }
 
@@ -284,11 +282,12 @@ impl Base {
             .expect("the facts lock is never poisoned")
             .as_ref()
             .map(|facts| {
-                let mut local = facts.by_peer.get(peer).cloned().unwrap_or_default();
-                if let Some(halves) = key.as_ref().and_then(|key| facts.halves_by_key.get(key)) {
-                    local.held_halves += halves.len();
-                }
-                own_history(&local, facts.books.get(peer), now)
+                let none = BTreeSet::new();
+                let held = key
+                    .as_ref()
+                    .and_then(|key| facts.halves_by_key.get(key))
+                    .unwrap_or(&none);
+                own_history(facts.by_peer.get(peer), held, now)
             });
         let mut inputs = engine::Inputs::at(timestamp(now));
         inputs.amount = DEAL_AMOUNT.into();
@@ -383,30 +382,40 @@ impl Base {
         entry.last = Some(outcome);
     }
 
-    /// Set `peer`'s local facts, with a book that agrees with them: every
-    /// verdict's time unread (in the period), and as many exchanges as the
-    /// larger of its settled and held counts.
+    /// Set `peer`'s book: `settled` settled exchanges of
+    /// `max(settled, held_halves)`, `held_halves` of them with a half held
+    /// under `key`, and `verdicts`.
     #[cfg(test)]
-    pub fn set_facts_for_test(&self, peer: &str, facts: LocalFacts) {
-        let book = Book {
-            exchanges: facts.settled.max(facts.held_halves),
-            verdicts: (0..facts.verdicts)
-                .map(|i| (None, i < facts.adverse))
-                .collect(),
-        };
+    pub fn set_facts_for_test(
+        &self,
+        peer: &str,
+        key: &str,
+        settled: usize,
+        held_halves: usize,
+        verdicts: Vec<HeldVerdict>,
+    ) {
+        let ids = |n: usize| (0..n).map(|i| format!("ex-{i}")).collect::<BTreeSet<_>>();
         let mut all = self
             .facts
             .write()
             .expect("the facts lock is never poisoned");
         let all = all.get_or_insert_with(Facts::default);
-        all.by_peer.insert(peer.to_string(), facts);
-        all.books.insert(peer.to_string(), book);
+        all.by_peer.insert(
+            peer.to_string(),
+            LocalFacts {
+                exchanges: ids(settled.max(held_halves)),
+                settled: ids(settled),
+                verdicts,
+            },
+        );
+        all.halves_by_key
+            .insert(key.to_ascii_lowercase(), ids(held_halves));
     }
 
     /// Recompute the local rows' inputs from this node's own chain. A chain
     /// that doesn't read whole leaves them not read rather than empty.
-    pub fn refresh(&self, now: DateTime<Utc>) {
-        let facts = local_facts(&self.ledger_dir, now);
+    pub fn refresh(&self) {
+        let facts = local_facts(&self.ledger_dir);
         if facts.is_none() {
             tracing::warn!(
                 "admission could not read this node's chain whole; the local rows read not_read"
@@ -443,7 +452,7 @@ impl Base {
         tokio::spawn(async move {
             loop {
                 let refreshing = base.clone();
-                let _ = tokio::task::spawn_blocking(move || refreshing.refresh(Utc::now())).await;
+                let _ = tokio::task::spawn_blocking(move || refreshing.refresh()).await;
                 tokio::time::sleep(REFRESH).await;
             }
         });
@@ -519,7 +528,7 @@ pub fn read_card(
 /// `None` when the chain, or the list of adjudications it asked for, is there
 /// but doesn't read whole: a torn or unreadable line could hide an adverse
 /// verdict, so it is never read as "none".
-pub fn local_facts(ledger_dir: &Path, now: DateTime<Utc>) -> Option<Facts> {
+pub fn local_facts(ledger_dir: &Path) -> Option<Facts> {
     // Every line must read: `read_requested` skips a request line that
     // doesn't parse or lacks its referee and two halves, and the verdict it
     // asked for would then count nowhere.
@@ -547,90 +556,89 @@ pub fn local_facts(ledger_dir: &Path, now: DateTime<Utc>) -> Option<Facts> {
     }
     let records = crate::evidence_panes::read_capsule_records(ledger_dir);
     let settled_ids = crate::evidence_panes::settled_exchange_ids(&records);
-    let mut settled: HashMap<String, BTreeSet<String>> = HashMap::new();
-    let mut exchanges: HashMap<String, BTreeSet<String>> = HashMap::new();
+    // This node's own records by capsule id, for the exchange a held half
+    // is the counterpart of.
+    let exchange_of: HashMap<&str, &str> = records
+        .iter()
+        .filter_map(|record| {
+            Some((
+                record.get("capsule_id")?.as_str()?,
+                crate::evidence_panes::record_exchange_id(record)?,
+            ))
+        })
+        .collect();
     let mut facts = Facts::default();
     for record in &records {
         if let (Some(peer), Some(exchange)) = (
             crate::evidence_panes::full_counterparty_node_id(record),
             crate::evidence_panes::record_exchange_id(record),
         ) {
-            let peer = peer.to_ascii_lowercase();
+            let book = facts.by_peer.entry(peer.to_ascii_lowercase()).or_default();
+            book.exchanges.insert(exchange.to_string());
             if settled_ids.contains(exchange) {
-                settled
-                    .entry(peer.clone())
-                    .or_default()
-                    .insert(exchange.to_string());
+                book.settled.insert(exchange.to_string());
             }
-            exchanges
-                .entry(peer)
-                .or_default()
-                .insert(exchange.to_string());
         }
-        if let Some((key, half)) = held_half(record) {
-            facts.halves_by_key.entry(key).or_default().insert(half);
+        if let Some((key, half, own)) = held_half(record) {
+            let exchange = own
+                .and_then(|own| exchange_of.get(own.as_str()).copied())
+                .map_or(half, str::to_string);
+            facts.halves_by_key.entry(key).or_default().insert(exchange);
         }
     }
-    for (peer, exchanges) in settled {
-        facts.by_peer.entry(peer).or_default().settled = exchanges.len();
-    }
-    for (peer, exchanges) in exchanges {
-        facts.books.entry(peer).or_default().exchanges = exchanges.len();
-    }
-    let period = chrono::Duration::days(DISPUTE_PERIOD_DAYS);
     let verdicts =
         crate::verdict_counts::fold(&records, &crate::verdict_counts::read_requested(ledger_dir));
     for (peer, verdicts) in verdicts {
-        let peer = peer.to_ascii_lowercase();
-        let timed: Vec<(Option<DateTime<Utc>>, bool)> = verdicts
+        facts
+            .by_peer
+            .entry(peer.to_ascii_lowercase())
+            .or_default()
+            .verdicts = verdicts
             .iter()
-            .map(|v| {
-                (
-                    v.recorded_at.as_deref().and_then(parse_minute),
-                    v.bucket == crate::verdict_counts::CONTRADICTED,
-                )
+            .map(|v| HeldVerdict {
+                at: v.recorded_at.as_deref().and_then(parse_minute),
+                adverse: v.bucket == crate::verdict_counts::CONTRADICTED,
             })
             .collect();
-        // A verdict whose time doesn't read counts as in the period.
-        let adverse = timed
-            .iter()
-            .filter(|(at, adverse)| *adverse && at.is_none_or(|at| now - at <= period))
-            .count();
-        let local = facts.by_peer.entry(peer.clone()).or_default();
-        local.verdicts = verdicts.len();
-        local.adverse = adverse;
-        facts.books.entry(peer).or_default().verdicts = timed;
     }
     Some(facts)
 }
 
-/// The evaluator's view of this node's own book with a peer. `book` carries
-/// the denominator and the verdicts' times; the evaluator windows the
-/// verdicts to the pack's `window_days`, which equals [`DISPUTE_PERIOD_DAYS`].
-/// As [`local_facts`] counts them, a verdict whose time does not read is in
-/// the period, and so is one stated after `now`: both are read at `now`.
-fn own_history(local: &LocalFacts, book: Option<&Book>, now: DateTime<Utc>) -> engine::OwnHistory {
+/// The evaluator's view of this node's own book with a peer: `local` as its
+/// records name the peer, and `held`, the exchanges whose half this node
+/// holds under the peer's announced key. The denominator is every exchange
+/// either names, so neither count exceeds it. The evaluator windows the
+/// verdicts to the pack's `window_days`, which equals
+/// [`DISPUTE_PERIOD_DAYS`]; a verdict whose time does not read is in the
+/// period, and so is one stated after `now`: both are read at `now`.
+fn own_history(
+    local: Option<&LocalFacts>,
+    held: &BTreeSet<String>,
+    now: DateTime<Utc>,
+) -> engine::OwnHistory {
     let count = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
-    let book = book.cloned().unwrap_or_default();
+    let empty = LocalFacts::default();
+    let local = local.unwrap_or(&empty);
     engine::OwnHistory {
-        exchanges: count(book.exchanges),
-        settled: count(local.settled),
-        held_halves: count(local.held_halves),
+        exchanges: count(local.exchanges.union(held).count()),
+        settled: count(local.settled.len()),
+        held_halves: count(held.len()),
         conflicting: 0,
-        verdicts: book
+        verdicts: local
             .verdicts
             .iter()
-            .map(|(at, adverse)| engine::AdjudicationVerdict {
-                at: timestamp(at.map_or(now, |at| at.min(now))),
-                adverse: *adverse,
+            .map(|v| engine::AdjudicationVerdict {
+                at: timestamp(v.at.map_or(now, |at| at.min(now))),
+                adverse: v.adverse,
             })
             .collect(),
     }
 }
 
-/// `(the key the half verified under, the half's capsule id)` from a citing
-/// record whose receiver checked the half's signature.
-fn held_half(record: &Value) -> Option<(String, String)> {
+/// `(the key the half verified under, the half's capsule id, this node's own
+/// half's capsule id)` from a citing record whose receiver checked the half's
+/// signature.
+fn held_half(record: &Value) -> Option<(String, String, Option<String>)> {
     let received = record.pointer("/model_attestation/compute_attestation/received_half")?;
     if received.get("signature_ok").and_then(Value::as_bool) != Some(true) {
         return None;
@@ -646,7 +654,11 @@ fn held_half(record: &Value) -> Option<(String, String)> {
         .find(|r| r.get("citation_purpose").and_then(Value::as_str) == Some("counterparty_half"))
         .and_then(|r| r.get("digest"))
         .and_then(Value::as_str)?;
-    Some((key.to_ascii_lowercase(), half.to_string()))
+    let own = received
+        .get("own_half_capsule_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some((key.to_ascii_lowercase(), half.to_string(), own))
 }
 
 /// A sealed time, RFC 3339 or minute-granular (`2026-10-29T16:30Z`).

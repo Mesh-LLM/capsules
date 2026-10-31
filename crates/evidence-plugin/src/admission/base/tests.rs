@@ -21,12 +21,37 @@ impl Base {
     }
 }
 
-fn passing() -> LocalFacts {
-    LocalFacts {
+/// A peer's book as a test sets it: counts of settled exchanges and of
+/// exchanges whose half is held under [`KEY`], and the verdicts held.
+#[derive(Clone, Debug, Default)]
+struct Book {
+    settled: usize,
+    held_halves: usize,
+    verdicts: Vec<HeldVerdict>,
+}
+
+impl Book {
+    fn set(&self, base: &Base) {
+        base.set_facts_for_test(
+            PEER,
+            KEY,
+            self.settled,
+            self.held_halves,
+            self.verdicts.clone(),
+        );
+    }
+}
+
+/// A verdict whose time does not read: in the period.
+fn held(adverse: bool) -> HeldVerdict {
+    HeldVerdict { at: None, adverse }
+}
+
+fn passing() -> Book {
+    Book {
         settled: 1,
         held_halves: 1,
-        verdicts: 1,
-        adverse: 0,
+        verdicts: vec![held(false)],
     }
 }
 
@@ -58,7 +83,7 @@ fn a_failed_ask_leaves_the_card_rows_not_read_and_is_retried_only_after_an_hour(
     base.read_keyed(PEER, at, Utc::now());
     asks.try_recv().unwrap();
     base.record_card(PEER, CardOutcome::NotRead, at);
-    base.set_facts_for_test(PEER, passing());
+    passing().set(&base);
 
     let read = base.read_keyed(PEER, at, Utc::now());
     assert_eq!(read.rows[..2], [RowResult::NotRead; 2]);
@@ -81,11 +106,11 @@ fn a_card_that_does_not_verify_fails_identity() {
 
 #[test]
 fn each_row_fails_on_its_own_input_alone() {
-    let cases: [(CardOutcome, LocalFacts, usize); 4] = [
+    let cases: [(CardOutcome, Book, usize); 4] = [
         (card(KEY_AGE_DAYS - 1), passing(), 1),
         (
             card(30),
-            LocalFacts {
+            Book {
                 settled: 0,
                 ..passing()
             },
@@ -93,15 +118,15 @@ fn each_row_fails_on_its_own_input_alone() {
         ),
         (
             card(30),
-            LocalFacts {
-                adverse: 1,
+            Book {
+                verdicts: vec![held(true)],
                 ..passing()
             },
             3,
         ),
         (
             card(30),
-            LocalFacts {
+            Book {
                 held_halves: 0,
                 ..passing()
             },
@@ -112,7 +137,7 @@ fn each_row_fails_on_its_own_input_alone() {
         let (base, _dir) = base();
         let at = Instant::now();
         base.record_card(PEER, card, at);
-        base.set_facts_for_test(PEER, facts);
+        facts.set(&base);
         let read = base.read_keyed(PEER, at, Utc::now());
         for (i, row) in read.rows.iter().enumerate() {
             let expected = if i == failing {
@@ -130,7 +155,7 @@ fn a_card_old_enough_passes_every_row_and_is_cited() {
     let (base, _dir) = base();
     let at = Instant::now();
     base.record_card(PEER, card(KEY_AGE_DAYS), at);
-    base.set_facts_for_test(PEER, passing());
+    passing().set(&base);
     let read = base.read_keyed(PEER, at, Utc::now());
     assert_eq!(read.rows, [RowResult::Pass; 5]);
     assert_eq!(read.card.as_deref(), Some("c".repeat(64).as_str()));
@@ -236,32 +261,44 @@ fn local_facts_count_settled_exchanges_held_halves_and_adverse_verdicts_in_the_p
             ),
         ],
     );
-    let facts = local_facts(dir.path(), now).expect("the chain reads whole");
+    let facts = local_facts(dir.path()).expect("the chain reads whole");
+    let ids = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<BTreeSet<_>>();
+    let at = |t: &str| parse_minute(t);
     assert_eq!(
         facts.by_peer.get(PEER),
         Some(&LocalFacts {
-            settled: 1,
-            held_halves: 0,
-            verdicts: 2,
-            adverse: 1,
+            exchanges: ids(&["ex-paid", "ex-unpaid"]),
+            settled: ids(&["ex-paid"]),
+            verdicts: vec![
+                HeldVerdict {
+                    at: at("2026-10-20T00:00Z"),
+                    adverse: true
+                },
+                HeldVerdict {
+                    at: at("2026-09-01T00:00Z"),
+                    adverse: true
+                },
+            ],
         }),
-        "one settled exchange, one adverse verdict in 30 days"
+        "two exchanges, one settled, and both verdicts with their times"
     );
     assert_eq!(
         facts.halves_by_key.get(KEY).map(BTreeSet::len),
         Some(1),
         "one verified half, counted once, under the key it verified under"
     );
-    assert_eq!(
-        facts.by_peer.get(OTHER).map(|f| f.adverse),
-        Some(0),
+    assert!(
+        facts
+            .by_peer
+            .get(OTHER)
+            .is_some_and(|f| f.verdicts.iter().all(|v| !v.adverse)),
         "a contradiction naming the other twin corroborates this one"
     );
-    assert_eq!(facts.by_peer.get(OTHER).map(|f| f.settled), Some(0));
+    assert_eq!(facts.by_peer.get(OTHER).map(|f| f.settled.len()), Some(0));
 
     // The rows resolve the half to the peer through its announced key.
     let base = Base::new(dir.path().to_path_buf());
-    base.refresh(now);
+    base.refresh();
     let at = Instant::now();
     base.record_card(PEER, card(30), at);
     assert_eq!(base.read_keyed(PEER, at, now).rows[4], RowResult::Pass);
@@ -277,10 +314,7 @@ fn local_facts_count_settled_exchanges_held_halves_and_adverse_verdicts_in_the_p
 fn a_chain_that_does_not_read_whole_leaves_the_local_rows_not_read() {
     let dir = tempfile::tempdir().unwrap();
     let now = Utc::now();
-    assert!(
-        local_facts(dir.path(), now).is_some(),
-        "an empty book reads"
-    );
+    assert!(local_facts(dir.path()).is_some(), "an empty book reads");
     std::fs::write(
         dir.path().join("capsules.jsonl"),
         format!(
@@ -290,11 +324,11 @@ fn a_chain_that_does_not_read_whole_leaves_the_local_rows_not_read() {
     )
     .unwrap();
     assert!(
-        local_facts(dir.path(), now).is_none(),
+        local_facts(dir.path()).is_none(),
         "a torn line could hide an adverse verdict"
     );
     let base = Base::new(dir.path().to_path_buf());
-    base.refresh(now);
+    base.refresh();
     assert_eq!(
         base.read_keyed(PEER, Instant::now(), now).rows[2..],
         [RowResult::NotRead; 3]
@@ -318,7 +352,7 @@ fn a_torn_line_in_the_asked_for_adjudications_leaves_the_rows_not_read() {
     )
     .unwrap();
     assert!(
-        local_facts(dir.path(), Utc::now()).is_none(),
+        local_facts(dir.path()).is_none(),
         "the request it tore could be the one an adverse verdict needs"
     );
     std::fs::write(
@@ -327,7 +361,7 @@ fn a_torn_line_in_the_asked_for_adjudications_leaves_the_rows_not_read() {
     )
     .unwrap();
     assert!(
-        local_facts(dir.path(), Utc::now()).is_none(),
+        local_facts(dir.path()).is_none(),
         "a request line without its halves is skipped by read_requested too"
     );
     std::fs::write(
@@ -336,7 +370,7 @@ fn a_torn_line_in_the_asked_for_adjudications_leaves_the_rows_not_read() {
     )
     .unwrap();
     assert!(
-        local_facts(dir.path(), Utc::now()).is_some(),
+        local_facts(dir.path()).is_some(),
         "a whole request line reads"
     );
 }
@@ -345,18 +379,16 @@ fn a_torn_line_in_the_asked_for_adjudications_leaves_the_rows_not_read() {
 fn disputes_is_not_read_until_this_node_holds_a_verdict_about_the_peer() {
     let (base, _dir) = base();
     let at = Instant::now();
-    base.set_facts_for_test(
-        PEER,
-        LocalFacts {
-            verdicts: 0,
-            ..passing()
-        },
-    );
+    Book {
+        verdicts: vec![],
+        ..passing()
+    }
+    .set(&base);
     assert_eq!(
         base.read_keyed(PEER, at, Utc::now()).rows[3],
         RowResult::NotRead
     );
-    base.set_facts_for_test(PEER, passing());
+    passing().set(&base);
     assert_eq!(
         base.read_keyed(PEER, at, Utc::now()).rows[3],
         RowResult::Pass
@@ -496,13 +528,16 @@ fn the_packs_rows_are_base_1s_with_its_thresholds() {
 
 /// The five rows as `Base::read` decided them before #178, kept as the
 /// reference the evaluator's rows are held to. `card` is the last recorded
-/// outcome of an ask (`None`: never answered) and `local` the local facts
-/// (`None`: no refresh read the chain whole).
+/// outcome of an ask (`None`: never answered) and `local` the peer's book
+/// (`None`: no refresh read the chain whole). The disputes row counts the
+/// adverse verdicts in the period itself, as `local_facts` did: a time that
+/// does not read is in it, and so is one after `now`.
 fn rows_before_178(
     card: Option<&CardOutcome>,
-    local: Option<&LocalFacts>,
+    local: Option<&Book>,
     now: DateTime<Utc>,
 ) -> [RowResult; 5] {
+    let period = chrono::Duration::days(DISPUTE_PERIOD_DAYS);
     let of = |pass: bool| {
         if pass {
             RowResult::Pass
@@ -521,14 +556,16 @@ fn rows_before_178(
         Some(CardOutcome::Unverifiable) => [RowResult::Fail, RowResult::NotRead],
         _ => [RowResult::NotRead; 2],
     };
-    let local_row =
-        |pass: fn(&LocalFacts) -> bool| local.map_or(RowResult::NotRead, |f| of(pass(f)));
+    let local_row = |pass: fn(&Book) -> bool| local.map_or(RowResult::NotRead, |f| of(pass(f)));
     [
         card_rows[0],
         card_rows[1],
         local_row(|f| f.settled >= MIN_SETTLED),
         match local {
-            Some(facts) if facts.verdicts > 0 => of(facts.adverse == 0),
+            Some(facts) if !facts.verdicts.is_empty() => of(!facts
+                .verdicts
+                .iter()
+                .any(|v| v.adverse && v.at.is_none_or(|at| now - at <= period))),
             _ => RowResult::NotRead,
         },
         local_row(|f| f.held_halves >= MIN_HELD_HALVES),
@@ -561,15 +598,14 @@ fn the_evaluators_rows_are_the_rows_base_1_read() {
         Some(card_at(Some(now - days(1)))),
         Some(card_at(Some(now + days(1)))),
     ];
-    let facts = |settled, held_halves, verdicts, adverse| LocalFacts {
+    let facts = |settled, held_halves, verdicts: usize, adverse: usize| Book {
         settled,
         held_halves,
-        verdicts,
-        adverse,
+        verdicts: (0..verdicts).map(|i| held(i < adverse)).collect(),
     };
-    let locals: Vec<Option<LocalFacts>> = vec![
+    let locals: Vec<Option<Book>> = vec![
         None,
-        Some(LocalFacts::default()),
+        Some(Book::default()),
         Some(passing()),
         Some(facts(0, 1, 1, 0)),
         Some(facts(1, 0, 1, 0)),
@@ -586,7 +622,7 @@ fn the_evaluators_rows_are_the_rows_base_1_read() {
                 base.record_card(PEER, card.clone(), at);
             }
             if let Some(local) = local {
-                base.set_facts_for_test(PEER, local.clone());
+                local.set(&base);
             }
             let read = base.read_keyed(PEER, at, now);
             assert_eq!(
@@ -650,11 +686,16 @@ fn the_evaluator_windows_verdicts_as_base_1_did() {
                 verdict(&named, "v", at),
             ],
         );
-        let facts = local_facts(dir.path(), now).expect("reads whole");
+        let facts = local_facts(dir.path()).expect("reads whole");
         let local = facts.by_peer.get(PEER).cloned().unwrap_or_default();
-        assert_eq!(local.verdicts, 1, "the verdict is held: {at} {kind}");
+        assert_eq!(local.verdicts.len(), 1, "the verdict is held: {at} {kind}");
+        let local = Book {
+            settled: local.settled.len(),
+            held_halves: 0,
+            verdicts: local.verdicts,
+        };
         let base = Base::new(dir.path().to_path_buf());
-        base.refresh(now);
+        base.refresh();
         let read = base.read_keyed(PEER, Instant::now(), now);
         assert_eq!(
             read.rows,
@@ -760,4 +801,71 @@ fn with_no_list_the_operator_rows_pass() {
         (decision.verdict, decision.source.as_str()),
         (engine::Verdict::No, "allow_list")
     );
+}
+
+/// Each own-book row's count and denominator from a read of `ledger`, with
+/// [`KEY`] as the peer's key.
+fn own_counts(ledger: &[Value]) -> Vec<(String, i64, i64)> {
+    let dir = tempfile::tempdir().unwrap();
+    write_ledger(dir.path(), ledger);
+    let base = Base::new(dir.path().to_path_buf());
+    base.refresh();
+    let read = base.read_keyed(PEER, Instant::now(), Utc::now());
+    read.decision
+        .rows
+        .iter()
+        .filter(|r| ["performed_and_settled", "corroboration"].contains(&r.row.as_str()))
+        .map(|r| (r.row.clone(), r.count.unwrap(), r.denominator.unwrap()))
+        .collect()
+}
+
+#[test]
+fn no_count_exceeds_the_peers_exchanges() {
+    let mut own = exchange(PEER, "ex-1");
+    own["capsule_id"] = json!("own-1");
+    let mut citing_own = citing(KEY, "half-1", true);
+    citing_own["model_attestation"]["compute_attestation"]["received_half"]
+        ["own_half_capsule_id"] = json!("own-1");
+    for (ledger, expected) in [
+        // A held half with no record of this node's naming the peer.
+        (
+            vec![citing(KEY, "half-1", true)],
+            [("performed_and_settled", 0, 1), ("corroboration", 1, 1)],
+        ),
+        // The half's own counterpart names the exchange: counted once.
+        (
+            vec![own.clone(), citing_own.clone()],
+            [("performed_and_settled", 0, 1), ("corroboration", 1, 1)],
+        ),
+        // A half for one exchange, and another exchange settled.
+        (
+            vec![
+                own,
+                citing_own,
+                exchange(PEER, "ex-2"),
+                settlement("ex-2", "input_invoice_issued"),
+                settlement("ex-2", "input_settlement_observed"),
+            ],
+            [("performed_and_settled", 1, 2), ("corroboration", 1, 2)],
+        ),
+        // A settlement for an exchange no record of this node's names.
+        (
+            vec![
+                settlement("ex-9", "input_invoice_issued"),
+                settlement("ex-9", "input_settlement_observed"),
+            ],
+            [("performed_and_settled", 0, 0), ("corroboration", 0, 0)],
+        ),
+    ] {
+        let counts = own_counts(&ledger);
+        let expected: Vec<(String, i64, i64)> = expected
+            .iter()
+            .map(|(row, c, d)| (row.to_string(), *c, *d))
+            .collect();
+        assert_eq!(counts, expected);
+        assert!(
+            counts.iter().all(|(_, count, of)| count <= of),
+            "{counts:?}"
+        );
+    }
 }

@@ -29,7 +29,9 @@
   and thresholds. Every verdict and `source` is the one the lists gave before, and the price rule
   still runs after them.
   - Each sealed row gains the evaluator's `effect` and, for the three rows from this node's own
-    book, `count` and `denominator` (the peer's exchanges, or the verdicts in the 30-day period).
+    book, `count` and `denominator`. The denominator is the peer's exchanges, every one this
+    node's records name it in or holds its half of, so no count exceeds it; for disputes it is the
+    verdicts in the 30-day period.
     `reads` gains a `terms_pack` entry with `role: "base"` citing the pack and its definition
     digest; the price rule's entry now says `role: "price"`.
   - A verified card whose first checkpoint does not parse now records `key_age` as `fail` (the

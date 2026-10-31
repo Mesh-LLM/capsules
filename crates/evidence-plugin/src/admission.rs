@@ -761,12 +761,13 @@ mod tests {
         );
         admission.base.set_facts_for_test(
             peer,
-            base::LocalFacts {
-                settled: 1,
-                held_halves: 1,
-                verdicts: 1,
-                adverse: 0,
-            },
+            key,
+            1,
+            1,
+            vec![base::HeldVerdict {
+                at: None,
+                adverse: false,
+            }],
         );
     }
 
@@ -805,19 +806,23 @@ mod tests {
     #[test]
     fn an_adverse_adjudication_is_sealed_as_a_row_and_never_blocks_on_its_own() {
         let at = std::time::Instant::now();
-        let adverse = base::LocalFacts {
-            settled: 3,
-            held_halves: 3,
-            verdicts: 1,
-            adverse: 1,
-        };
+        let adverse = vec![base::HeldVerdict {
+            at: None,
+            adverse: true,
+        }];
         for (default, decision, verdict) in [
             (None, OpenAiAdmissionDecision::Allow, "GO"),
             (Some("no"), OpenAiAdmissionDecision::Deny, "NO"),
         ] {
             let (admission, capsules, _dir) = admission(policy(default));
             all_rows_pass(&admission, STRANGER, at);
-            admission.base.set_facts_for_test(STRANGER, adverse.clone());
+            admission.base.set_facts_for_test(
+                STRANGER,
+                "ab00000000000000000000000000000000000000000000000000000000000006",
+                3,
+                3,
+                adverse.clone(),
+            );
             let answer = admission.answer_at(&selected(&remote(STRANGER)), at, chrono::Utc::now());
             assert_eq!(answer.decision, decision, "the config decides: {default:?}");
             let block = sealed_block(&capsules);
