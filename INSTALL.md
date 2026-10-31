@@ -192,7 +192,7 @@ is the decision to send a prompt to a third node.
 
 All peer traffic uses mesh-llm's own peer connections. Nothing goes to any
 third party unless you name a witness. The switches are under Configuration ›
-Plugins › Sharing policy, and [`docs/SHARING-POLICY.md`](docs/SHARING-POLICY.md)
+Plugins › Capsules, and [`docs/SHARING-POLICY.md`](docs/SHARING-POLICY.md)
 explains each one. The plugin reads what you save there from mesh-llm's
 config file: `~/.mesh-llm/config.toml`, or the file `MESH_LLM_CONFIG` names.
 **If you start the node with `--config <path>`, also set
