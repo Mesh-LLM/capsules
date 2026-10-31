@@ -45,7 +45,9 @@ use evidencebook::record::{record_types, EpistemicType, Link, LinkType};
 use evidencebook::store::{Record, RecordSource};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::capsule_emit::CapsuleState;
 
@@ -374,7 +376,7 @@ pub fn record_response(
         );
     }
     let response_digest = hex::encode(Sha256::digest(reply));
-    let kept = keep_reply(capsules.ledger_dir(), &response_digest, reply)
+    keep_reply(capsules.ledger_dir(), &response_digest, reply)
         .map_err(|e| SealError(format!("the reply's bytes could not be kept: {e}")))?;
     let sealed = book.seal(&Entry {
         record_type: record_types::RESPONSE.into(),
@@ -389,27 +391,46 @@ pub fn record_response(
             "response_digest": response_digest,
             "verification": verification,
         }),
-    });
-    if sealed.is_err() {
-        if let Some(path) = kept {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-    Ok((sealed?, verification))
+    })?;
+    Ok((sealed, verification))
 }
 
-/// Write `reply` to `REPLIES_DIR/<digest>`, atomically. Returns the path
-/// when this call created the file, so a failed seal removes only what it
-/// wrote: identical bytes kept for another record stay.
-fn keep_reply(ledger_dir: &Path, digest: &str, reply: &[u8]) -> std::io::Result<Option<PathBuf>> {
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Keep `reply` as `REPLIES_DIR/<digest>`, durably, before its digest is
+/// sealed. Written to a temporary file of this call's own, then published
+/// with a hard link, which never replaces a file already there, so replies
+/// with identical bytes settled at once never expose a partial file (as
+/// `agreement::Store::put`). The file is never removed: if the seal then
+/// fails it is unreferenced, and another record may rely on the same bytes.
+fn keep_reply(ledger_dir: &Path, digest: &str, reply: &[u8]) -> std::io::Result<()> {
     let dir = ledger_dir.join(REPLIES_DIR);
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(digest);
     if path.exists() {
-        return Ok(None);
+        return Ok(());
     }
-    crate::owner_maintenance::write_atomically(&path, reply)?;
-    Ok(Some(path))
+    let tmp = dir.join(format!(
+        ".{digest}.{}.{}.tmp",
+        std::process::id(),
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let published = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        file.write_all(reply)?;
+        file.sync_all()?;
+        match std::fs::hard_link(&tmp, &path) {
+            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
+            _ => Ok(()),
+        }
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    published?;
+    // The link itself is durable before the record that relies on it.
+    std::fs::File::open(&dir)?.sync_all()
 }
 
 /// The reply recorded by the `evidence_response` record
@@ -438,7 +459,7 @@ pub fn kept_reply(ledger_dir: &Path, response_record_id: &str) -> Result<Vec<u8>
         .get("statement")
         .and_then(|s| s.get("response_digest"))
         .and_then(Value::as_str)
-        .filter(|d| d.len() == 64 && d.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+        .filter(|d| evidence_request::registry::is_digest(d))
     else {
         return Err(AskError::Invalid(format!(
             "response {response_record_id} was recorded before replies were kept: it seals no response_digest"

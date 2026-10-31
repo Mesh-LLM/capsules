@@ -522,14 +522,28 @@ fn a_response_sealed_before_replies_were_kept_is_refused_by_name() {
 }
 
 #[test]
-fn identical_bytes_already_kept_are_not_rewritten_or_claimed() {
+fn identical_replies_kept_at_once_are_kept_whole_once() {
     let dir = tempfile::tempdir().unwrap();
     let digest = hex::encode(Sha256::digest(SENT_REPLY));
-    let first = keep_reply(dir.path(), &digest, SENT_REPLY).unwrap();
-    assert_eq!(first, Some(dir.path().join(REPLIES_DIR).join(&digest)));
-    // A second keep of the same bytes created nothing, so a failed seal
-    // after it removes nothing another record relies on.
-    assert_eq!(keep_reply(dir.path(), &digest, SENT_REPLY).unwrap(), None);
+    std::thread::scope(|scope| {
+        let keeps: Vec<_> = (0..8)
+            .map(|_| scope.spawn(|| keep_reply(dir.path(), &digest, SENT_REPLY)))
+            .collect();
+        for keep in keeps {
+            keep.join().unwrap().unwrap();
+        }
+    });
+    let replies = dir.path().join(REPLIES_DIR);
+    assert_eq!(std::fs::read(replies.join(&digest)).unwrap(), SENT_REPLY);
+    let names: Vec<_> = std::fs::read_dir(&replies)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        names,
+        [std::ffi::OsString::from(&digest)],
+        "no temporary file is left"
+    );
 }
 
 #[test]
