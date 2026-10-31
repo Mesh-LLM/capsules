@@ -77,6 +77,47 @@ fn a_reason_honest_limits_also_send_is_not_checked() {
     }
 }
 
+/// Under evidence-interop/1 (IP v1 §6.3) `policy_declined` and
+/// `not_authorized` are statements about policy: withholding by policy what
+/// the pinned policy gives any asker is a MISMATCH. `capacity_exceeded`
+/// reads NOT_CHECKED under either identifier, and `request_unauthenticated`
+/// blames the request.
+#[test]
+fn under_v1_a_policy_reason_is_judged_against_the_pinned_policy() {
+    let (_dir, pinned) = held();
+    let mut v1 = history_card();
+    v1["profile"] = json!("evidence-interop/1");
+    for reason in ["policy_declined", "not_authorized"] {
+        let check = policy_check(Some(&pinned), &v1, reason);
+        assert_eq!(check["status"], "MISMATCH", "{reason}: {check}");
+        let mut v0 = history_card();
+        v0["profile"] = json!("evidence-interop/0");
+        assert_eq!(
+            policy_check(Some(&pinned), &v0, reason)["status"],
+            "NOT_CHECKED",
+            "{reason}"
+        );
+    }
+    for request in [v1.clone(), history_card()] {
+        assert_eq!(
+            policy_check(Some(&pinned), &request, "capacity_exceeded")["status"],
+            "NOT_CHECKED"
+        );
+    }
+    assert_eq!(
+        policy_check(Some(&pinned), &v1, "request_unauthenticated")["status"],
+        "MATCH"
+    );
+    // A record-carrying ask: whether a counterparty is answered depends on
+    // who asks, which the refusal alone does not settle.
+    let record = json!({"subject": {"record": "ab".repeat(32)}, "coverage": {"min_freshness": 1},
+                        "profile": "evidence-interop/1"});
+    assert_ne!(
+        policy_check(Some(&pinned), &record, "not_authorized")["status"],
+        "MISMATCH"
+    );
+}
+
 #[test]
 fn a_refusal_the_policy_allows_is_a_match() {
     let (_dir, pinned) = held();

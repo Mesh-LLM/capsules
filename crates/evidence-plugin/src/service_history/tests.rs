@@ -437,6 +437,26 @@ fn a_history_at_a_boundary_is_answered_and_checks() {
     }
 }
 
+/// A History asked under `evidence-interop/1` is answered under /1 (ISH
+/// "Interop profile revision", IP §3.3): the same artifact, an envelope
+/// naming /1, and a requester's check of it passes.
+#[test]
+fn a_history_asked_under_v1_is_answered_under_v1() {
+    let dir = node();
+    let anchor = checkpoints()[3].anchor();
+    let v0 = answered(ask(dir.path(), &history_request(&anchor)));
+    let mut request = history_request(&anchor);
+    request["profile"] = json!("evidence-interop/1");
+    let v1 = answered(ask(dir.path(), &request));
+    assert_eq!(v1["profile"], json!("evidence-interop/1"));
+    assert_eq!(v0["profile"], json!("evidence-interop/0"));
+    assert_eq!(artifact_of(&v1), artifact_of(&v0));
+    let v = verified(&request, &v1);
+    assert_eq!(v["state"], json!("artifact"), "{v}");
+    // An answer under the other identifier is not the answer asked for.
+    assert_ne!(verified(&request, &v0)["state"], json!("artifact"));
+}
+
 /// The embedded card is byte for byte the direct `history_card/1` artifact
 /// at the same anchor, and `history_card_digest` its SHA-256.
 #[test]

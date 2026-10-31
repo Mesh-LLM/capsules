@@ -742,8 +742,9 @@ dependencies = [
 
 [[package]]
 name = "evidence-request"
-version = "0.2.0"
-source = "git+https://github.com/action-state-group/agent-action-capsule?rev=d59c57b5cd63985b3be1e6de238f42531e93b3fd#d59c57b5cd63985b3be1e6de238f42531e93b3fd"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f82239f4048392c07c4bb5bc03f702947fd4f1770c6a97c34bfcb041e1c0b50"
 dependencies = [
  "base64 0.22.1",
  "checkpointed-local-log",
@@ -760,8 +761,7 @@ dependencies = [
 [[package]]
 name = "evidencebook"
 version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbc2cfcfaed108d2e0fc1bdbd32b647bc0907d6115238e1e0b139fdf673dd86c"
+source = "git+https://github.com/action-state-group/evidencebook?rev=36256ca8b5d473a51a57c2b6206ebf67afd0fc1c#36256ca8b5d473a51a57c2b6206ebf67afd0fc1c"
 dependencies = [
  "agent-action-capsule 0.5.0",
  "boon",
