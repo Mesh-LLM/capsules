@@ -94,10 +94,10 @@
 //! side of an exchange. Every other requester (unsigned, a signature that
 //! fails, or a proven node no record names) asking for Standard History gets
 //! `policy_declined`, decided before the subject is resolved, so the refusal
-//! is the same whether or not what was asked for exists. It is `refusal::sign` of the request digest,
-//! the reason and `issued_at` alone: no member names or depends on the
-//! asker, so two askers sending the same bytes in the same second get the
-//! same bytes back. What differs between two refusals is only what differs
+//! is the same whether or not what was asked for exists. It is
+//! `refusal::sign` of the request digest, the reason and `issued_at` alone:
+//! no member names or depends on the asker, so two askers sending the same
+//! bytes in the same second get the same bytes back. What differs between two refusals is only what differs
 //! between the requests (their digest, which covers every member each
 //! carries) and when they were answered (`issued_at`), and the signature
 //! over those.
@@ -110,9 +110,12 @@
 //! from which refusal it gets (it reads them from the checkpoint list). A
 //! real counterparty asking for more than its own records still can. A
 //! record that never leaves this node (`evidence_log::never_leaves`) is in
-//! no keyed answer's matched set (`LedgerIndex::leaving`): a `correlation`,
-//! `exchange` or `exchange_corroboration/1` answer is the same whether or
-//! not one sits under the key (evidencebook#206 row 4).
+//! no `correlation`, `exchange` or `exchange_corroboration/1` answer's
+//! matched set (`LedgerIndex::leaving`): the answer, or its refusal, is the
+//! same whether or not one sits under the key (evidencebook#206 row 4). A
+//! `record` request by such a record's exact digest is still refused
+//! `not_authorized`: only an asker that already holds the digest can send
+//! it.
 //!
 //! **The wire.** An artifact answer is the interop profile's flat reply
 //! (agent-action-capsule `spec/interop-profile-v0.md` §6.2,
@@ -663,12 +666,17 @@ fn answer_from(
     let covered =
         leaf_count(index.chain[at].record.mmr_size).map_err(|_| Reason::CoverageUnsatisfiable)?;
     let records: Vec<u64> = if carries_records(req) {
+        // A keyed subject's matches, without the records that never leave.
+        let keyed = match &req.subject {
+            Subject::Correlation(id) => index.leaving(index.correlated(id)),
+            Subject::Exchange(half) => index.leaving(index.citing(half)),
+            _ => Vec::new(),
+        };
         let count = match &req.subject {
             Subject::Range(a, b) => b.saturating_sub(*a).saturating_add(1),
             Subject::FullHistory => covered,
             Subject::Record(_) => 1,
-            Subject::Correlation(id) => index.leaving(index.correlated(id)).len() as u64,
-            Subject::Exchange(half) => index.leaving(index.citing(half)).len() as u64,
+            Subject::Correlation(_) | Subject::Exchange(_) => keyed.len() as u64,
             Subject::Checkpoints => 0,
         };
         if count > MAX_ANSWER_RECORDS {
@@ -683,8 +691,7 @@ fn answer_from(
                 Some(i) if i >= covered => return Err(Reason::CoverageUnsatisfiable),
                 found => found.into_iter().collect(),
             },
-            Subject::Correlation(id) => index.leaving(index.correlated(id)),
-            Subject::Exchange(half) => index.leaving(index.citing(half)),
+            Subject::Correlation(_) | Subject::Exchange(_) => keyed,
             Subject::Checkpoints => Vec::new(),
         }
         .into_iter()
@@ -3800,53 +3807,82 @@ pub(crate) mod tests {
     /// set (evidencebook#206 row 4, Mesh-LLM/capsules-plugin#161): asked by
     /// `correlation` or `exchange` over a key it sits under, the answer is the
     /// one a node without it gives, with the same records under the same
-    /// checkpoint, never a refusal that says something is withheld there. In
-    /// the corpus, records 0 and 4 carry nonce `n-1` and one record under
-    /// checkpoint 0 cites the half; record 20, under checkpoint 1, becomes a
-    /// deal report that carries both.
+    /// checkpoint, or the same `no_such_subject` when it is the key's only
+    /// match, never a refusal that says something is withheld there. In the
+    /// corpus, records 0 and 4 carry nonce `n-1` and name node-a, and one
+    /// record under checkpoint 0 cites the half; record 20, under checkpoint
+    /// 1, becomes a deal report that carries both, plus a nonce and a half no
+    /// other record has.
     #[test]
     fn a_record_that_never_leaves_changes_no_keyed_answer() {
         let half = hex::encode(Sha256::digest(b"the counterparty's own half"));
+        let only_half = hex::encode(Sha256::digest(b"a half only the report cites"));
         let ledger = corpus_ledger();
         let mut with_report = ledger.clone();
         with_report[20] = sealed(json!({
             "action_id": "capsulectl-deal-report",
             "effect": {"status": "confirmed"},
             "nonce": "n-1",
-            "references": [{"citation_purpose": "counterparty_half", "digest": half}],
+            "client_nonce": "n-only",
+            "references": [
+                {"citation_purpose": "counterparty_half", "digest": half},
+                {"citation_purpose": "counterparty_half", "digest": only_half},
+            ],
         }));
         assert!(crate::evidence_log::never_leaves(&with_report[20]));
-        let requests = [
-            (
-                "correlation",
-                json!({"subject": {"correlation": "n-1"}, "coverage": {"min_freshness": 1}}),
-            ),
-            (
-                "exchange",
-                json!({"subject": {"exchange": half}, "coverage": {"expected_pin": half}}),
-            ),
-        ];
-        let answer = |ledger: &[Value], request: &Value| {
+        let by = |subject: Value| match &subject["exchange"] {
+            Value::String(h) => json!({"subject": subject, "coverage": {"expected_pin": h}}),
+            _ => json!({"subject": subject, "coverage": {"min_freshness": 1}}),
+        };
+        let outcome = |ledger: &[Value], request: &Value, asker: &str, segments: &str| {
             let dir = node(ledger);
             let anchors: Vec<String> = corpus_checkpoints(ledger, &key())
                 .iter()
                 .map(|cp| cp.anchor())
                 .collect();
-            let bytes = signed_by("node-y", request);
-            let Outcome::Answered { wire, .. } = ask(dir.path(), &bytes, "peers") else {
-                panic!("{request}: not answered");
-            };
-            let v = verify_response(&bytes, &wire, &key().verifying_key(), &Default::default());
-            assert_eq!(v["state"], json!("artifact"), "{v}");
-            let at = anchors.iter().position(|a| json!(a) == v["anchor"]);
-            (at, v["records"].clone())
+            let bytes = signed_by(asker, request);
+            match ask(dir.path(), &bytes, segments) {
+                Outcome::Answered { wire, .. } => {
+                    let v =
+                        verify_response(&bytes, &wire, &key().verifying_key(), &Default::default());
+                    assert_eq!(v["state"], json!("artifact"), "{v}");
+                    let at = anchors.iter().position(|a| json!(a) == v["anchor"]);
+                    Ok((at, v["records"].clone()))
+                }
+                other => Err(refused(&other)),
+            }
         };
-        for (what, request) in &requests {
+        let answered = [
+            (by(json!({"correlation": "n-1"})), "node-y", "peers"),
+            (by(json!({"exchange": half})), "node-y", "peers"),
+            (
+                by(json!({"correlation": "n-1"})),
+                "node-a",
+                "counterparties",
+            ),
+        ];
+        for (request, asker, segments) in &answered {
+            let without = outcome(&ledger, request, asker, segments);
+            assert!(without.is_ok(), "{request} {segments}: {without:?}");
             assert_eq!(
-                answer(&with_report, request),
-                answer(&ledger, request),
-                "{what}"
+                outcome(&with_report, request, asker, segments),
+                without,
+                "{request} {segments}"
             );
+        }
+        for request in [
+            by(json!({"correlation": "n-only"})),
+            by(json!({"exchange": only_half})),
+        ] {
+            for (asker, segments) in [("node-y", "peers"), ("node-a", "counterparties")] {
+                for (what, ledger) in [("with", &with_report), ("without", &ledger)] {
+                    assert_eq!(
+                        outcome(ledger, &request, asker, segments),
+                        Err(Some(Reason::NoSuchSubject)),
+                        "{request} {segments} {what} the report"
+                    );
+                }
+            }
         }
     }
 
