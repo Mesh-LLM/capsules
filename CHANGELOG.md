@@ -23,11 +23,13 @@
 
 ### Fixed
 
-- **An `exchange` request is answered to the node that sent the half it asks about.** The
-  receiver's citing record names its sender only in `received_half`, and the evidence index read
-  a counterparty only from `x-mesh-poc-v1`, so under `share_history_segments = counterparties` it
-  was refused `not_authorized` to every asker, the sender included (loop step 07). The index now
-  reads `received_half` (`received_from_node_id`, else `received_from`). Under
+- **An `exchange` request is answered to the node whose half it asks about.** The receiver's
+  citing record carries no `x-mesh-poc-v1` block, so the evidence index named no counterparty for
+  it, and under `share_history_segments = counterparties` it was refused `not_authorized` to every
+  asker, the half's own sender included (loop step 07). A citing record now goes to a request
+  signed under the key its cited half verified under (`received_half.sender_key_id`, sealed for a
+  push accepted on that key). The id a push names (`received_from`) is the pusher's own word and
+  grants nothing. Under
   `evidence-interop/1`, `policy_check` reads a policy refusal of record bodies the pinned policy
   gives no one (`range`, `full_history`, or any record subject while `share_history_segments` is
   `off`) as `MATCH` instead of `NOT_CHECKED`. Mesh-LLM/capsules-plugin#172.

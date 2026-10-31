@@ -353,6 +353,7 @@ fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Ask
         Err(reason) => return refuse(reason, kind),
     };
     let principal_nodes = principal.as_ref().map_or(&[][..], |p| &p.node_ids[..]);
+    let principal_key = principal.as_ref().map(|p| p.key_id.as_str());
 
     let key_id = hex::encode(responder.signing_key.verifying_key().to_bytes());
     let built = evidence_log::with_index(responder.ledger_dir, &key_id, |index| {
@@ -361,6 +362,7 @@ fn answer_inner(request_bytes: &[u8], responder: &Responder<'_>, asker: &mut Ask
             &req,
             request_bytes,
             principal_nodes,
+            principal_key,
             responder,
             &view,
         ))
@@ -586,6 +588,7 @@ fn answer_from(
     req: &Request,
     request_bytes: &[u8],
     principal: &[String],
+    principal_key: Option<&str>,
     responder: &Responder<'_>,
     view: &LogView<'_>,
 ) -> Result<Value, Reason> {
@@ -694,7 +697,13 @@ fn answer_from(
 
     // 9. Who may have these records.
     if policy_gate_applies()
-        && !may_serve_all(index, &records, principal, responder.history_segments)
+        && !may_serve_all_to(
+            index,
+            &records,
+            principal,
+            principal_key,
+            responder.history_segments,
+        )
     {
         return Err(Reason::NotAuthorized);
     }
@@ -817,6 +826,20 @@ fn may_serve_all(
     principal: &[String],
     history_segments: &str,
 ) -> bool {
+    may_serve_all_to(index, records, principal, None, history_segments)
+}
+
+/// [`may_serve_all`], for a request signed under `principal_key`: under
+/// `counterparties` a citing record also goes to the holder of the key its
+/// cited half verified under (`Leaf::counterparty_key`), the other side of
+/// that exchange, whatever id it asks under (#172).
+fn may_serve_all_to(
+    index: &LedgerIndex,
+    records: &[u64],
+    principal: &[String],
+    principal_key: Option<&str>,
+    history_segments: &str,
+) -> bool {
     if records.is_empty() {
         return true;
     }
@@ -831,7 +854,10 @@ fn may_serve_all(
         !leaf.never_leaves
             && proven
             && (history_segments == "peers"
-                || (!leaf.padding && names(principal, leaf.counterparty.as_deref())))
+                || (!leaf.padding
+                    && (names(principal, leaf.counterparty.as_deref())
+                        || principal_key
+                            .is_some_and(|key| leaf.counterparty_key.as_deref() == Some(key)))))
     })
 }
 
@@ -3678,11 +3704,13 @@ pub(crate) mod tests {
         ));
     }
 
-    /// An `exchange` request about a half this node holds from node-b, cited
-    /// by the record `emit_citing_record` seals (no `x-mesh-poc-v1` block),
-    /// is answered to node-b under `counterparties`, under either profile,
-    /// and refused `not_authorized` to node-a (Mesh-LLM/capsules-plugin#172,
-    /// loop step 07). In the corpus that record cites `foreign_half()`.
+    /// An `exchange` request about a half this node accepted on node-b's
+    /// key, cited by the record `emit_citing_record` seals (no
+    /// `x-mesh-poc-v1` block), is answered to node-b under `counterparties`,
+    /// under either profile, and refused `not_authorized` to node-a, and to
+    /// whoever the push named itself (Mesh-LLM/capsules-plugin#172, loop step
+    /// 07). In the corpus that record cites `foreign_half()`, pushed under
+    /// the id `node-pushed-under`.
     #[test]
     fn an_exchange_goes_to_the_node_that_sent_the_half_it_asks_about() {
         let half = crate::evidence_request_parity::foreign_half();
@@ -3701,15 +3729,27 @@ pub(crate) mod tests {
             };
             let v = verify_response(&bytes, &wire, &key().verifying_key(), &Default::default());
             assert_eq!(v["state"], json!("artifact"), "{profile:?}: {v}");
-            assert_eq!(
-                refused(&ask_with(
-                    dir.path(),
-                    &signed_by("node-a", &request),
-                    "counterparties",
-                    false
-                )),
-                Some(Reason::NotAuthorized),
-                "{profile:?}: node-a sent no such half"
+            for other in ["node-a", "node-z"] {
+                assert_eq!(
+                    refused(&ask_with(
+                        dir.path(),
+                        &signed_by(other, &request),
+                        "counterparties",
+                        false
+                    )),
+                    Some(Reason::NotAuthorized),
+                    "{profile:?}: {other} holds no key the half verified under"
+                );
+            }
+            let pushed_under = ask_with(
+                dir.path(),
+                &signed_by("node-pushed-under", &request),
+                "counterparties",
+                false,
+            );
+            assert!(
+                matches!(pushed_under, Outcome::Refused { .. }),
+                "{profile:?}: the id a push names is no one's: {pushed_under:?}"
             );
         }
     }
