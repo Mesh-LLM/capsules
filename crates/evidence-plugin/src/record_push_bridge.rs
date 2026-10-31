@@ -265,7 +265,7 @@ fn accepted(response: &serde_json::Value) -> bool {
 /// divergent). The peer's next push retries the seal; a bare half is stored
 /// again, a bundle is answered from what is held, and the citing dedup seals
 /// at most one record.
-pub(crate) const SEAL_FAILED_REFUSAL_REASON: &str = "citing_record_seal_failed";
+const SEAL_FAILED_REFUSAL_REASON: &str = "citing_record_seal_failed";
 
 fn seal_failed_refusal() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({ "reason": SEAL_FAILED_REFUSAL_REASON }))
@@ -930,9 +930,7 @@ async fn seal_inclusion_citing_record_for_push(
 /// (Mesh-LLM/capsules-plugin#113).
 ///
 /// Returns the receiver's acceptance: for a bundle it held, the inclusion it
-/// verified (`record_push_receive`'s reply). A refusal is the error
-/// [`crate::leg_catch_up::Refused`], so it can be told from a push that
-/// never arrived.
+/// verified (`record_push_receive`'s reply).
 pub async fn push_capsule_to_peer(
     context: &mut PluginContext<'_>,
     peer_id: &str,
@@ -962,8 +960,7 @@ pub async fn push_capsule_to_peer(
         None => send_push(context, peer_id, self_peer_id, capsule_json).await?,
     };
     if response.get("reason").is_some() {
-        // Every caller logs the peer beside the error.
-        return Err(crate::leg_catch_up::Refused(response).into());
+        anyhow::bail!("peer {peer_id} refused record-push: {response}");
     }
     Ok(response)
 }

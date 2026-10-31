@@ -11,10 +11,10 @@
 //! the verified inclusion only for a bundle. The outcome of a push of a terms
 //! leg is recorded in [`OUTCOMES_FILE`] ([`record`]): `covered`, here and when
 //! a new leg is pushed; and, here only, `no_inclusion` (the receiver took the
-//! leg but predates bundles, so it was sent bare) or `refused` (a final
-//! refusal). Only `covered` means covered, but each is final: a leg with an
-//! outcome is never pushed again, so an older receiver is not sent the bare
-//! leg on every start. Every own terms leg with none is due: one pushed bare
+//! leg but predates bundles, so it was sent bare). Only `covered` means
+//! covered, but both are final: a leg with an outcome is never pushed again,
+//! so an older receiver is not sent the bare leg on every start. A push the
+//! receiver refused records nothing and is retried at the next start. Every own terms leg with none is due: one pushed bare
 //! by a release before the fix, or one whose push failed and expired from the
 //! in-memory retry queue ([`crate::settlement_legs`]).
 //!
@@ -83,19 +83,6 @@ impl Outcome {
         }
     }
 }
-
-/// A receiver's refusal of a push, the error `record_push_bridge` returns
-/// for one, so a caller can tell it from a push that never arrived.
-#[derive(Debug)]
-pub struct Refused(pub Value);
-
-impl std::fmt::Display for Refused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "refused record-push: {}", self.0)
-    }
-}
-
-impl std::error::Error for Refused {}
 
 /// One writer of [`OUTCOMES_FILE`] at a time: the catch-up and new pushes
 /// both append.
@@ -581,16 +568,13 @@ mod tests {
                 .clone()
         };
         let refusal = |reason: &str| -> anyhow::Result<Value> {
-            Err(anyhow::Error::new(Refused(json!({"reason": reason}))))
+            Err(anyhow::anyhow!("peer p refused record-push: {reason}"))
         };
         let pushes = [
             ("older", Ok(json!({"status": "received"}))),
             ("refused", refusal("checkpoint_stale")),
             ("unreached", Err(anyhow::anyhow!("could not reach peer p"))),
-            (
-                "retry",
-                refusal(crate::record_push_bridge::SEAL_FAILED_REFUSAL_REASON),
-            ),
+            ("retry", refusal("citing_record_seal_failed")),
         ];
         let mut ended = Vec::new();
         for (id, pushed) in &pushes {
