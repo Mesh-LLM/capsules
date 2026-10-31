@@ -223,7 +223,7 @@ fn read_pending(data_dir: &Path) -> Option<PendingNewHistory> {
     serde_json::from_slice(&raw).ok()
 }
 
-fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, bytes)?;
     fs::File::open(&tmp)?.sync_all()?;

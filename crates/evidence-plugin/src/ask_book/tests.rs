@@ -31,6 +31,11 @@ fn digest_of(request: &Value) -> String {
     ))
 }
 
+/// `answer` as the bytes a peer sent.
+fn reply(answer: &Value) -> Vec<u8> {
+    serde_json::to_vec(answer).unwrap()
+}
+
 /// The book's records, as `(record id, header)`, in ledger order.
 fn records(capsules: &CapsuleState) -> Vec<(String, Map<String, Value>)> {
     AskBook::open(capsules, ASKED_AT).records
@@ -204,7 +209,7 @@ fn a_reply_in_the_window_is_the_response_and_forecloses_an_absence() {
         &capsules,
         &asked.record_id,
         &digest_of(&sent),
-        &answer,
+        &reply(&answer),
         &verification,
         "2026-10-29T12:00:02Z",
     )
@@ -214,7 +219,12 @@ fn a_reply_in_the_window_is_the_response_and_forecloses_an_absence() {
     assert_eq!(cites(&header), std::slice::from_ref(&asked.record_id));
     assert_eq!(
         header["statement"],
-        json!({"outcome": "artifact", "request_digest": digest_of(&sent), "verification": verification})
+        json!({
+            "outcome": "artifact",
+            "request_digest": digest_of(&sent),
+            "response_digest": hex::encode(Sha256::digest(reply(&answer))),
+            "verification": verification,
+        })
     );
 
     let absence = record_absence(
@@ -243,11 +253,15 @@ fn a_late_reply_never_replaces_the_absence() {
         &capsules,
         &asked.record_id,
         &digest_of(&sent),
-        &json!({"reason": "policy_declined"}),
+        &reply(&json!({"reason": "policy_declined"})),
         &json!({"state": "refusal", "reason": "policy_declined"}),
         "2026-10-29T12:01:05Z",
     );
     assert!(matches!(late, Err(AskError::Invalid(_))), "{late:?}");
+    assert!(
+        !capsules.ledger_dir().join(REPLIES_DIR).exists(),
+        "a refused reply is not kept"
+    );
     let kinds: Vec<_> = records(&capsules)
         .into_iter()
         .map(|(_, h)| h["record_type"].clone())
@@ -262,7 +276,7 @@ fn a_response_cites_only_a_recorded_request() {
         &capsules,
         &"0".repeat(64),
         "d",
-        &json!({}),
+        &reply(&json!({})),
         &json!({"state": "artifact"}),
         ASKED_AT,
     );
@@ -309,7 +323,7 @@ fn at_start_the_absences_owed_are_sealed_once_and_open_windows_returned() {
         &capsules,
         &answered.record_id,
         "d",
-        &json!({"artifact": "AAAA"}),
+        &reply(&json!({"artifact": "AAAA"})),
         &json!({"state": "artifact"}),
         "2026-10-29T12:00:01Z",
     )
@@ -374,7 +388,7 @@ fn a_signed_refusal_is_checked_against_the_commitment_the_ask_recorded() {
         &capsules,
         &asked.record_id,
         &digest_of(&sent),
-        &json!({"reason": "no_such_subject"}),
+        &reply(&json!({"reason": "no_such_subject"})),
         &json!({"state": "refusal", "reason": "no_such_subject"}),
         "2026-10-29T12:00:02Z",
     )
@@ -394,10 +408,144 @@ fn an_artifact_carries_no_policy_check() {
         &capsules,
         &asked.record_id,
         &digest_of(&sent),
-        &json!({"artifact": "AAAA"}),
+        &reply(&json!({"artifact": "AAAA"})),
         &json!({"state": "artifact"}),
         "2026-10-29T12:00:02Z",
     )
     .unwrap();
     assert_eq!(verification, json!({"state": "artifact"}));
+}
+
+/// The reply as a peer sent it: not canonical JSON, so keeping it "as read"
+/// is visible.
+const SENT_REPLY: &[u8] = b"{ \"reason\" : \"policy_declined\",\n  \"sig\": \"s\" }";
+
+fn answered(capsules: &CapsuleState) -> String {
+    let sent = request(None);
+    let asked = record_request(capsules, &sent, PEER, None, ASKED_AT).unwrap();
+    record_response(
+        capsules,
+        &asked.record_id,
+        &digest_of(&sent),
+        SENT_REPLY,
+        &json!({"state": "refusal", "reason": "policy_declined"}),
+        "2026-10-29T12:00:02Z",
+    )
+    .unwrap()
+    .0
+    .record_id
+}
+
+#[test]
+fn the_reply_is_kept_as_read_under_the_digest_its_response_seals() {
+    let (capsules, _dir) = state();
+    let response = answered(&capsules);
+    let digest = hex::encode(Sha256::digest(SENT_REPLY));
+    assert_eq!(
+        header_of(&capsules, &response)["statement"]["response_digest"],
+        json!(digest)
+    );
+    assert_eq!(
+        std::fs::read(capsules.ledger_dir().join(REPLIES_DIR).join(&digest)).unwrap(),
+        SENT_REPLY
+    );
+    assert_eq!(
+        kept_reply(capsules.ledger_dir(), &response).unwrap(),
+        SENT_REPLY
+    );
+    // The record that seals the digest is one of this book's, which never
+    // leaves this node in an answer.
+    let record = crate::evidence_panes::read_capsule_records(capsules.ledger_dir())
+        .into_iter()
+        .find(|r| r["capsule_id"] == json!(response))
+        .unwrap();
+    assert!(crate::evidence_log::never_leaves(&record));
+}
+
+#[test]
+fn a_kept_reply_is_read_only_for_a_response_with_its_bytes_intact() {
+    let (capsules, _dir) = state();
+    let response = answered(&capsules);
+    let ledger = capsules.ledger_dir();
+    let kept = ledger
+        .join(REPLIES_DIR)
+        .join(hex::encode(Sha256::digest(SENT_REPLY)));
+
+    let request_record = records(&capsules)[0].0.clone();
+    let not_a_response = kept_reply(ledger, &request_record);
+    assert!(
+        matches!(&not_a_response, Err(AskError::NotFound(m)) if m.contains(&request_record)),
+        "{not_a_response:?}"
+    );
+
+    std::fs::write(&kept, b"{}").unwrap();
+    let altered = kept_reply(ledger, &response);
+    assert!(
+        matches!(&altered, Err(AskError::Corrupt(m)) if m.contains(&response)),
+        "{altered:?}"
+    );
+
+    std::fs::remove_file(&kept).unwrap();
+    let missing = kept_reply(ledger, &response);
+    assert!(
+        matches!(&missing, Err(AskError::Corrupt(m)) if m.contains(&response)),
+        "{missing:?}"
+    );
+}
+
+#[test]
+fn a_response_sealed_before_replies_were_kept_is_refused_by_name() {
+    let (capsules, _dir) = state();
+    let sent = request(None);
+    let asked = record_request(&capsules, &sent, PEER, None, ASKED_AT).unwrap();
+    // The statement `record_response` sealed before it kept replies.
+    let old = AskBook::open(&capsules, "2026-10-29T12:00:02Z")
+        .seal(&Entry {
+            record_type: record_types::RESPONSE.into(),
+            epistemic_type: EpistemicType::ObservedEvent,
+            links: vec![Link {
+                link_type: LinkType::Cites,
+                target: asked.record_id,
+            }],
+            statement: json!({
+                "outcome": "refusal",
+                "request_digest": digest_of(&sent),
+                "verification": {"state": "refusal"},
+            }),
+        })
+        .unwrap();
+    let refused = kept_reply(capsules.ledger_dir(), &old.record_id);
+    assert!(
+        matches!(&refused, Err(AskError::Invalid(m)) if m.contains(&old.record_id)),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn identical_bytes_already_kept_are_not_rewritten_or_claimed() {
+    let dir = tempfile::tempdir().unwrap();
+    let digest = hex::encode(Sha256::digest(SENT_REPLY));
+    let first = keep_reply(dir.path(), &digest, SENT_REPLY).unwrap();
+    assert_eq!(first, Some(dir.path().join(REPLIES_DIR).join(&digest)));
+    // A second keep of the same bytes created nothing, so a failed seal
+    // after it removes nothing another record relies on.
+    assert_eq!(keep_reply(dir.path(), &digest, SENT_REPLY).unwrap(), None);
+}
+
+#[test]
+fn a_reply_that_is_not_json_is_neither_kept_nor_recorded() {
+    let (capsules, _dir) = state();
+    let sent = request(None);
+    let asked = record_request(&capsules, &sent, PEER, None, ASKED_AT).unwrap();
+    let refused = record_response(
+        &capsules,
+        &asked.record_id,
+        &digest_of(&sent),
+        b"not json",
+        &json!({"state": "not_evidence"}),
+        "2026-10-29T12:00:02Z",
+    );
+    assert!(matches!(refused, Err(AskError::Invalid(_))), "{refused:?}");
+    assert!(!capsules.ledger_dir().join(REPLIES_DIR).exists());
+    assert_eq!(records(&capsules).len(), 1);
 }

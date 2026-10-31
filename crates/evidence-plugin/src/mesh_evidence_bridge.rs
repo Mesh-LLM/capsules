@@ -570,7 +570,7 @@ async fn send_once(
             .connect_mesh_stream(open_request)
             .await
             .map_err(|error| SendError::NotOpened(error.to_string()))?;
-        let answer = read_answer(
+        let (_, answer) = read_answer(
             tokio::time::timeout(wait, write_and_read(stream, request_bytes.clone())).await,
         )?;
         return Ok(Answered {
@@ -629,14 +629,17 @@ async fn write_and_read(stream: LocalStream, sent: Vec<u8>) -> std::io::Result<V
     read_to_end_bounded(&mut read_half, "peer evidence-request response").await
 }
 
-/// What a bounded read came to: the peer's JSON, or why there is none.
+/// What a bounded read came to: the peer's bytes as read and their JSON,
+/// or why there is none.
 fn read_answer(
     result: Result<std::io::Result<Vec<u8>>, tokio::time::error::Elapsed>,
-) -> Result<serde_json::Value, SendError> {
+) -> Result<(Vec<u8>, serde_json::Value), SendError> {
     let bytes = result
         .map_err(|_| SendError::NoAnswer(String::new()))?
         .map_err(|error| SendError::NoAnswer(format!(": {error}")))?;
-    serde_json::from_slice(&bytes).map_err(|error| SendError::Malformed(error.to_string()))
+    let answer =
+        serde_json::from_slice(&bytes).map_err(|error| SendError::Malformed(error.to_string()))?;
+    Ok((bytes, answer))
 }
 
 /// The answer to a recorded ask, or its error, as [`settle_ask`] hands it
@@ -645,7 +648,8 @@ type Settled = Result<(serde_json::Value, serde_json::Value), SendError>;
 
 /// Read the reply to the recorded `asked` from `exchange` until the window
 /// closes at `closes_at`. A reply is checked by `verify` (under the peer's
-/// announced key, [`verify_announced`]) and sealed as the response; none (or one that is not JSON) is sealed as
+/// announced key, [`verify_announced`]) and sealed as the response, its
+/// bytes kept with it (`ask_book::record_response`); none (or one that is not JSON) is sealed as
 /// the absence once the window has closed. The caller hears through `tx`,
 /// if it is still listening.
 async fn settle_ask(
@@ -667,13 +671,13 @@ async fn settle_ask(
         Err(SendError::NoAnswer(" by the window's close".into()))
     };
     match read {
-        Ok(answer) => {
+        Ok((reply, answer)) => {
             let checked = verify(&sent, &answer);
             let verification = match crate::ask_book::record_response(
                 &capsules,
                 &asked.record_id,
                 &evidence_request::digest::request_digest(&sent),
-                &answer,
+                &reply,
                 &checked,
                 &crate::evidence_answer::now_utc(),
             ) {
@@ -1537,6 +1541,16 @@ mod tests {
             .find(|e| e["record_type"] == "evidence_response")
             .expect("the response record");
         assert_eq!(recorded["statement"]["verification"], verification);
+        let response_record = crate::evidence_panes::read_capsule_records(capsules.ledger_dir())
+            .into_iter()
+            .rev()
+            .find_map(|r| r["capsule_id"].as_str().map(str::to_string))
+            .expect("a record");
+        assert_eq!(
+            crate::ask_book::kept_reply(capsules.ledger_dir(), &response_record).unwrap(),
+            br#"{"reason":"no_such_subject"}"#,
+            "the reply's bytes, as read, are kept with its response"
+        );
     }
 
     #[tokio::test]
