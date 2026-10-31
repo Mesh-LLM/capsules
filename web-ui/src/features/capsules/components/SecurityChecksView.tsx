@@ -66,7 +66,7 @@ function ChecksCell({
 }: {
   cell: ChecksSideCell
   propertyKey: string
-  factKey?: 'binding' | 'authority'
+  factKey?: 'binding'
   /** False when this sentence is already the column note (said once). */
   showDetail?: boolean
 }) {
@@ -249,11 +249,7 @@ function CheckGroupSection({
         ? group.lines.map((line) => (
             <ChecksLine
               highlighted={line.propertyKey !== null && highlightedPropertyKey === line.propertyKey}
-              id={
-                line.propertyKey !== null && line.id !== 'identity_authority:authority'
-                  ? checkRowDomId(exchangeKey, line.propertyKey)
-                  : undefined
-              }
+              id={line.propertyKey !== null ? checkRowDomId(exchangeKey, line.propertyKey) : undefined}
               key={line.id}
               mark={line.mark}
               name={line.name}

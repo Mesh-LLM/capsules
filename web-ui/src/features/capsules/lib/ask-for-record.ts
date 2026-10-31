@@ -136,15 +136,13 @@ export function askTarget(record: CapsuleRecord | Record<string, unknown> | null
   return peerId && (nonce || digests) ? { peerId, nonce, digests } : null
 }
 
-/** The row states where asking can help: their record hasn't arrived, or
- *  they answered with a statement that asking again may change. */
+/** The row states where asking can help: their record hasn't arrived. A
+ *  declined or no-record row keeps no record ask (product ruling). */
 const ASKABLE_KINDS: ReadonlySet<RightCellStateKind> = new Set([
   'open_not_held',
   'open_not_given',
   'open_not_asked',
-  'open_asked',
-  'open_refused',
-  'open_absent'
+  'open_asked'
 ])
 
 /** Why one of the row's two asks can't be sent, or `null` when it can. */
@@ -191,10 +189,7 @@ export function rowAskControls(input: RowAskInput): { record: RowAskControl; his
   if (input.recordAsk?.kind === 'asking') {
     record = { label: ASKING_LABEL, disabledReason: 'Waiting for their reply.' }
   } else {
-    const label =
-      input.recordAsk || input.kind === 'open_asked' || input.kind === 'open_refused' || input.kind === 'open_absent'
-        ? ASK_RECORD_AGAIN_LABEL
-        : ASK_RECORD_LABEL
+    const label = input.recordAsk || input.kind === 'open_asked' ? ASK_RECORD_AGAIN_LABEL : ASK_RECORD_LABEL
     const settled =
       input.kind === 'closed'
         ? 'Their record is already here and checks out.'

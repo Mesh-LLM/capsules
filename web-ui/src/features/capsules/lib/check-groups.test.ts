@@ -92,4 +92,9 @@ describe('buildCheckGroups — the referee line names a machine only when a row 
     expect(refereeOf(pair('peer-2'), pair('peer-3'))).toMatchObject(none)
     expect(refereeOf(pair('peer-2'))).toMatchObject(none)
   })
+
+  it('a row carrying no node id at all reads not checked, never agreed', () => {
+    const bare = { mine: {}, theirs: {}, twin: (pair('x') as never as { twin: unknown }).twin } as never
+    expect(refereeOf(bare, pair('peer-9'))).toMatchObject({ text: 'not checked', mark: 'none' })
+  })
 })

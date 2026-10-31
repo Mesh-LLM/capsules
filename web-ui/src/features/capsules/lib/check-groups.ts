@@ -9,7 +9,8 @@
 // holds sealed); no score or grade is produced.
 import type { PaneCRow } from '@/features/capsules/api/sidecarTypes'
 import type { ChecksRow, ChecksSideCell, CommitsToRow } from '@/features/capsules/lib/security-checks-view'
-import { TEE_COPY } from '@/features/capsules/lib/security-checks-view'
+import { TEE_COPY, recordServedBy } from '@/features/capsules/lib/security-checks-view'
+import type { CapsuleRecord } from '@/features/capsules/api/types'
 import { askedVerdict, rowNamesNode } from '@/features/capsules/lib/twin-bracket'
 
 /** Where a result came from: redone in this browser, taken from the node,
@@ -25,7 +26,7 @@ export const CHECK_MARK_GLYPH: Record<CheckMark, string> = {
 }
 
 export type LineSide =
-  | { kind: 'cell'; cell: ChecksSideCell; propertyKey: string; factKey?: 'binding' | 'authority' }
+  | { kind: 'cell'; cell: ChecksSideCell; propertyKey: string; factKey?: 'binding' }
   | { kind: 'text'; text: string; mark: CheckMark }
   /** A 64-hex digest: short in the readable view, whole in the raw one. */
   | { kind: 'digest'; value: string; compared?: { text: 'same' | 'differs'; mark: CheckMark } }
@@ -125,6 +126,14 @@ function captureMark(state: string | undefined): CheckMark {
   return 'none'
 }
 
+/** Whether the row carries any node id the ruling's party could be matched to. */
+function rowHasNodeId(row: PaneCRow): boolean {
+  const own = row.mine.record as CapsuleRecord | undefined
+  return [row.counterparty, row.theirs.peer_id, row.theirs.received_from, own ? recordServedBy(own) : null].some(
+    (id) => typeof id === 'string' && id.length > 0
+  )
+}
+
 function refereeLine(row: PaneCRow, otherRow?: PaneCRow): CheckLine {
   const asked = askedVerdict([row])
   let yours: LineSide
@@ -135,7 +144,8 @@ function refereeLine(row: PaneCRow, otherRow?: PaneCRow): CheckLine {
     // names that node, and agreed only when the other row of the pair does;
     // a party neither row carries marks no one.
     const party = asked.verdict.party
-    if (rowNamesNode(row, [], party)) yours = { kind: 'text', text: 'wrong answer', mark: 'failed' }
+    if (!rowHasNodeId(row)) yours = { kind: 'text', text: 'not checked', mark: 'none' }
+    else if (rowNamesNode(row, [], party)) yours = { kind: 'text', text: 'wrong answer', mark: 'failed' }
     else if (otherRow && rowNamesNode(otherRow, [], party)) yours = { kind: 'text', text: 'agreed', mark: 'node' }
     else yours = { kind: 'text', text: 'contradicted · not matched to a machine', mark: 'none' }
   } else {
