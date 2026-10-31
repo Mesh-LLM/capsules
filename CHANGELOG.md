@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.7
+
 ### Added
 
 - **Admission's price rule (#105).** A peer the admission lists admit is then decided by
