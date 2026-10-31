@@ -166,7 +166,7 @@ evidence-request = { version = "=0.3.0", features = ["cll", "receipt", "acceptan
 # digest (exchange corroboration). Receipts are checked with
 # agent-action-capsule 0.5's witness verifier. Same checkpointed-local-log
 # and evidence-request lines as above.
-evidencebook = { version = "0.0.10", features = ["deal"] }
+evidencebook = { version = "0.0.11", features = ["deal"] }
 # Class 1 verification of a received half (capsule-emit main moved it here).
 agent-action-capsule = { version = "0.4.1", features = ["strict"] }
 # The witness's own record of this log (`witness_status`): one blocking GET,
@@ -231,9 +231,3 @@ opt-level = 3
 # carries it; then this goes and the requirement above moves to that release.
 [patch.crates-io]
 mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "a39211e78f3dd73cf9a94b08417c0da17e5fa5d9" }
-# evidencebook 0.0.10 requires evidence-request ^0.2; its move to 0.3 and the
-# envelope signed under the profile the request names (`answer::build`,
-# evidencebook#226) are in no published evidencebook yet. Taken from #226's
-# merge commit until a release carries it, so the graph keeps one
-# evidence-request (`cargo tree -d` shows none twice).
-evidencebook = { git = "https://github.com/action-state-group/evidencebook", rev = "36256ca8b5d473a51a57c2b6206ebf67afd0fc1c" }

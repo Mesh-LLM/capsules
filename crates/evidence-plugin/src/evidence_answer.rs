@@ -523,12 +523,15 @@ fn requester(
                         return Ok(None);
                     }
                     if v1 {
-                        // The audience cannot be checked before this node
-                        // knows its own id: a limit of its own, not the
-                        // request's.
+                        // A limit of this node's own, not the request's: the
+                        // audience cannot be checked before this node knows
+                        // its own id, or the key's nonces fill its replay
+                        // cache.
                         let own_id_unknown = responder.node_id.is_none()
                             && matches!(failure, requester_auth::Failure::AudienceMismatch { .. });
-                        return Err(if own_id_unknown {
+                        let full =
+                            matches!(failure, requester_auth::Failure::ReplayCacheFull { .. });
+                        return Err(if own_id_unknown || full {
                             Reason::CapacityExceeded
                         } else {
                             Reason::RequestUnauthenticated
@@ -912,6 +915,19 @@ pub fn now_utc() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+/// `reason`, when the profile the request octets `sent` asked for registers
+/// it (IP v1 §6.3): evidence-interop/0 the eight ER -01 tokens, /1 the ten of
+/// ER -02. A refusal carries no profile, so its reason is read by its
+/// request's.
+pub(crate) fn registered_under_request(sent: &[u8], reason: Reason) -> Result<Reason, String> {
+    let profile = evidence_artifact::profile_of(sent);
+    if evidence_request::envelope::refusal_reasons(&profile).contains(&reason) {
+        Ok(reason)
+    } else {
+        Err(format!("{reason} is not a refusal reason under {profile}"))
+    }
+}
+
 /// A signed refusal of `request_bytes`, given without reading the ledger:
 /// this node is already answering as many requests as it takes at once.
 /// `capacity_exceeded` to an `evidence-interop/1` request, `policy_declined`
@@ -965,9 +981,12 @@ pub fn verify_response(
     let not_evidence = |why: String| json!({"state": "not_evidence", "why": why});
     let digest = request_digest(sent);
     if response.get("reason").is_some() {
-        return match refusal::verify_for(response, key, &digest) {
+        return match refusal::verify_for(response, key, &digest)
+            .map_err(|e| e.to_string())
+            .and_then(|reason| registered_under_request(sent, reason))
+        {
             Ok(reason) => json!({"state": "refusal", "reason": reason.token()}),
-            Err(e) => not_evidence(e.to_string()),
+            Err(why) => not_evidence(why),
         };
     }
     let Ok(req) = request::parse_json(sent) else {
@@ -1461,6 +1480,43 @@ pub(crate) mod tests {
                 Ok(want)
             );
         }
+    }
+
+    /// A refusal is read by its request's profile (IP v1 §6.3): an -02 reason
+    /// answering a /0 or profile-less request is not a conforming refusal;
+    /// answering a /1 request it is.
+    #[test]
+    fn the_requester_reads_a_refusal_by_its_requests_profile() {
+        let key = key();
+        let signed = |sent: &[u8], reason: Reason| -> Value {
+            let r = refusal::sign(&request_digest(sent), reason, NOW, &key).unwrap();
+            serde_json::to_value(r.to_json()).unwrap()
+        };
+        let v0 = br#"{"subject":{"checkpoints":null},"coverage":{"min_freshness":1}}"#;
+        let v1 = br#"{"subject":{"checkpoints":null},"coverage":{"min_freshness":1},"profile":"evidence-interop/1"}"#;
+        for reason in [Reason::CapacityExceeded, Reason::RequestUnauthenticated] {
+            let got = verify_response(
+                v0,
+                &signed(v0, reason),
+                &key.verifying_key(),
+                &Default::default(),
+            );
+            assert_eq!(got["state"], json!("not_evidence"), "{reason}: {got}");
+            let got = verify_response(
+                v1,
+                &signed(v1, reason),
+                &key.verifying_key(),
+                &Default::default(),
+            );
+            assert_eq!(got, json!({"state": "refusal", "reason": reason.token()}));
+        }
+        let got = verify_response(
+            v0,
+            &signed(v0, Reason::PolicyDeclined),
+            &key.verifying_key(),
+            &Default::default(),
+        );
+        assert_eq!(got["state"], json!("refusal"));
     }
 
     /// A node whose clock cannot be written as an `issued_at` signs nothing.

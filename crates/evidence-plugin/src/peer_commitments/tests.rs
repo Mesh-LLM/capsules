@@ -108,6 +108,14 @@ fn under_v1_a_policy_reason_is_judged_against_the_pinned_policy() {
         policy_check(Some(&pinned), &v1, "request_unauthenticated")["status"],
         "MATCH"
     );
+    // A request over the responder's size limit is refused before its
+    // profile is read: its policy_declined is that limit.
+    let mut big = v1.clone();
+    big["nonce"] = json!("x".repeat(crate::evidence_answer::MAX_REQUEST_BYTES));
+    assert_eq!(
+        policy_check(Some(&pinned), &big, "policy_declined")["status"],
+        "NOT_CHECKED"
+    );
     // A record-carrying ask: whether a counterparty is answered depends on
     // who asks, which the refusal alone does not settle.
     let record = json!({"subject": {"record": "ab".repeat(32)}, "coverage": {"min_freshness": 1},

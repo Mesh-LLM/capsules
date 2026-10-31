@@ -417,13 +417,9 @@ pub(crate) async fn send_evidence_request(
     request: &serde_json::Value,
     asks: Option<&std::sync::Arc<crate::capsule_emit::CapsuleState>>,
 ) -> Result<Answered, SendError> {
-    let evidence_request = !crate::referee::service::is_adjudicate_request(request);
-    let names_profile = request.get("profile").is_some();
-    if !evidence_request || names_profile {
+    let Some(v1) = under_v1(request) else {
         return send_once(context, peer_id, request, asks).await;
-    }
-    let mut v1 = request.clone();
-    v1["profile"] = serde_json::json!(evidence_request::envelope::PROFILE_V1);
+    };
     let answered = send_once(context, peer_id, &v1, asks).await?;
     match fallback_to_v0(&v1, &answered.answer) {
         Some(v0) => send_once(context, peer_id, &v0, asks).await,
@@ -431,12 +427,33 @@ pub(crate) async fn send_evidence_request(
     }
 }
 
+/// `request` asking under `evidence-interop/1`, or `None` to send it as
+/// given: an `adjudicate` request, one that names its profile, one the
+/// caller signed (a profile added here would break its signature), and
+/// anything that is not a map (refused as before).
+pub(crate) fn under_v1(request: &serde_json::Value) -> Option<serde_json::Value> {
+    let map = request.as_object()?;
+    if crate::referee::service::is_adjudicate_request(request)
+        || map.contains_key("profile")
+        || map.contains_key(crate::requester_auth::MEMBER)
+    {
+        return None;
+    }
+    let mut v1 = map.clone();
+    v1.insert(
+        "profile".into(),
+        serde_json::json!(evidence_request::envelope::PROFILE_V1),
+    );
+    Some(serde_json::Value::Object(v1))
+}
+
 /// The `evidence-interop/0` retry of `asked`, a request this node sent under
 /// `evidence-interop/1`, when `answer` refuses it `request_malformed`: the
 /// refusal a /0-only responder gives an identifier it does not implement.
 /// The retry names /0 and, so the book of asks takes it as a new request,
-/// carries the nonce with `/evidence-interop-0` appended. `None` for any
-/// other answer.
+/// carries a new nonce: the nonce with `/evidence-interop-0` appended, or,
+/// where that would pass [`requester_auth::MAX_NONCE_BYTES`], the nonce's
+/// SHA-256 in hex with it. `None` for any other answer.
 pub(crate) fn fallback_to_v0(
     asked: &serde_json::Value,
     answer: &serde_json::Value,
@@ -453,7 +470,17 @@ pub(crate) fn fallback_to_v0(
     let mut v0 = asked.clone();
     v0["profile"] = serde_json::json!(evidence_request::envelope::PROFILE);
     if let Some(nonce) = asked.get("nonce").and_then(serde_json::Value::as_str) {
-        v0["nonce"] = serde_json::json!(format!("{nonce}/evidence-interop-0"));
+        const SUFFIX: &str = "/evidence-interop-0";
+        let retry = if nonce.len() + SUFFIX.len() <= crate::requester_auth::MAX_NONCE_BYTES {
+            format!("{nonce}{SUFFIX}")
+        } else {
+            use sha2::Digest as _;
+            format!(
+                "{}{SUFFIX}",
+                hex::encode(sha2::Sha256::digest(nonce.as_bytes()))
+            )
+        };
+        v0["nonce"] = serde_json::json!(retry);
     }
     // `send_once` signs what it sends; a signature carried over from the
     // caller covers the /1 profile and nonce, so it goes.
@@ -1588,5 +1615,32 @@ mod tests {
         let mut sent_v0 = asked.clone();
         sent_v0["profile"] = json!("evidence-interop/0");
         assert_eq!(fallback_to_v0(&sent_v0, &malformed), None, "never twice");
+
+        // A nonce the suffix would push past the limit is replaced by its
+        // digest, so the retry is still a well-formed signed request.
+        let mut long = asked.clone();
+        long["nonce"] = json!("n".repeat(crate::requester_auth::MAX_NONCE_BYTES));
+        let retry = fallback_to_v0(&long, &malformed).unwrap();
+        let nonce = retry["nonce"].as_str().unwrap();
+        assert!(nonce.len() <= crate::requester_auth::MAX_NONCE_BYTES);
+        assert!(nonce.ends_with("/evidence-interop-0") && nonce.len() == 64 + 19);
+    }
+
+    /// What is sent as given, and what asks under /1.
+    #[test]
+    fn only_an_unsigned_map_naming_no_profile_is_asked_under_v1() {
+        use serde_json::json;
+        let plain = json!({"subject": {"checkpoints": null}, "coverage": {"min_freshness": 1}});
+        assert_eq!(
+            under_v1(&plain).unwrap()["profile"],
+            json!("evidence-interop/1")
+        );
+        let mut named = plain.clone();
+        named["profile"] = json!("evidence-interop/0");
+        let mut signed = plain.clone();
+        signed["requester_auth"] = json!({"key_id": "k", "sig": "s"});
+        for given in [named, signed, json!([]), json!("x"), json!(1)] {
+            assert_eq!(under_v1(&given), None, "{given}");
+        }
     }
 }

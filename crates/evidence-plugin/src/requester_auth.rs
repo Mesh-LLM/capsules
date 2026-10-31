@@ -399,8 +399,12 @@ pub fn bound_node(claimants: &[String], stated: Option<&str>) -> Binding {
 pub enum Use {
     /// Not seen before, and now held until its deadline.
     First,
-    /// Already held within its deadline, or a bound key with no room left.
+    /// Already held within its deadline.
     Replayed,
+    /// A bound key that already holds [`MAX_NONCES_PER_KEY`] live nonces:
+    /// not seen, but not held either. Refused like a replay, since an
+    /// unheld nonce could be replayed later; a limit of this node's own.
+    Full,
     /// An unbound key's nonce, not seen, but not held either: the unbound
     /// pool is full of live nonces.
     Unchecked,
@@ -416,8 +420,8 @@ pub struct ReplayCache {
 
 impl ReplayCache {
     /// Record `nonce` for `key_id` until `deadline` (Unix seconds).
-    /// [`Use::Replayed`] when it is already held, or when a bound key already
-    /// holds [`MAX_NONCES_PER_KEY`] live nonces; [`Use::Unchecked`] when
+    /// [`Use::Replayed`] when it is already held, [`Use::Full`] when a bound
+    /// key already holds [`MAX_NONCES_PER_KEY`] live nonces; [`Use::Unchecked`] when
     /// unbound keys together hold [`MAX_UNBOUND_NONCES`] live nonces.
     pub fn first_use(
         &self,
@@ -448,8 +452,11 @@ impl ReplayCache {
             !nonces.is_empty()
         });
         let nonces = seen.entry(key_id.to_string()).or_default();
-        if nonces.contains_key(nonce) || nonces.len() >= MAX_NONCES_PER_KEY {
+        if nonces.contains_key(nonce) {
             return Use::Replayed;
+        }
+        if nonces.len() >= MAX_NONCES_PER_KEY {
+            return Use::Full;
         }
         nonces.insert(nonce.to_string(), deadline);
         Use::First
@@ -497,9 +504,11 @@ pub enum Failure {
     /// The request is addressed to another node than this one (or this node
     /// does not know its own id yet).
     AudienceMismatch { key_id: String },
-    /// This (key_id, nonce) was already seen within its deadline, or a
-    /// bound key has no room to hold it.
+    /// This (key_id, nonce) was already seen within its deadline.
     Replayed { key_id: String },
+    /// A bound key has no room to hold the nonce ([`Use::Full`]): a limit of
+    /// this node's own, refused as a replay would be.
+    ReplayCacheFull { key_id: String },
     /// The key is bound to no node, or to several and the request states
     /// no id. The only failure that may read as unsigned
     /// ([`Failure::reads_as_unsigned`]). `replay_checked` is false when the
@@ -523,6 +532,7 @@ impl Failure {
             Failure::OutsideWindow | Failure::BadSignature => None,
             Failure::AudienceMismatch { key_id }
             | Failure::Replayed { key_id }
+            | Failure::ReplayCacheFull { key_id }
             | Failure::Unbound { key_id, .. }
             | Failure::ClaimMismatch { key_id, .. } => Some(key_id),
         }
@@ -598,6 +608,11 @@ pub fn check(
             Use::Unchecked => false,
             Use::Replayed => {
                 return Err(Failure::Replayed {
+                    key_id: key_id.to_string(),
+                })
+            }
+            Use::Full => {
+                return Err(Failure::ReplayCacheFull {
                     key_id: key_id.to_string(),
                 })
             }
@@ -1055,7 +1070,7 @@ mod tests {
         }
         assert_eq!(
             cache.first_use(&anchor, "fresh-key/n", 2_000, 1_000, true),
-            Use::Replayed,
+            Use::Full,
             "the anchor's budget is spent, whichever key asks"
         );
     }
@@ -1137,7 +1152,7 @@ mod tests {
         }
         assert_eq!(
             cache.first_use("noisy", "one-more", 100, 1, true),
-            Use::Replayed,
+            Use::Full,
             "a bound key with no room is refused, never unchecked"
         );
         assert_eq!(

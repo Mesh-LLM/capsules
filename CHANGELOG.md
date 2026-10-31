@@ -23,8 +23,11 @@
   - A Service History is served under either identifier with the same artifact
     (agent-action-capsule#484).
   - The commitment and its `history_card` staple do not change.
-  - `evidence-request` 0.3.0, and `evidencebook` patched to evidencebook#226's merge commit (its
-    move to 0.3 and the envelope signed under the profile asked for) until a release carries it.
+  - `evidence-request` 0.3.0 and `evidencebook` 0.0.11 (its move to 0.3, and the envelope signed
+    under the profile the request names).
+  - A refusal is read by its request's profile: an -02 reason answering a /0 ask is not a
+    conforming refusal. A full replay cache is `capacity_exceeded` under /1, not
+    `request_unauthenticated`. A request the caller signed is sent as given.
   - Mesh-LLM/capsules-plugin#114.
 - **The Evidence tab says when a peer's answer is not witnessed.** A history or record that checks
   only against the peer's own signatures is no longer shown as verified (no ✓, no "checks out"):

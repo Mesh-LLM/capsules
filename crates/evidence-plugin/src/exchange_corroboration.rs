@@ -228,7 +228,10 @@ pub fn verify(
     let digest = evidence_request::digest::request_digest(sent);
     if response.get("reason").is_some() {
         return match refusal::verify_for(response, key, &digest) {
-            Ok(reason) => Verified::Refusal(reason),
+            Ok(reason) => match crate::evidence_answer::registered_under_request(sent, reason) {
+                Ok(reason) => Verified::Refusal(reason),
+                Err(why) => Verified::Failed(format!("the refusal does not conform: {why}")),
+            },
             Err(e) => Verified::Failed(format!("the refusal does not verify: {e}")),
         };
     }

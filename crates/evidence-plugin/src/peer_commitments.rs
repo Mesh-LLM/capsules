@@ -118,6 +118,13 @@ pub fn policy_check(pinned: Option<&Value>, request: &Value, reason: &str) -> Va
     let status = |status: &str, why: &str| json!({"status": status, "why": why, "policy_digest": pinned["policy_digest"]});
     let v1 = request.get("profile").and_then(Value::as_str)
         == Some(evidence_request::envelope::PROFILE_V1);
+    // A request over the responder's size limit is refused before its
+    // profile is read, so with /0's tokens (`evidence_answer`): its
+    // `policy_declined` is that limit, not policy.
+    let oversize = evidence_request::jcs::to_string(request).map_or(true, |text| {
+        text.len() > crate::evidence_answer::MAX_REQUEST_BYTES
+    });
+    let v1 = v1 && !oversize;
     let ambiguous = AMBIGUOUS_REASONS.iter().any(|r| r.token() == reason);
     if reason == Reason::CapacityExceeded.token() {
         return status(
