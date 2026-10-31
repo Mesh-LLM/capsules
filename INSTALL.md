@@ -9,17 +9,22 @@ needed.
 
 ## What's new in 0.1.8
 
-**Upgrading from 0.1.7 needs nothing on the other node.**
+**Upgrading from 0.1.7 needs nothing installed on the other node.** For a pushed terms leg to
+carry its proof there, the provider needs a version that reads bundles (any release since bundles
+shipped); an older one keeps the leg bare.
 
-- **A payer's settlement terms leg is pushed with its checkpoint and inclusion proof,** as every
-  other pushed record is, so a provider holds the proof that each leg it received was in the
-  payer's log. Legs an earlier version pushed without one are pushed once more, under a
-  checkpoint, soon after the payer starts with the checkpoint cadence on (at the host's first mesh
-  event): at most 64 per start, to the peer each leg's sealed exchange record names. It re-sends
-  sealed records only and moves no money; the provider, on any version, adds the proof to the leg
-  it already holds.
-- **Signed checkpoints over the ledger files.** Each received-records and adjudication file, and
-  the chain itself, has a node-signed checkpoint with a range proof, on the owner console at
+- **With the checkpoint cadence on, a payer's settlement terms leg is pushed with its checkpoint
+  and inclusion proof,** as other pushed records are, so a provider holds the proof that each leg
+  it received was in the payer's log. Legs an earlier version pushed without one are pushed once
+  more, under a checkpoint, soon after the payer starts with the cadence on and sending records at
+  completion on (at the host's first mesh event or its first channel message, whichever comes
+  first): at most 64 per start, to the peer each leg's sealed exchange record names. It re-sends
+  sealed records only and moves no money. A provider that reads bundles adds the proof to the leg
+  it already holds; an older one keeps the leg bare (recorded as `no_inclusion`), and that leg is
+  not re-sent.
+- **Signed checkpoints over the ledger files.** received-capsules, received-provenance,
+  received-inclusion, the three adjudication files and the chain itself each have a node-signed
+  checkpoint with a range proof, on the owner console at
   `GET …/http/ledger-checkpoint?file=<name>[&from=i&to=j]`; `capsules ledger-check` checks a copy
   offline. See [docs/LEDGER-CHECKPOINTS.md](docs/LEDGER-CHECKPOINTS.md).
 - **The Evidence tab is redesigned** around the three ways a stranger could cheat: the header and
