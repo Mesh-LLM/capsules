@@ -378,6 +378,28 @@ your lists, and seal the decision in its book:
 - `CAPSULES_ADMISSION_DENY`: peers to refuse, in the same form. A peer on both lists is refused.
 - `CAPSULES_ADMISSION_DEFAULT`: `go` (the default) or `no`, for a peer on neither list.
 
+A peer your lists admit then meets the price rule, decided by capsule-engine's `asg/inference`
+terms pack (the same evaluator and vectors Muse uses). It compares the input and output rates the
+peer advertised for the model, in msat per million tokens, with your caps:
+
+- `CAPSULES_ADMISSION_PROFILE`: the path of a `policy-profile/v0` JSON file. For example:
+
+  ```json
+  {"format":"policy-profile/v0","packs":[{"pack":"asg/inference","parameters":{
+    "rate_cap":{"max_input_msat_per_million":2000000,"max_output_msat_per_million":8000000}}}]}
+  ```
+
+  It may also set the pack's `counterparty_list`. A rate over a cap, a rate the peer did not
+  state, or a peer that list refuses gets NO, naming the rule. A free route (no price) is GO.
+  With no file set, no cap applies yet. A file that does not read gives every peer NO until you
+  fix it and restart mesh-llm. Your file is yours: an upgrade never rewrites it.
+
+The rates are the ones mesh-llm routed on, which a host sends with each attempt once it lists
+`openai_exchange.backend_pricing.v1`. On an older host the price is not known: with a profile set,
+every peer gets NO, failing closed; without one, the rule is recorded as not checked. Each
+decision cites the pack, its definition digest and your profile's digest, and `doctor` shows them
+with your values.
+
 Each decision also records what the base policy's five rows (policy `base/1`) read about the peer,
 from its history card and this node's own book. The rows decide nothing: only your settings give a
 NO. They record:

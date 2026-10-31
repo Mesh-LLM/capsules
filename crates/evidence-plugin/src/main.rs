@@ -1666,6 +1666,7 @@ async fn main() -> anyhow::Result<()> {
     let _ = agreement_bridge::hook_wait();
     let peer_admission = Arc::new(admission::Admission::new(
         admission::Policy::from_settings(),
+        admission::price::PriceRule::from_settings(),
         capsules.clone(),
     ));
     let admission_for_rows = peer_admission.clone();

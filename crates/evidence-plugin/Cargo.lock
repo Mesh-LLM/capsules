@@ -292,6 +292,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "capsule-engine"
+version = "0.1.0"
+source = "git+https://github.com/action-state-group/capsule-engine?rev=3663fbfcf5292347e98203882efbe0f9542a68fd#3663fbfcf5292347e98203882efbe0f9542a68fd"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "cc"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -709,6 +720,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "capsule-emit",
+ "capsule-engine",
  "checkpointed-local-log",
  "chrono",
  "ciborium",
