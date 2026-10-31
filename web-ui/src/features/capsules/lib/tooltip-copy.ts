@@ -42,11 +42,9 @@ export const SAMPLE_DATA_UNAVAILABLE = 'Not available on sample data.'
 /** The InfoBanner description under the tab title: what the page holds, and
  *  what can be shown about it. "docs" links what the page can and cannot
  *  show (`DOCS_URL`). */
-export const HERO_DESCRIPTION_BEFORE_LINK =
-  'Every exchange this node handled, sealed as a signed record when it happened. Each row shows how far its record has gone. How we checked lists each check. See the '
-export const HERO_DESCRIPTION_LINK_TEXT = 'docs'
-export const HERO_DESCRIPTION_AFTER_LINK = '.'
-export const HERO_DESCRIPTION = `${HERO_DESCRIPTION_BEFORE_LINK}${HERO_DESCRIPTION_LINK_TEXT}${HERO_DESCRIPTION_AFTER_LINK}`
+/** The header's one line: 20 words, no icons (Steven's word budget, Sherlock2's wording). */
+export const HERO_DESCRIPTION =
+  'Every answer a stranger gave you is sealed and signed. Three ways they could cheat you, and whether any did.'
 
 /** Where "docs" in the hero points: this plugin's own account of what each
  *  check proves and does not prove. */

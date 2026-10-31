@@ -14,7 +14,7 @@ describe('AttackCards', () => {
     for (const title of ['Rewrote the record', 'Left something out', 'Swapped the model']) {
       expect(within(region).getByRole('heading', { name: title })).toBeInTheDocument()
     }
-    expect(within(region).getByText('None found')).toBeInTheDocument()
+    expect(within(region).getByText('13/13 unchanged')).toBeInTheDocument()
     expect(within(region).getByText('13 / 13')).toBeInTheDocument()
     await userEvent.click(within(region).getByRole('button', { name: 'Turn on a witness' }))
     expect(onAction).toHaveBeenCalledWith('integrity')

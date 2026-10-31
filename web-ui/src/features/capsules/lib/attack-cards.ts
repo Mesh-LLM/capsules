@@ -83,9 +83,9 @@ export function buildAttackCards(input: AttackCardInputs): readonly AttackCard[]
     id: 'rewrote',
     title: 'Rewrote the record',
     summary: 'Someone changes what was said after the fact.',
-    // "None found" only where a signed checkpoint covers every record; otherwise say how far the check goes.
-    badge: records === 0 ? 'Nothing sealed yet' : covered === records ? 'None found' : 'Partly checked',
-    tone: records === 0 ? 'muted' : covered === records ? 'good' : 'warn',
+    // A result, not a search (Sherlock2): the records a signed checkpoint covers, out of all sealed.
+    badge: records === 0 || covered === null ? 'not checked' : `${covered}/${records} unchanged`,
+    tone: records === 0 || covered === null ? 'muted' : covered === records ? 'good' : 'warn',
     rows: [
       { label: 'Sealed when it happened', value: `${records}` },
       {
@@ -129,7 +129,7 @@ export function buildAttackCards(input: AttackCardInputs): readonly AttackCard[]
     id: 'swapped',
     title: 'Swapped the model',
     summary: 'A peer serves a cheaper model or quant than it advertised.',
-    badge: checked === 0 ? 'Not checked' : checkedLine,
+    badge: checked === 0 ? 'not checked' : `${caught} caught · ${checked} checked`,
     tone: caught > 0 ? 'bad' : checked === 0 ? 'muted' : 'good',
     rows: [
       { label: 'Same request to two machines', value: plural(pairs.size, 'pair'), tone: pairs.size > 0 ? undefined : 'muted' },

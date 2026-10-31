@@ -15,8 +15,8 @@ function row(overrides: Record<string, unknown> = {}): PaneCRow {
 describe('buildAttackCards', () => {
   it('reads "None found" and shows what is not checked, never a guess', () => {
     const [rewrote, leftOut, swapped] = buildAttackCards({ records: 13, covered: 13, witness: 'off', rows: [] })
-    expect(rewrote).toMatchObject({ title: 'Rewrote the record', badge: 'None found', tone: 'good' })
-    expect(buildAttackCards({ records: 13, covered: 9, witness: 'off', rows: [] })[0].badge).toBe('Partly checked')
+    expect(rewrote).toMatchObject({ title: 'Rewrote the record', badge: '13/13 unchanged', tone: 'good' })
+    expect(buildAttackCards({ records: 13, covered: 9, witness: 'off', rows: [] })[0].badge).toBe('9/13 unchanged')
     expect(rewrote.rows.map((r) => [r.label, r.value])).toEqual([
       ['Sealed when it happened', '13'],
       ['In a signed checkpoint', '13 / 13'],
@@ -25,12 +25,12 @@ describe('buildAttackCards', () => {
     expect(rewrote.action).toEqual({ label: 'Turn on a witness', target: 'integrity' })
     expect(leftOut.badge).toBe('No peer record yet')
     expect(leftOut.rows.at(-1)).toMatchObject({ label: 'Their full history compared', value: 'not checked' })
-    expect(swapped).toMatchObject({ badge: 'Not checked', tone: 'muted', action: null })
+    expect(swapped).toMatchObject({ badge: 'not checked', tone: 'muted', action: null })
   })
 
   it('says nothing is sealed yet for an empty node and reports missing coverage as "not reported"', () => {
     const [empty] = buildAttackCards({ records: 0, covered: null, witness: 'unknown', rows: [] })
-    expect(empty.badge).toBe('Nothing sealed yet')
+    expect(empty.badge).toBe('not checked')
     const [partial] = buildAttackCards({ records: 4, covered: null, witness: 'latest', rows: [] })
     expect(partial.rows[1].value).toBe('not reported')
     expect(partial.action).toBeNull()
@@ -52,7 +52,7 @@ describe('buildAttackCards', () => {
         half('b3', adjudicated('inconclusive'))
       ]
     })
-    expect(swapped).toMatchObject({ badge: '1 caught of 3 checked', tone: 'bad' })
+    expect(swapped).toMatchObject({ badge: '1 caught · 3 checked', tone: 'bad' })
     expect(swapped.rows.map((r) => r.value)).toEqual(['3 pairs', '1 caught of 3 checked'])
     expect(swapped.action).toEqual({ label: 'Open the verdict', target: 'exchanges' })
   })
@@ -68,7 +68,7 @@ describe('buildAttackCards', () => {
         half('b3', null)
       ]
     })
-    expect(swapped).toMatchObject({ badge: 'Not checked', tone: 'muted', action: null })
+    expect(swapped).toMatchObject({ badge: 'not checked', tone: 'muted', action: null })
     expect(swapped.rows[1].value).toBe('not checked')
   })
 
@@ -84,6 +84,6 @@ describe('buildAttackCards', () => {
         half('b1', null, { same_answer: false })
       ]
     })
-    expect(swapped.badge).toBe('Not checked')
+    expect(swapped.badge).toBe('not checked')
   })
 })
