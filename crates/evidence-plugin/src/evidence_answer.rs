@@ -3678,6 +3678,42 @@ pub(crate) mod tests {
         ));
     }
 
+    /// An `exchange` request about a half this node holds from node-b, cited
+    /// by the record `emit_citing_record` seals (no `x-mesh-poc-v1` block),
+    /// is answered to node-b under `counterparties`, under either profile,
+    /// and refused `not_authorized` to node-a (Mesh-LLM/capsules-plugin#172,
+    /// loop step 07). In the corpus that record cites `foreign_half()`.
+    #[test]
+    fn an_exchange_goes_to_the_node_that_sent_the_half_it_asks_about() {
+        let half = crate::evidence_request_parity::foreign_half();
+        let dir = node(&corpus_ledger());
+        for profile in [None, Some("evidence-interop/0"), Some("evidence-interop/1")] {
+            let mut request =
+                json!({"subject": {"exchange": half}, "coverage": {"expected_pin": half}});
+            if let Some(p) = profile {
+                request["profile"] = json!(p);
+            }
+            let bytes = signed_by("node-b", &request);
+            let Outcome::Answered { wire, .. } =
+                ask_with(dir.path(), &bytes, "counterparties", false)
+            else {
+                panic!("{profile:?}: not answered to node-b");
+            };
+            let v = verify_response(&bytes, &wire, &key().verifying_key(), &Default::default());
+            assert_eq!(v["state"], json!("artifact"), "{profile:?}: {v}");
+            assert_eq!(
+                refused(&ask_with(
+                    dir.path(),
+                    &signed_by("node-a", &request),
+                    "counterparties",
+                    false
+                )),
+                Some(Reason::NotAuthorized),
+                "{profile:?}: node-a sent no such half"
+            );
+        }
+    }
+
     /// Who asked is recorded with the request's digest: the verified key and
     /// node when the signature and binding held, even when the request is
     /// refused for stating another node's id; nothing when it was unsigned.

@@ -154,6 +154,29 @@ pub(crate) mod tests_between_reads {
     }
 }
 
+/// The node a citing record (`CapsuleState::emit_citing_record`) holds a
+/// half from: the pushing peer, as the receiver recorded it in
+/// `received_half`. That record carries no `x-mesh-poc-v1` block, so without
+/// this the index named no counterparty for it, and an `exchange` request
+/// about the half was refused to the very node that sent it
+/// (Mesh-LLM/capsules-plugin#172). `received_from_node_id`, when sealed, is
+/// the sender's node id; otherwise `received_from`, the host's id for the
+/// peer, the same id space a served record's `requesting_party` is in.
+fn citing_counterparty(record: &Value) -> Option<String> {
+    if cfg!(feature = "mutant-citing-record-names-no-counterparty") {
+        return None;
+    }
+    if counterparty_half_citations(record).is_empty() {
+        return None;
+    }
+    let half = record.pointer("/model_attestation/compute_attestation/received_half")?;
+    ["received_from_node_id", "received_from"]
+        .iter()
+        .find_map(|k| half.get(*k).and_then(Value::as_str))
+        .filter(|s| !s.is_empty() && *s != "unknown")
+        .map(str::to_string)
+}
+
 /// A deal capsule: one of a deal's steps (`deal_id`) or its report. A link
 /// names a counterparty for these and for no other record.
 fn is_deal_capsule(record: &Value) -> bool {
@@ -417,8 +440,9 @@ impl LedgerIndex {
                 self.citations.entry(half).or_default().push(index);
             }
         }
-        let counterparty =
-            crate::evidence_panes::full_counterparty_node_id(&record).or_else(|| {
+        let counterparty = crate::evidence_panes::full_counterparty_node_id(&record)
+            .or_else(|| citing_counterparty(&record))
+            .or_else(|| {
                 is_deal_capsule(&record)
                     .then(|| self.deal_counterparty(&capsule_id))
                     .flatten()
@@ -941,6 +965,55 @@ mod tests {
             .iter()
             .map(|cp| cp.line())
             .collect()
+    }
+
+    /// The record `emit_citing_record` seals for a half received from node-b
+    /// names node-b as its counterparty in the index (#172): the half's
+    /// sender is the one node an `exchange` request about it is answered to
+    /// under `counterparties`. `received_from_node_id`, when sealed, wins.
+    #[test]
+    fn a_sealed_citing_record_names_the_node_that_sent_the_half() {
+        use crate::capsule_emit::{CapsuleState, ReceivedHalfProvenance};
+        let dir = tempfile::tempdir().unwrap();
+        let state = CapsuleState::open(dir.path(), "node-under-test").unwrap();
+        let foreign = "d".repeat(64);
+        let prov = ReceivedHalfProvenance {
+            foreign_capsule_id: &foreign,
+            received_from: "node-b",
+            via: "push",
+            received_at: "2026-09-25T00:00:00Z",
+            signature_ok: true,
+            digest_match: None,
+            foreign_agent_input_digest: None,
+            foreign_agent_output_digest: None,
+            sender_key_id: None,
+            accepted_via: None,
+            controller_binding: None,
+            same_controller_as_receiver: None,
+            own_half_capsule_id: None,
+        };
+        let citing = state.emit_citing_record(&prov).unwrap().unwrap().capsule;
+        assert!(
+            crate::evidence_panes::full_counterparty_node_id(&citing).is_none(),
+            "the sealed shape carries no x-mesh-poc-v1 block"
+        );
+        let leaf = with_index(state.ledger_dir(), &key_id(), |index| {
+            let i = index.citing(&foreign)[0] as usize;
+            index.leaves[i].counterparty.clone()
+        })
+        .unwrap();
+        assert_eq!(leaf.as_deref(), Some("node-b"));
+
+        let mut by_node_id = citing.clone();
+        by_node_id["model_attestation"]["compute_attestation"]["received_half"]
+            ["received_from_node_id"] = json!("node-b-id");
+        assert_eq!(
+            citing_counterparty(&by_node_id).as_deref(),
+            Some("node-b-id")
+        );
+        let mut no_citation = citing;
+        no_citation.as_object_mut().unwrap().remove("references");
+        assert_eq!(citing_counterparty(&no_citation), None);
     }
 
     #[test]

@@ -21,6 +21,17 @@
   - With no profile, shipped caps apply as an outlier guard: 500,000 input and 1,500,000 output
     msat per million (`DEFAULT_RATE_CAPS`), 1000x mesh-llm's CLI default price.
 
+### Fixed
+
+- **An `exchange` request is answered to the node that sent the half it asks about.** The
+  receiver's citing record names its sender only in `received_half`, and the evidence index read
+  a counterparty only from `x-mesh-poc-v1`, so under `share_history_segments = counterparties` it
+  was refused `not_authorized` to every asker, the sender included (loop step 07). The index now
+  reads `received_half` (`received_from_node_id`, else `received_from`). Under
+  `evidence-interop/1`, `policy_check` reads a policy refusal of record bodies the pinned policy
+  gives no one (`range`, `full_history`, or any record subject while `share_history_segments` is
+  `off`) as `MATCH` instead of `NOT_CHECKED`. Mesh-LLM/capsules-plugin#172.
+
 ## 0.1.6
 
 ### Changed

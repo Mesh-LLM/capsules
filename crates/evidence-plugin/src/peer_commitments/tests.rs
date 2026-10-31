@@ -199,3 +199,42 @@ fn two_holds_of_one_peer_at_once_leave_one_whole_commitment() {
         .collect();
     assert_eq!(left, [std::ffi::OsString::from(format!("{NODE}.json"))]);
 }
+
+/// Under evidence-interop/1 a policy refusal of record bodies the pinned
+/// policy gives no one is what the policy says for every asker: `MATCH`, not
+/// `NOT_CHECKED` (#172). With records shared to counterparties it still
+/// depends on who asks, and under /0 the reason stays ambiguous.
+#[test]
+fn a_policy_refusal_of_what_the_policy_gives_no_one_matches() {
+    let (_dir, mut pinned) = held();
+    let half = "ab".repeat(32);
+    let exchange = json!({"subject": {"exchange": half}, "coverage": {"expected_pin": half},
+                          "profile": "evidence-interop/1"});
+    pinned["subjects"] = json!(["checkpoints", "record", "exchange", "correlation", "range"]);
+    let check = |pinned: &Value, request: &Value| {
+        policy_check(Some(pinned), request, "not_authorized")["status"].clone()
+    };
+    pinned["policy"]["share_history_segments"] = json!("counterparties");
+    assert_eq!(check(&pinned, &exchange), "NOT_CHECKED");
+    pinned["policy"]["share_history_segments"] = json!("off");
+    assert_eq!(check(&pinned, &exchange), "MATCH");
+    let mut v0 = exchange.clone();
+    v0["profile"] = json!("evidence-interop/0");
+    assert_eq!(check(&pinned, &v0), "NOT_CHECKED");
+
+    pinned["policy"]["share_history_segments"] = json!("peers");
+    let range = json!({"subject": {"range": [0, 3]}, "coverage": {"min_freshness": 1},
+                       "profile": "evidence-interop/1"});
+    assert_eq!(check(&pinned, &range), "MATCH", "a range goes to no one");
+    let mut corroboration = json!({"subject": {"correlation": half}, "coverage": {"min_freshness": 1},
+                                   "profile": "evidence-interop/1",
+                                   "derivation": crate::exchange_corroboration::DEFINITION_DIGEST});
+    pinned["policy"]["share_history_segments"] = json!("off");
+    assert_eq!(
+        check(&pinned, &corroboration),
+        "NOT_CHECKED",
+        "a derivation has its own rules"
+    );
+    corroboration.as_object_mut().unwrap().remove("derivation");
+    assert_eq!(check(&pinned, &corroboration), "MATCH");
+}
