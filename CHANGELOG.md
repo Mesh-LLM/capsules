@@ -2,8 +2,28 @@
 
 ## Unreleased
 
+## 0.1.8
+
+### Added
+
+- **Signed checkpoints over the ledger files (#175, #177).** Each file a copy is checked against
+  now has a node-signed CLL checkpoint and a CLL #13 range proof: received-capsules,
+  received-provenance, received-inclusion, and the issued, received and requested adjudication
+  files, plus the chain itself. They are served on the owner console at
+  `GET …/http/ledger-checkpoint?file=<name>[&from=i&to=j]`.
+  `capsules ledger-check --file <copy> --checkpoint <reply.json> --key <node key id>` then checks
+  offline that a copy is the whole file, or exactly lines i..j, at that checkpoint. A chain ask
+  first cuts a chain checkpoint over the chain's tip, and it is refused rather than served stale.
+  File checkpoints go to `ledger/file-checkpoints.jsonl` and are not witnessed. See
+  docs/LEDGER-CHECKPOINTS.md.
+
 ### Changed
 
+- **The Evidence tab is redesigned around the three ways a stranger could cheat** (#163): the
+  header and attack cards (#180), the Peers table and drawer (#184), the Integrity tab (#185),
+  "How we checked", the twin group card and the "Ask for their record" rule (#186), and the
+  owner's receipt on a paid Exchanges row, checked in the browser (#182, for #96 and #134). Web UI
+  only: no route, setting or record changes.
 - **The Witnesses field suggests a witness.** The field declares the `set-value` renderer and shows
   `https://witness.agentactioncapsule.org` greyed as a placeholder (it answers
   `GET /anchor/authority-pubkey` with `pubkey_hex` and `key_id`, which the plugin reads). A console
