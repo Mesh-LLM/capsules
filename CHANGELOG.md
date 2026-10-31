@@ -16,7 +16,12 @@
 - **A payer's settlement terms leg is pushed under a checkpoint, with its inclusion proof.** It
   went bare, unlike every other pushed half, so the provider held it with no checkpoint or proof
   and its book could not show it was pushed under one (loop step 05 `pushed_under_checkpoint`).
-  With the checkpoint cadence off it is pushed bare, as before. Mesh-LLM/capsules-plugin#187.
+  With the checkpoint cadence off it is pushed bare, as before. A leg an earlier version pushed
+  bare is pushed once more, under a checkpoint, when the node starts with the cadence on: a leg
+  the provider's reply has not yet shown covered (`ledger/covered-terms-legs.jsonl`), to the peer
+  its sealed exchange record names, at most 64 per start. It re-sends sealed records only and
+  moves no money; the provider, already holding the leg, adds its checkpoint and inclusion proof.
+  Mesh-LLM/capsules-plugin#187.
 
 ## 0.1.7
 
