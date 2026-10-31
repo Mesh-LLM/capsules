@@ -391,12 +391,14 @@ peer advertised for the model, in msat per million tokens, with your caps:
 
   It may also set the pack's `counterparty_list`. A rate over a cap, a rate the peer did not
   state, or a peer that list refuses gets NO, naming the rule. A free route (no price) is GO.
-  With no file set, no cap applies yet. A file that does not read gives every peer NO until you
-  fix it and restart mesh-llm. Your file is yours: an upgrade never rewrites it.
+  With no file set, the shipped caps apply: 500,000 and 1,500,000 msat per million, far above
+  any real price, so they only stop an outlier. A file that does not read gives every peer NO
+  until you fix it and restart mesh-llm. Your file is yours: an upgrade never rewrites it.
 
 The rates are the ones mesh-llm routed on, which a host sends with each attempt once it lists
-`openai_exchange.backend_pricing.v1`. On an older host the price is not known: with a profile set,
-every peer gets NO, failing closed; without one, the rule is recorded as not checked. Each
+`openai_exchange.backend_pricing.v1`. On an older host the price is not known: with your profile set,
+every peer gets NO, failing closed; with only the shipped caps, the rule is recorded as not checked
+and `doctor` warns that it is inactive. Each
 decision cites the pack, its definition digest and your profile's digest, and `doctor` shows them
 with your values.
 

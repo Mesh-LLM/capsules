@@ -8,10 +8,13 @@
 //! peer's `Pricing` on the `backend_selected` event as `pricing`, and says so
 //! by listing [`PRICING_CAPABILITY`]. With the capability, an event without
 //! `pricing` is a free route, rates 0. Without it the host never sends a
-//! price, so a paid route cannot be told from a free one: with an operator
-//! profile (or a shipped default cap) in force that is NO
-//! ([`Read::Unavailable`], fail closed); with neither, the pack is not run
-//! and the record says the price was not checked.
+//! price, so a paid route cannot be told from a free one. Under the operator's
+//! own profile that is NO ([`Read::Unavailable`], fail closed). Under the
+//! shipped default alone, the pack is not run and the record says the price
+//! was not checked (`host_lacks_backend_pricing`), and `doctor` warns that the
+//! rule is inactive: failing closed on a default would deny every mesh peer,
+//! free ones included, on every older host (Sherlock2's door check, buzz
+//! 7520c4fa).
 //!
 //! The operator's values are a `policy-profile/v0` file ([`PROFILE_SETTING`]):
 //! `rate_cap.max_input_msat_per_million`, `rate_cap.max_output_msat_per_million`,
@@ -31,10 +34,23 @@ pub const PROFILE_SETTING: &str = "CAPSULES_ADMISSION_PROFILE";
 pub const PRICING_CAPABILITY: &str = "openai_exchange.backend_pricing.v1";
 
 /// The rate caps, msat per million input and output tokens, that apply when
-/// the operator's profile sets none. `None`: the pack's own default, which no
-/// price reaches. Steven's ruling on a shipped default is open
-/// (buzz 3998d6d0); either answer changes only this constant.
-pub const DEFAULT_RATE_CAPS: Option<(u64, u64)> = None;
+/// the operator gives no profile: an outlier guard, 1000x mesh-llm's CLI
+/// default price of 500/1500 (`mesh-llm-commands` wallet), far above any real
+/// price, so one absurdly priced peer cannot overshoot the daily budget in a
+/// single request (a reply of 8,192 tokens costs at most about 12 sat here).
+/// `None` would ship no bound. The value is Sherlock2's recommendation, taken
+/// under the non-stop rule while Steven's ruling is open (buzz 3998d6d0); his
+/// answer changes only this constant.
+pub const DEFAULT_RATE_CAPS: Option<(u64, u64)> = Some((500_000, 1_500_000));
+
+/// Whether the host sends the selected peer's price, learned at initialize
+/// (for `doctor`).
+static HOST_PRICES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Record what the host said at initialize.
+pub(crate) fn set_host_prices(on: bool) {
+    HOST_PRICES.store(on, std::sync::atomic::Ordering::Relaxed);
+}
 
 /// What `doctor` shows of the rule this process loaded (set once, when the
 /// admission hook is built); `None` before that or when its profile did not
@@ -44,9 +60,18 @@ static LOADED: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
 /// The loaded rule's description for `doctor`: the pack, its definition
 /// digest, the profile's digest and values. An unreadable profile says so.
 pub fn loaded_description() -> Value {
-    LOADED.get().cloned().unwrap_or_else(
+    let mut described = LOADED.get().cloned().unwrap_or_else(
         || json!({"state": "unreadable_or_not_loaded", "profile_setting": PROFILE_SETTING}),
-    )
+    );
+    let host_prices = HOST_PRICES.load(std::sync::atomic::Ordering::Relaxed);
+    described["host_sends_prices"] = json!(host_prices);
+    if !host_prices {
+        described["warning"] = json!(format!(
+            "this mesh-llm does not list {PRICING_CAPABILITY}: the price rule is inactive, \
+             and under an operator profile every mesh peer gets NO"
+        ));
+    }
+    described
 }
 
 /// Record the loaded rule for `doctor`; a second load (tests) keeps the first.
@@ -68,11 +93,11 @@ pub enum Read {
         input: u64,
         output: u64,
     },
-    /// Nothing is in force and the host sends no price: the pack was not run.
+    /// The host sends no price and no operator profile is in force (the
+    /// shipped default at most): the pack was not run.
     NotChecked,
-    /// A profile or default cap is in force but the host sends no price, or
-    /// the attempt does not make an action the engine reads: NO, failing
-    /// closed.
+    /// The operator's profile is in force but the host sends no price, or the
+    /// attempt does not make an action the engine reads: NO, failing closed.
     Unavailable,
 }
 
@@ -105,9 +130,8 @@ impl Read {
 pub struct PriceRule {
     engine: Engine,
     profile_digest: Option<String>,
-    /// Whether anything is in force: the operator's profile or
-    /// [`DEFAULT_RATE_CAPS`].
-    in_force: bool,
+    /// Whether the operator's own profile is in force (not the default).
+    operator_profile: bool,
     /// The profile's values as read, for `doctor`.
     values: Value,
 }
@@ -133,6 +157,7 @@ impl PriceRule {
     pub fn from_profile(profile: Option<&[u8]>) -> anyhow::Result<Self> {
         let base =
             Engine::inference().map_err(|e| anyhow::anyhow!("asg/inference: {}", e.message()))?;
+        let profile_given = profile.is_some();
         let raw = match (profile, DEFAULT_RATE_CAPS) {
             (Some(raw), _) => Some(raw.to_vec()),
             (None, Some((input, output))) => Some(default_profile(input, output)),
@@ -142,7 +167,7 @@ impl PriceRule {
             return Ok(Self {
                 engine: base,
                 profile_digest: None,
-                in_force: false,
+                operator_profile: false,
                 values: Value::Null,
             });
         };
@@ -155,7 +180,7 @@ impl PriceRule {
         Ok(Self {
             engine,
             profile_digest: Some(profile.digest().to_string()),
-            in_force: true,
+            operator_profile: profile_given,
             values,
         })
     }
@@ -179,7 +204,7 @@ impl PriceRule {
             "profile_digest": self.profile_digest,
             "profile": self.values,
             "default_rate_caps": DEFAULT_RATE_CAPS.map(|(i, o)| json!({"max_input_msat_per_million": i, "max_output_msat_per_million": o})),
-            "in_force": self.in_force,
+            "operator_profile": self.operator_profile,
         })
     }
 
@@ -194,7 +219,7 @@ impl PriceRule {
                     pricing["output_msat_per_million"].as_u64(),
                 ),
             }
-        } else if self.in_force {
+        } else if self.operator_profile {
             return Read::Unavailable;
         } else {
             return Read::NotChecked;
@@ -272,7 +297,7 @@ pub fn record(read: &Read) -> Value {
             "output_msat_per_million": output,
             "checks": constraints.iter().map(|(id, r)| json!({"check": id, "result": r})).collect::<Vec<_>>(),
         }),
-        Read::NotChecked => json!({"state": "not_checked"}),
+        Read::NotChecked => json!({"state": "not_checked", "reason": "host_lacks_backend_pricing"}),
         Read::Unavailable => json!({"state": "unavailable"}),
     }
 }

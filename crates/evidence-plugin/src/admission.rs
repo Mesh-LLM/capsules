@@ -377,10 +377,10 @@ impl Admission {
 
     /// Start the rows' background card asks and local refresh.
     pub fn start(&self, context: mesh_llm_plugin::PluginContext<'static>) {
-        self.host_prices.store(
-            context.host_supports(price::PRICING_CAPABILITY),
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        let host_prices = context.host_supports(price::PRICING_CAPABILITY);
+        self.host_prices
+            .store(host_prices, std::sync::atomic::Ordering::Relaxed);
+        price::set_host_prices(host_prices);
         self.base.start(context);
     }
 
@@ -1067,23 +1067,33 @@ mod tests {
         );
         assert_eq!(sealed_block(&capsules)["price"]["state"], "unavailable");
 
+        // The shipped default alone does not fail closed on an older host.
         let (admission, capsules, _dir) = priced_admission(None, false);
         let answer = admission.answer(&priced(&remote(STRANGER), None));
         assert_eq!(answer.decision, OpenAiAdmissionDecision::Allow);
-        assert_eq!(sealed_block(&capsules)["price"]["state"], "not_checked");
+        let block = sealed_block(&capsules);
+        assert_eq!(block["price"]["state"], "not_checked");
+        assert_eq!(block["price"]["reason"], "host_lacks_backend_pricing");
     }
 
     #[test]
-    fn no_profile_is_the_shipped_default() {
-        // inference.json: priced-no-profile. The pack ships no bound, and
-        // DEFAULT_RATE_CAPS is None until Steven rules.
-        assert_eq!(price::DEFAULT_RATE_CAPS, None);
-        let (admission, _capsules, _dir) = priced_admission(None, true);
-        let answer = admission.answer(&priced(
-            &remote(STRANGER),
-            rates(u64::from(u32::MAX), u64::from(u32::MAX)),
-        ));
-        assert_eq!(answer.decision, OpenAiAdmissionDecision::Allow);
+    fn no_profile_is_the_shipped_default_outlier_guard() {
+        // The shipped default caps (500,000 / 1,500,000) apply with no
+        // profile: at them GO, over either NO.
+        assert_eq!(price::DEFAULT_RATE_CAPS, Some((500_000, 1_500_000)));
+        for (input, output, allowed) in [
+            (500_000, 1_500_000, true),
+            (500_001, 1, false),
+            (1, 1_500_001, false),
+        ] {
+            let (admission, _capsules, _dir) = priced_admission(None, true);
+            let answer = admission.answer(&priced(&remote(STRANGER), rates(input, output)));
+            assert_eq!(
+                answer.decision == OpenAiAdmissionDecision::Allow,
+                allowed,
+                "{input}/{output}"
+            );
+        }
     }
 
     #[test]
