@@ -19,8 +19,9 @@ needed.
 - **Admission's price rule.** With `CAPSULES_ADMISSION_PROFILE` set, a peer the admission lists
   admit is then checked against the input and output rate caps in that `policy-profile/v0` file:
   a rate over a cap, or one that cannot be read, is NO, and the reason names the rule. With no
-  profile, shipped caps apply as an outlier guard. The host must list
-  `openai_exchange.backend_pricing.v1` to send the rates; `doctor` flags an older host.
+  profile, shipped caps apply as an outlier guard, and a request that carries no rate is recorded
+  `not_checked` rather than refused. The host must list `openai_exchange.backend_pricing.v1` to
+  send the rates; no mesh-llm release does yet, and `doctor` flags a host that does not.
 
 Details in [CHANGELOG.md](https://github.com/Mesh-LLM/capsules-plugin/blob/main/CHANGELOG.md).
 
