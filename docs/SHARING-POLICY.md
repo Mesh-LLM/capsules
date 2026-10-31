@@ -32,7 +32,7 @@ serves, so it is now read as `counterparties`, and a log line says so. Set
 
 The plugin declares the seven switches in its `config_schema`
 (`crates/evidence-plugin/src/share_policy.rs`), so the console shows them under
-Configuration › Plugins › Sharing policy. mesh-llm keeps what you save there in
+Configuration › Plugins › Capsules. mesh-llm keeps what you save there in
 its config file and does not pass it to the plugin, so the plugin reads it
 there (`~/.mesh-llm/config.toml`, or the file `MESH_LLM_CONFIG` names). The
 same settings can be set in the plugin's environment, which wins over the
