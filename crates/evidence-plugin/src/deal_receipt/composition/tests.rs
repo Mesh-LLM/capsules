@@ -381,7 +381,7 @@ fn an_answered_request_is_refused_until_its_reply_can_be_a_member() {
         &node.state,
         &id,
         &digest,
-        &json!({"reason": "policy_denied"}),
+        br#"{"reason":"policy_denied"}"#,
         &json!({"state": "unchecked"}),
         LATER,
     )
