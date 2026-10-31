@@ -15,8 +15,8 @@
     lists `openai_exchange.backend_pricing.v1`. On an older host the operator's profile fails
     closed, and the shipped caps alone record the price as not checked, which `doctor` flags.
   - The sealed `admission_decision` gains a `price` member (the rates and each check's result,
-    never the peer's id) and a `terms_pack` read citing the pack, its definition digest and the
-    profile's digest. `doctor` shows them with the profile's values.
+    never the peer's id) and a `terms_pack` read citing the pack, its definition digest and a salted
+    commitment to the profile's digest (the profile holds the counterparty list in clear). `doctor` shows them with the profile's values.
   - With no profile, shipped caps apply as an outlier guard: 500,000 input and 1,500,000 output
     msat per million (`DEFAULT_RATE_CAPS`), 1000x mesh-llm's CLI default price.
 

@@ -399,8 +399,9 @@ The rates are the ones mesh-llm routed on, which a host sends with each attempt 
 `openai_exchange.backend_pricing.v1`. On an older host the price is not known: with your profile set,
 every peer gets NO, failing closed; with only the shipped caps, the rule is recorded as not checked
 and `doctor` warns that it is inactive. Each
-decision cites the pack, its definition digest and your profile's digest, and `doctor` shows them
-with your values.
+decision cites the pack, its definition digest and a salted commitment to your profile's digest
+(the profile holds your list in clear), and `doctor` shows the digest with your values. A profile
+that sets no `rate_cap` keeps the shipped caps.
 
 Each decision also records what the base policy's five rows (policy `base/1`) read about the peer,
 from its history card and this node's own book. The rows decide nothing: only your settings give a

@@ -90,15 +90,21 @@ pub enum Read {
     Checked {
         outcome: Outcome,
         constraints: Vec<(String, &'static str)>,
-        input: u64,
-        output: u64,
+        /// The check that refused: the first one not evaluated (it fails
+        /// closed), else the first that failed.
+        refused_by: Option<String>,
+        /// The rates as read; `None` for one the host's `pricing` did not
+        /// state as an integer (the guard then refuses it).
+        input: Option<u64>,
+        output: Option<u64>,
     },
     /// The host sends no price and no operator profile is in force (the
     /// shipped default at most): the pack was not run.
     NotChecked,
-    /// The operator's profile is in force but the host sends no price, or the
-    /// attempt does not make an action the engine reads: NO, failing closed.
-    Unavailable,
+    /// NO, failing closed, for the reason given: `host_lacks_backend_pricing`
+    /// (the operator's profile is in force but the host sends no price) or
+    /// `guard_error` (the engine refused the action or the decision, logged).
+    Unavailable(&'static str),
 }
 
 impl Read {
@@ -108,20 +114,16 @@ impl Read {
         match self {
             Read::Checked { outcome, .. } => *outcome != Outcome::Allow,
             Read::NotChecked => false,
-            Read::Unavailable => true,
+            Read::Unavailable(_) => true,
         }
     }
 
     /// The check that refused, for the decision's `source`.
     pub fn source(&self) -> &str {
         match self {
-            Read::Checked { constraints, .. } => constraints
-                .iter()
-                .find(|(_, result)| *result != "pass" && *result != "n/a")
-                .or_else(|| constraints.iter().find(|(_, result)| *result != "pass"))
-                .map_or("price", |(id, _)| id.as_str()),
+            Read::Checked { refused_by, .. } => refused_by.as_deref().unwrap_or("price"),
             Read::NotChecked => "price",
-            Read::Unavailable => "price_unavailable",
+            Read::Unavailable(reason) => reason,
         }
     }
 }
@@ -159,7 +161,8 @@ impl PriceRule {
             Engine::inference().map_err(|e| anyhow::anyhow!("asg/inference: {}", e.message()))?;
         let profile_given = profile.is_some();
         let raw = match (profile, DEFAULT_RATE_CAPS) {
-            (Some(raw), _) => Some(raw.to_vec()),
+            (Some(raw), Some(caps)) => Some(with_default_caps(raw, caps)?),
+            (Some(raw), None) => Some(raw.to_vec()),
             (None, Some((input, output))) => Some(default_profile(input, output)),
             (None, None) => None,
         };
@@ -185,13 +188,19 @@ impl PriceRule {
         })
     }
 
-    /// The pack the rule runs, as a decision cites it.
-    pub fn reads(&self) -> Value {
+    /// The pack the rule runs, as a decision cites it. The profile is cited
+    /// by `sha256(salt || profile digest)`: its digest is over the
+    /// counterparty list in clear, so a clear digest would let a reader
+    /// confirm a guessed list (the same reason #55 commits to its lists).
+    pub fn reads(&self, salt: &[u8; 32]) -> Value {
         json!({
             "kind": "terms_pack",
             "pack": self.engine.pack_id(),
             "definition_digest": {"alg": "SHA-256", "digest": self.engine.definition_digest()},
-            "profile": self.profile_digest.as_ref().map(|d| json!({"alg": "SHA-256", "digest": d})),
+            "profile": self.profile_digest.as_ref().map(|d| json!({
+                "alg": "SHA-256",
+                "commitment": crate::producer::capsule::peer_commitment(d, salt),
+            })),
         })
     }
 
@@ -210,7 +219,13 @@ impl PriceRule {
 
     /// The rule for one `backend_selected` attempt to `peer`. `host_prices`
     /// is whether the host listed [`PRICING_CAPABILITY`].
-    pub fn check(&self, event: &Value, peer: &str, host_prices: bool) -> Read {
+    pub fn check(
+        &self,
+        event: &Value,
+        peer: &str,
+        host_prices: bool,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Read {
         let (input, output) = if host_prices {
             match event.get("pricing") {
                 None | Some(Value::Null) => (Some(0), Some(0)),
@@ -220,7 +235,7 @@ impl PriceRule {
                 ),
             }
         } else if self.operator_profile {
-            return Read::Unavailable;
+            return Read::Unavailable("host_lacks_backend_pricing");
         } else {
             return Read::NotChecked;
         };
@@ -232,7 +247,7 @@ impl PriceRule {
             "verb": "inference.purchase",
             "action_class": "money.purchase",
             "action_id": format!("admission/{}", event["exchange_id"].as_str().unwrap_or("")),
-            "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "timestamp": now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             "target": peer,
             "equivalence_key": event["exchange_id"],
         });
@@ -243,30 +258,78 @@ impl PriceRule {
         if let Some(output) = output {
             action["output_msat_per_million"] = json!(output);
         }
-        let decided = serde_json::to_vec(&action)
-            .ok()
-            .and_then(|raw| Action::decode(&raw).ok())
-            .and_then(|action| self.engine.decide(&action, &History::new()).ok());
+        let raw =
+            serde_json::to_vec(&action).expect("an action of strings and integers serializes");
+        let decided =
+            Action::decode(&raw).and_then(|action| self.engine.decide(&action, &History::new()));
         match decided {
-            Some(decision) => Read::Checked {
-                outcome: decision.outcome(),
-                constraints: decision
+            Ok(decision) => {
+                let constraints: Vec<(String, &'static str)> = decision
                     .constraints()
                     .iter()
                     .map(|c| (c.id().to_string(), result_str(c.result())))
-                    .collect(),
-                input: input.unwrap_or(0),
-                output: output.unwrap_or(0),
-            },
-            // An action the engine cannot read (no exchange id, a rate
-            // outside the integers JSON holds) is refused, never admitted.
-            None => Read::Unavailable,
+                    .collect();
+                let refused_by = decision.not_evaluated().first().cloned().or_else(|| {
+                    constraints
+                        .iter()
+                        .find(|(_, r)| *r == "fail")
+                        .map(|(id, _)| id.clone())
+                });
+                Read::Checked {
+                    outcome: decision.outcome(),
+                    constraints,
+                    refused_by,
+                    input,
+                    output,
+                }
+            }
+            // The engine refused the action or failed to decide (for
+            // example after a pin bump changed what it reads): refused,
+            // never admitted, and said. The message names fields, never
+            // the peer.
+            Err(error) => {
+                tracing::error!(
+                    error = error.message(),
+                    "the admission price rule could not decide; answering NO"
+                );
+                Read::Unavailable("guard_error")
+            }
         }
     }
 }
 
 fn result_str(result: ConstraintResult) -> &'static str {
     result.as_str()
+}
+
+/// `raw` with the shipped caps filled in where it sets none for the pack: a
+/// profile that sets only the counterparty list keeps the outlier guard, and
+/// the digest covers the caps actually in force. A cap the operator set
+/// stands.
+fn with_default_caps(raw: &[u8], (input, output): (u64, u64)) -> anyhow::Result<Vec<u8>> {
+    let mut profile: Value =
+        serde_json::from_slice(raw).map_err(|e| anyhow::anyhow!("{PROFILE_SETTING}: {e}"))?;
+    let Some(packs) = profile.get_mut("packs").and_then(Value::as_array_mut) else {
+        return Ok(raw.to_vec()); // not a profile: decode reports it
+    };
+    let entry = match packs.iter().position(|p| p["pack"] == PACK) {
+        Some(i) => &mut packs[i],
+        None => {
+            packs.push(json!({"pack": PACK, "parameters": {}}));
+            packs.last_mut().expect("just pushed")
+        }
+    };
+    let Some(parameters) = entry.get_mut("parameters").and_then(Value::as_object_mut) else {
+        return Ok(raw.to_vec());
+    };
+    let caps = parameters.entry("rate_cap").or_insert_with(|| json!({}));
+    if let Some(caps) = caps.as_object_mut() {
+        caps.entry("max_input_msat_per_million")
+            .or_insert(json!(input));
+        caps.entry("max_output_msat_per_million")
+            .or_insert(json!(output));
+    }
+    Ok(serde_json::to_vec(&profile)?)
 }
 
 /// The shipped default as a profile over the pack.
@@ -290,6 +353,7 @@ pub fn record(read: &Read) -> Value {
             constraints,
             input,
             output,
+            ..
         } => json!({
             "state": "checked",
             "outcome": outcome.as_str(),
@@ -298,6 +362,6 @@ pub fn record(read: &Read) -> Value {
             "checks": constraints.iter().map(|(id, r)| json!({"check": id, "result": r})).collect::<Vec<_>>(),
         }),
         Read::NotChecked => json!({"state": "not_checked", "reason": "host_lacks_backend_pricing"}),
-        Read::Unavailable => json!({"state": "unavailable"}),
+        Read::Unavailable(reason) => json!({"state": "unavailable", "reason": reason}),
     }
 }
