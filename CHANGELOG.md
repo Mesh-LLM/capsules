@@ -4,9 +4,10 @@
 
 ### Changed
 
-- **Configuration page regrouped.** The plugin's settings now show in three groups, "What you
-  show others", "When answers differ" and "Keeping records", with the labels and one-line
-  descriptions of the Configuration design. Labels, order and descriptions only: every key,
+- **Configuration page regrouped.** The plugin's settings are declared in three groups, "What
+  you show others", "When answers differ" and "Keeping records", with the labels and one-line
+  descriptions of the Configuration design, and a single rising row order, so a console that
+  shows one flat list still follows the design's order. Labels, order and descriptions only: every key,
   choice and default is unchanged, so no saved config changes meaning. The old "Sharing policy",
   "Referee" and "Routing rule" groups are gone; "Evidence network" stays as its own group.
 

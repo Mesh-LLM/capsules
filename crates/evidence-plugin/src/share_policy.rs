@@ -15,8 +15,8 @@
 //! is `CAPSULES_CHECKPOINT_WITNESS_URLS`. The witness is read when
 //! the plugin starts: restart mesh-llm after changing it.
 //!
-//! The same schema also declares the opt-in stop-routing rule's two settings
-//! (`routing_rule`), under their own "Routing rule" category, on the same
+//! The same schema also declares the opt-in stop-routing rule's two settings,
+//! under "When answers differ" with the referee's, on the same
 //! env-var convention: `CAPSULES_STOP_ROUTING_AFTER_CONTRADICTIONS`
 //! (off unless set) and `CAPSULES_STOP_ROUTING_WINDOW_DAYS`.
 
@@ -216,10 +216,13 @@ pub(crate) fn adjudications_delivered_for(raw: Option<&str>) -> bool {
 // Admission group is not declared: none of the admission settings the design
 // shows (ask or require a peer's card, records or corroboration; what to do
 // on a decline or a gap) has a reader in this plugin yet.
+// `category_order` is the group's own place (the 4th argument of `.category`);
+// `.order(n)` is the row's, rising through the whole list so the rows follow the
+// design even where the console shows one flat list.
 const SHOW_CATEGORY_ID: &str = "show";
 const SHOW_CATEGORY_LABEL: &str = "What you show others";
-const SHOW_CATEGORY_SUMMARY: &str = "The mirror of Admission: what this node answers when a peer \
-    asks about you. Peers can only admit you on what you let them see.";
+const SHOW_CATEGORY_SUMMARY: &str = "What this node answers when a peer asks about you. \
+     Peers can only admit you on what you let them see.";
 
 const DIFFER_CATEGORY_ID: &str = "differ";
 const DIFFER_CATEGORY_LABEL: &str = "When answers differ";
@@ -258,21 +261,25 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
             )
             .default_value(&"counterparties")
             .description(
-                "Who may read your recent records and correlations: past counterparties (the \
-                 default), any peer, or nobody. A refusal says nothing about the peer asking.",
+                "Who may read your records and correlations: past counterparties (the \
+                 default), any peer, or nobody. prospective is deprecated and read as \
+                 counterparties. A refusal says nothing about the peer asking.",
             )
             .label("History segments")
-            .category(SHOW_CATEGORY_ID, SHOW_CATEGORY_LABEL, SHOW_CATEGORY_SUMMARY, 0),
+            .category(SHOW_CATEGORY_ID, SHOW_CATEGORY_LABEL, SHOW_CATEGORY_SUMMARY, 0)
+                .order(0),
         )
         .setting(
             config_setting(STANDARD_HISTORY_KEY, config_enum(["off", "on"]))
                 .default_value(&"off")
                 .description(
                     "Answer a node you've never dealt with when it asks what you serve. No \
-                     records are included.",
+                     records are included. Checkpoints and the history card go to anyone who \
+                     asks, whatever this is set to.",
                 )
                 .label("Served summary to strangers")
-                .category(SHOW_CATEGORY_ID, SHOW_CATEGORY_LABEL, SHOW_CATEGORY_SUMMARY, 1),
+                .category(SHOW_CATEGORY_ID, SHOW_CATEGORY_LABEL, SHOW_CATEGORY_SUMMARY, 0)
+                .order(1),
         )
         .setting(
             config_setting(EXCHANGE_CORROBORATION_KEY, config_enum(["off", "on"]))
@@ -282,14 +289,16 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                      Ids and digests only, never who was on the other side.",
                 )
                 .label("Exchange corroboration")
-                .category(SHOW_CATEGORY_ID, SHOW_CATEGORY_LABEL, SHOW_CATEGORY_SUMMARY, 2),
+                .category(SHOW_CATEGORY_ID, SHOW_CATEGORY_LABEL, SHOW_CATEGORY_SUMMARY, 0)
+                .order(2),
         )
         .setting(
             config_setting(ADVERTISE_EVIDENCE_REQUESTS_KEY, config_enum(["off", "on"]))
                 .default_value(&"off")
-                .description("Announce that you answer these. Not read by any node yet.")
+                .description("This version advertises nothing; no node reads this yet.")
                 .label("Advertise evidence requests")
-                .category(SHOW_CATEGORY_ID, SHOW_CATEGORY_LABEL, SHOW_CATEGORY_SUMMARY, 3),
+                .category(SHOW_CATEGORY_ID, SHOW_CATEGORY_LABEL, SHOW_CATEGORY_SUMMARY, 0)
+                .order(3),
         )
         // When answers differ.
         .setting(
@@ -300,7 +309,8 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                      pair, never retried. Only you turn this on.",
                 )
                 .label("Ask a referee")
-                .category(DIFFER_CATEGORY_ID, DIFFER_CATEGORY_LABEL, DIFFER_CATEGORY_SUMMARY, 0),
+                .category(DIFFER_CATEGORY_ID, DIFFER_CATEGORY_LABEL, DIFFER_CATEGORY_SUMMARY, 1)
+                .order(4),
         )
         .setting(
             config_setting(STOP_ROUTING_AFTER_KEY, config_integer())
@@ -308,17 +318,19 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                     "Stop routing to a peer after this many contradictions (0 or empty: never, \
                      the default). Only verdicts you asked for and signature-checked count, \
                      once per referee and pair. With N of 2 or more, no single referee can \
-                     trigger it. Needs 'Peer block requests' on.",
+                     trigger it. Needs `allow_peer_blocks = true` for this plugin in mesh-llm's config.",
                 )
                 .label("Stop routing after N contradictions")
-                .category(DIFFER_CATEGORY_ID, DIFFER_CATEGORY_LABEL, DIFFER_CATEGORY_SUMMARY, 1),
+                .category(DIFFER_CATEGORY_ID, DIFFER_CATEGORY_LABEL, DIFFER_CATEGORY_SUMMARY, 1)
+                .order(5),
         )
         .setting(
             config_setting(STOP_ROUTING_WINDOW_KEY, config_integer())
                 .default_value(&30)
                 .description("The window, in days, the contradictions must fall in (default 30).")
                 .label("In D days")
-                .category(DIFFER_CATEGORY_ID, DIFFER_CATEGORY_LABEL, DIFFER_CATEGORY_SUMMARY, 2),
+                .category(DIFFER_CATEGORY_ID, DIFFER_CATEGORY_LABEL, DIFFER_CATEGORY_SUMMARY, 1)
+                .order(6),
         )
         .setting(
             config_setting(REFEREE_BAR_DAYS_KEY, config_integer())
@@ -328,7 +340,8 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                      referee that model for this many days (default 30).",
                 )
                 .label("Bar a contradicted referee for")
-                .category(DIFFER_CATEGORY_ID, DIFFER_CATEGORY_LABEL, DIFFER_CATEGORY_SUMMARY, 3),
+                .category(DIFFER_CATEGORY_ID, DIFFER_CATEGORY_LABEL, DIFFER_CATEGORY_SUMMARY, 1)
+                .order(7),
         )
         .setting(
             config_setting(ADJUDICATIONS_KEY, config_enum(["off", "deliver_to_subjects"]))
@@ -337,18 +350,22 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                     "They ack or dispute on their own side. Delivery only, never a standing.",
                 )
                 .label("Deliver verdicts to the nodes judged")
-                .category(DIFFER_CATEGORY_ID, DIFFER_CATEGORY_LABEL, DIFFER_CATEGORY_SUMMARY, 4),
+                .category(DIFFER_CATEGORY_ID, DIFFER_CATEGORY_LABEL, DIFFER_CATEGORY_SUMMARY, 1)
+                .order(8),
         )
         // Keeping records.
         .setting(
             config_setting(RECORD_AT_COMPLETION_KEY, config_enum(["counterparty", "off"]))
                 .default_value(&"counterparty")
                 .description(
-                    "Push your sealed record of each exchange to the counterparty, with a \
-                     checkpoint. Symmetric: off means you don't receive theirs either.",
+                    "Push your sealed record of each exchange to the counterparty. Symmetric: \
+                     off means you don't receive theirs either. With checkpointing on, the \
+                     push carries a checkpoint, which shows your log's size and time; the \
+                     public checkpoint list shows when your exchanges ended.",
                 )
                 .label("Send your record to the other side")
-                .category(RECORDS_CATEGORY_ID, RECORDS_CATEGORY_LABEL, RECORDS_CATEGORY_SUMMARY, 0),
+                .category(RECORDS_CATEGORY_ID, RECORDS_CATEGORY_LABEL, RECORDS_CATEGORY_SUMMARY, 2)
+                .order(9),
         )
         .setting(
             config_setting(
@@ -369,7 +386,8 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                 "Witness services to offer this node's checkpoints to: each one's URL, and its public key if you have it. Empty is off (the default): there is no default witness, and the plugin contacts none until you add one. The Evidence page shows what each witness holds. Takes effect when mesh-llm is restarted.",
             )
                 .label("Witnesses")
-                .category(RECORDS_CATEGORY_ID, RECORDS_CATEGORY_LABEL, RECORDS_CATEGORY_SUMMARY, 1),
+                .category(RECORDS_CATEGORY_ID, RECORDS_CATEGORY_LABEL, RECORDS_CATEGORY_SUMMARY, 2)
+                .order(10),
         )
         .setting(
             // The statement, byte for byte, as Steven approved it (loop's
@@ -378,7 +396,8 @@ pub fn share_policy_config_schema(plugin_id: &str) -> ManifestEntry {
                 .default_value(&"off")
                 .description(crate::network_join::SWITCH_CONSENT)
                 .label(JOIN_NETWORK_LABEL)
-                .category(NETWORK_CATEGORY_ID, NETWORK_CATEGORY_LABEL, NETWORK_CATEGORY_SUMMARY, 0),
+                .category(NETWORK_CATEGORY_ID, NETWORK_CATEGORY_LABEL, NETWORK_CATEGORY_SUMMARY, 3)
+                .order(11),
         )
         .into()
 }
@@ -494,6 +513,62 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// A console may show one flat list sorted by `category_order`, then
+    /// `setting_order`: groups carry one fixed place each and rows one rising
+    /// number, so both ways of showing the page follow the design.
+    #[test]
+    fn rows_carry_one_rising_order_and_each_group_one_place() {
+        let schema = as_config_schema(share_policy_config_schema("capsules"));
+        let mut group_place = std::collections::BTreeMap::new();
+        for (i, s) in schema.settings.iter().enumerate() {
+            let p = s.presentation.as_ref().unwrap();
+            assert_eq!(p.setting_order, Some(i as u32), "{}", s.key);
+            let place = p.category_order.expect("a group place");
+            let seen = group_place.entry(p.category_id.clone()).or_insert(place);
+            assert_eq!(*seen, place, "{}: one place per group", s.key);
+        }
+        let places: Vec<u32> = schema
+            .settings
+            .iter()
+            .map(|s| s.presentation.as_ref().unwrap().category_order.unwrap())
+            .collect();
+        assert!(places.windows(2).all(|w| w[0] <= w[1]), "{places:?}");
+    }
+
+    /// Wording that carries a disclosure or a requirement stays in the text.
+    #[test]
+    fn descriptions_keep_their_disclosures_and_requirements() {
+        let schema = as_config_schema(share_policy_config_schema("capsules"));
+        let text = |k: &str| {
+            schema
+                .settings
+                .iter()
+                .find(|s| s.key == k)
+                .and_then(|s| s.description.clone())
+                .unwrap()
+        };
+        assert!(text(STOP_ROUTING_AFTER_KEY).contains("`allow_peer_blocks = true`"));
+        assert!(!text(STOP_ROUTING_AFTER_KEY).contains("Peer block requests"));
+        assert!(text(ADVERTISE_EVIDENCE_REQUESTS_KEY).contains("advertises nothing"));
+        let record = text(RECORD_AT_COMPLETION_KEY);
+        assert!(record.contains("With checkpointing on"));
+        assert!(record.contains("when your exchanges ended"));
+        assert!(
+            text(STANDARD_HISTORY_KEY).contains("Checkpoints and the history card go to anyone")
+        );
+        let segments = text(HISTORY_SEGMENTS_KEY);
+        assert!(segments.contains("prospective is deprecated"));
+        assert!(!segments.contains("recent"));
+        for s in &schema.settings {
+            let summary = s.presentation.as_ref().unwrap().category_summary.clone();
+            assert!(
+                !summary.unwrap_or_default().contains("Admission"),
+                "{}",
+                s.key
+            );
+        }
     }
 
     /// No stored config changes meaning: every key keeps its default and its

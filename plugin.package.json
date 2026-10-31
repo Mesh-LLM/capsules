@@ -21,13 +21,14 @@
         "apply_mode": "static_on_load",
         "restart_scope": "none",
         "visibility": "user",
-        "description": "Who may read your recent records and correlations: past counterparties (the default), any peer, or nobody. A refusal says nothing about the peer asking.",
+        "description": "Who may read your records and correlations: past counterparties (the default), any peer, or nobody. prospective is deprecated and read as counterparties. A refusal says nothing about the peer asking.",
         "presentation": {
           "label": "History segments",
           "category_id": "show",
           "category_label": "What you show others",
-          "category_summary": "The mirror of Admission: what this node answers when a peer asks about you. Peers can only admit you on what you let them see.",
-          "category_order": 0
+          "category_summary": "What this node answers when a peer asks about you. Peers can only admit you on what you let them see.",
+          "category_order": 0,
+          "setting_order": 0
         }
       },
       {
@@ -45,13 +46,14 @@
         "apply_mode": "static_on_load",
         "restart_scope": "none",
         "visibility": "user",
-        "description": "Answer a node you've never dealt with when it asks what you serve. No records are included.",
+        "description": "Answer a node you've never dealt with when it asks what you serve. No records are included. Checkpoints and the history card go to anyone who asks, whatever this is set to.",
         "presentation": {
           "label": "Served summary to strangers",
           "category_id": "show",
           "category_label": "What you show others",
-          "category_summary": "The mirror of Admission: what this node answers when a peer asks about you. Peers can only admit you on what you let them see.",
-          "category_order": 1
+          "category_summary": "What this node answers when a peer asks about you. Peers can only admit you on what you let them see.",
+          "category_order": 0,
+          "setting_order": 1
         }
       },
       {
@@ -74,8 +76,9 @@
           "label": "Exchange corroboration",
           "category_id": "show",
           "category_label": "What you show others",
-          "category_summary": "The mirror of Admission: what this node answers when a peer asks about you. Peers can only admit you on what you let them see.",
-          "category_order": 2
+          "category_summary": "What this node answers when a peer asks about you. Peers can only admit you on what you let them see.",
+          "category_order": 0,
+          "setting_order": 2
         }
       },
       {
@@ -93,13 +96,14 @@
         "apply_mode": "static_on_load",
         "restart_scope": "none",
         "visibility": "user",
-        "description": "Announce that you answer these. Not read by any node yet.",
+        "description": "This version advertises nothing; no node reads this yet.",
         "presentation": {
           "label": "Advertise evidence requests",
           "category_id": "show",
           "category_label": "What you show others",
-          "category_summary": "The mirror of Admission: what this node answers when a peer asks about you. Peers can only admit you on what you let them see.",
-          "category_order": 3
+          "category_summary": "What this node answers when a peer asks about you. Peers can only admit you on what you let them see.",
+          "category_order": 0,
+          "setting_order": 3
         }
       },
       {
@@ -123,7 +127,8 @@
           "category_id": "differ",
           "category_label": "When answers differ",
           "category_summary": "A client can send one request to two machines. These settings decide what happens when the two answers don't match.",
-          "category_order": 0
+          "category_order": 1,
+          "setting_order": 4
         }
       },
       {
@@ -136,13 +141,14 @@
         "apply_mode": "static_on_load",
         "restart_scope": "none",
         "visibility": "user",
-        "description": "Stop routing to a peer after this many contradictions (0 or empty: never, the default). Only verdicts you asked for and signature-checked count, once per referee and pair. With N of 2 or more, no single referee can trigger it. Needs 'Peer block requests' on.",
+        "description": "Stop routing to a peer after this many contradictions (0 or empty: never, the default). Only verdicts you asked for and signature-checked count, once per referee and pair. With N of 2 or more, no single referee can trigger it. Needs `allow_peer_blocks = true` for this plugin in mesh-llm's config.",
         "presentation": {
           "label": "Stop routing after N contradictions",
           "category_id": "differ",
           "category_label": "When answers differ",
           "category_summary": "A client can send one request to two machines. These settings decide what happens when the two answers don't match.",
-          "category_order": 1
+          "category_order": 1,
+          "setting_order": 5
         }
       },
       {
@@ -162,7 +168,8 @@
           "category_id": "differ",
           "category_label": "When answers differ",
           "category_summary": "A client can send one request to two machines. These settings decide what happens when the two answers don't match.",
-          "category_order": 2
+          "category_order": 1,
+          "setting_order": 6
         }
       },
       {
@@ -182,7 +189,8 @@
           "category_id": "differ",
           "category_label": "When answers differ",
           "category_summary": "A client can send one request to two machines. These settings decide what happens when the two answers don't match.",
-          "category_order": 3
+          "category_order": 1,
+          "setting_order": 7
         }
       },
       {
@@ -206,7 +214,8 @@
           "category_id": "differ",
           "category_label": "When answers differ",
           "category_summary": "A client can send one request to two machines. These settings decide what happens when the two answers don't match.",
-          "category_order": 4
+          "category_order": 1,
+          "setting_order": 8
         }
       },
       {
@@ -224,13 +233,14 @@
         "apply_mode": "static_on_load",
         "restart_scope": "none",
         "visibility": "user",
-        "description": "Push your sealed record of each exchange to the counterparty, with a checkpoint. Symmetric: off means you don't receive theirs either.",
+        "description": "Push your sealed record of each exchange to the counterparty. Symmetric: off means you don't receive theirs either. With checkpointing on, the push carries a checkpoint, which shows your log's size and time; the public checkpoint list shows when your exchanges ended.",
         "presentation": {
           "label": "Send your record to the other side",
           "category_id": "records",
           "category_label": "Keeping records",
           "category_summary": "Who else holds a copy of what you sealed. This is what makes a later rewrite provable by someone other than you.",
-          "category_order": 0
+          "category_order": 2,
+          "setting_order": 9
         }
       },
       {
@@ -273,7 +283,8 @@
           "category_id": "records",
           "category_label": "Keeping records",
           "category_summary": "Who else holds a copy of what you sealed. This is what makes a later rewrite provable by someone other than you.",
-          "category_order": 1
+          "category_order": 2,
+          "setting_order": 10
         }
       },
       {
@@ -297,7 +308,8 @@
           "category_id": "network",
           "category_label": "Evidence network",
           "category_summary": "Whether this node is on the evidence network's list. Off by default.",
-          "category_order": 0
+          "category_order": 3,
+          "setting_order": 11
         }
       }
     ]
