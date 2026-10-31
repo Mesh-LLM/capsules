@@ -1519,6 +1519,69 @@ pub(crate) mod tests {
         assert_eq!(got["state"], json!("refusal"));
     }
 
+    /// A bound key whose nonces fill its replay cache is refused before the
+    /// ledger is read: `capacity_exceeded` under evidence-interop/1, a limit
+    /// of this node's own; under /0 what it was before, `not_authorized`
+    /// for a record.
+    #[test]
+    fn a_full_replay_cache_is_capacity_exceeded_under_v1() {
+        let ledger = corpus_ledger();
+        let dir = node(&ledger);
+        let record = node_a_record(&ledger);
+        let key_id = hex::encode(asker_key("node-a").verifying_key().to_bytes());
+        for (profile, want) in [
+            (Some("evidence-interop/1"), Reason::CapacityExceeded),
+            (None, Reason::NotAuthorized),
+        ] {
+            let replay = ReplayCache::default();
+            for i in 0..requester_auth::MAX_NONCES_PER_KEY {
+                replay.first_use(&key_id, &format!("held-{i}"), i64::MAX / 2, 0, true);
+            }
+            let mut request = record.clone();
+            if let Some(p) = profile {
+                request["profile"] = json!(p);
+            }
+            let bytes = signed_by("node-a", &request);
+            let reads = evidence_log::index_reads();
+            let outcome = ask_cached(dir.path(), &bytes, "peers", false, &replay);
+            assert_eq!(evidence_log::index_reads(), reads, "the ledger was read");
+            assert_eq!(
+                outcome.wire_bytes(),
+                Some(refusal_of(&bytes, want)),
+                "{profile:?}"
+            );
+        }
+    }
+
+    /// The corroboration path reads a refusal by its request's profile too.
+    #[test]
+    fn a_corroboration_refusal_is_read_by_its_requests_profile() {
+        use crate::exchange_corroboration::{request_for, verify, Verified};
+        let key = key();
+        for (profile, conforms) in [(None, false), (Some("evidence-interop/1"), true)] {
+            let mut request = request_for("deal-1");
+            if let Some(p) = profile {
+                request["profile"] = json!(p);
+            }
+            let sent = serde_json::to_vec(&request).unwrap();
+            let r =
+                refusal::sign(&request_digest(&sent), Reason::CapacityExceeded, NOW, &key).unwrap();
+            let got = verify(
+                &sent,
+                &r.to_json(),
+                &key.verifying_key(),
+                &Default::default(),
+            );
+            match got {
+                Verified::Refusal(reason) if conforms => {
+                    assert_eq!(reason, Reason::CapacityExceeded)
+                }
+                Verified::Failed(_) if !conforms => {}
+                other => panic!("{profile:?}: {other:?}"),
+            }
+        }
+    }
+
     /// A node whose clock cannot be written as an `issued_at` signs nothing.
     #[test]
     fn a_bad_clock_answers_nothing() {
